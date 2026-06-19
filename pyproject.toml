@@ -1,0 +1,80 @@
+#
+# Build System — PEP 517/518 backend configuration
+#
+
+[build-system]
+requires = ["setuptools >= 68.0", "wheel >= 0.41.0"]
+build-backend = "setuptools.build_meta"
+
+#
+# Project Metadata — PEP 621 package definition
+#
+
+[project]
+name = "slan-cuan"
+version = "0.1.0"
+description = "Release pipeline for Red Hat Lightwell Java artifacts"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [{ name = "Red Hat Lightwell" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest", "poethepoet"]
+
+#
+# Setuptools — package discovery
+#
+
+[tool.setuptools]
+packages = ["slan_cuan"]
+
+#
+# Ruff — linter and formatter
+#
+
+[tool.ruff]
+line-length = 82
+exclude = ["docs/**", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "TID", "T10"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+#
+# Pytest — test runner
+#
+
+[tool.pytest.ini_options]
+testpaths = ["slan_cuan", "tests"]
+python_files = ["*_test.py"]
+addopts = ["--import-mode=importlib"]
+
+#
+# Poe the Poet — task runner
+#
+
+[tool.poe.tasks]
+lint = "ruff check ."
+format-fix = "ruff check --fix ."
+format-check = "ruff format --check ."
+fmt = "ruff format ."
+
+[tool.poe.tasks.test-unit]
+help = "run unit tests"
+shell = "pytest; rc=$?; [ $rc -eq 5 ] && exit 0 || exit $rc"
+
+[tool.poe.tasks.check]
+help = "run all CI checks (lint, format, unit tests)"
+sequence = ["lint", "format-check", "test-unit"]
