@@ -1,0 +1,76 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**slan-cuan** is the release pipeline for Red Hat Lightwell's Java artifacts. It is a Python CLI application packaged in a container image alongside Tekton Task definitions. The container image produced by this repository serves double duty: it provides both the Tekton Tasks (for Konflux pipeline orchestration) and the Python application that those Tasks execute.
+
+Lightwell backports security fixes (CVEs) onto older versions of open-source Java libraries. `balor-cuan` builds the patched artifacts; `slan-cuan` releases them.
+
+## Architecture
+
+### Release Pipeline Stages
+
+The application processes Java artifacts through these stages:
+
+1. **Extract** -- Pull artifacts from the container image produced by PNC (Project Newcastle)
+2. **Identify** -- Determine required components, Maven coordinates (GAV), and metadata
+3. **Sign** -- Cryptographically sign the artifacts
+4. **Register** -- Upload SBOMs and attestations to Atlas/Trustify (TPA) for vulnerability cross-referencing
+5. **Publish** -- Push signed artifacts to Pulp for distribution via `packages.redhat.com`
+
+### CLI Structure
+
+Each subcommand maps 1:1 to a Tekton Task. The Tekton Task YAML invokes the corresponding subcommand inside the container image.
+
+### Configuration
+
+12-factor style (12factor.net): every setting is configurable via environment variables. CLI flags override environment variables when both are set. No config files.
+
+### Container Image Layout
+
+The single container image contains:
+- The Python CLI application (entrypoint)
+- Tekton Task YAML definitions (embedded, extracted during pipeline setup)
+
+## Domain Context
+
+### Upstream Systems
+
+- **PNC (Project Newcastle)** -- IBM's enterprise Java build system. Produces the artifacts that `slan-cuan` releases. Generates CycloneDX SBOMs and SLSA provenance via its PiG component.
+- **balor-cuan** -- Experimental hermetic archival within Lightwell. Uses a Python Click CLI (`cuan`) with `onboard` and `refire` subcommands.
+- **Hermeto** (formerly Cachi2) -- Red Hat's dependency pre-fetch tool for hermetic builds.
+
+### Downstream Systems
+
+- **Trustify (TPA)** -- SBOM ingestion and continuous CVE cross-referencing service.
+- **Pulp** -- Repository management for artifact distribution (S3 + CDN).
+- **Enterprise Contract (Conforma)** -- Policy-as-code gate evaluated before release.
+
+### Konflux Integration
+
+Tasks run inside Konflux pipelines. Key patterns:
+- **Trusted Artifacts (TA)** -- Source and build outputs pass between Tasks as OCI artifacts (`SOURCE_ARTIFACT`), not PVC-backed workspaces.
+- **Tekton Chains** -- SLSA provenance signing happens automatically for container images; JAR-level attestation requires explicit `ARTIFACT_OUTPUTS` type hints.
+- **Bundle-referenced Tasks** -- Tasks are distributed as OCI bundles with SHA256 digests for immutability and Enterprise Contract verification.
+- **computeResources** -- Override step-level resource limits at the PipelineRun level via `taskRunSpecs[]` to avoid quota exhaustion from Tekton's container-per-step model.
+
+## Documentation
+
+This project uses **progressive disclosure** with three layers:
+
+1. **`README.md`** -- Map-of-content index. Links to everything, explains nothing in depth.
+2. **`docs/`** -- Detailed documentation on architecture, domain concepts, Tekton integration, and operations.
+3. **`CONTRIBUTING.md`** -- Development workflow, coding standards, and conventions. Serves both human contributors and agentic tools.
+
+**Never duplicate information across layers.** Link to the specific header in the canonical location instead. When adding or modifying documentation, find where the topic already lives before writing. If a concept is explained in `docs/`, CONTRIBUTING.md and README.md should link to it, not restate it.
+
+**This file (`CLAUDE.md`) follows the same rule.** Once `CONTRIBUTING.md` and `docs/` exist, move detailed content there and replace it here with links to the specific headers (e.g., `[CLI Structure](CONTRIBUTING.md#cli-structure)`, `[Konflux Integration](docs/tekton.md#konflux-integration)`). The `CLAUDE.md` should contain only what Claude Code needs beyond what those files already provide.
+
+## Naming Convention
+
+The Lightwell project uses an Irish mythology naming convention:
+- **balor-fianna** -- production CI pipeline (GitLab CI + Tekton/Konflux)
+- **balor-cuan** -- hermetic archival and offline rebuild
+- **slan-cuan** -- release pipeline (this project)
