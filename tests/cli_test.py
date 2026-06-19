@@ -1,5 +1,9 @@
 """Tests for CLI group wiring, subcommand reachability, and env-var precedence."""
 
+from __future__ import annotations
+
+from unittest.mock import Mock, patch
+
 from click.testing import CliRunner
 
 from slan_cuan.cli import main
@@ -23,41 +27,141 @@ def test_help_lists_extract_subcommand() -> None:
     assert "extract" in result.output
 
 
-def test_env_var_override_for_global_option() -> None:
+@patch("slan_cuan.extract.manifest_fetch")
+def test_env_var_override_for_global_option(
+    mock_manifest_fetch: Mock,
+) -> None:
     """SLAN_CUAN_VERBOSE sets --verbose via environment variable."""
+    fake_manifest = {
+        "layers": [
+            {
+                "digest": "sha256:abc",
+                "mediaType": (
+                    "application/vnd.lightwell.build-output.layer.v1+tar"
+                ),
+                "size": 1000,
+            }
+        ],
+        "annotations": {
+            "org.opencontainers.image.title": "TEST-build-output",
+        },
+    }
+    mock_manifest_fetch.return_value = fake_manifest
+
     runner = CliRunner()
-    result = runner.invoke(
-        main,
-        ["extract", "--image", "test"],
-        env={"SLAN_CUAN_VERBOSE": "true"},
-    )
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "extract",
+                "--image",
+                "quay.io/test/image@sha256:abc123",
+                "--output-dir",
+                "output",
+            ],
+            env={"SLAN_CUAN_VERBOSE": "true"},
+        )
 
-    assert result.exit_code == 0
-    assert "verbose=True" in result.output
+        assert result.exit_code == 0
+        assert "Parsed image reference:" in result.output
 
 
-def test_env_var_override_for_subcommand_option() -> None:
+@patch("slan_cuan.extract.manifest_fetch")
+def test_env_var_override_for_subcommand_option(
+    mock_manifest_fetch: Mock,
+) -> None:
     """SLAN_CUAN_EXTRACT_IMAGE sets --image via environment variable."""
+    fake_manifest = {
+        "layers": [
+            {
+                "digest": "sha256:abc",
+                "mediaType": (
+                    "application/vnd.lightwell.build-output.layer.v1+tar"
+                ),
+                "size": 1000,
+            }
+        ],
+        "annotations": {
+            "org.opencontainers.image.title": "TEST-build-output",
+        },
+    }
+    mock_manifest_fetch.return_value = fake_manifest
+
     runner = CliRunner()
-    result = runner.invoke(
-        main,
-        ["extract"],
-        env={"SLAN_CUAN_EXTRACT_IMAGE": "registry.example.com/image:latest"},
-    )
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "extract",
+                "--output-dir",
+                "output",
+            ],
+            env={"SLAN_CUAN_EXTRACT_IMAGE": "registry.example.com/image:latest"},
+        )
 
-    assert result.exit_code == 0
-    assert "registry.example.com/image:latest" in result.output
+        assert result.exit_code == 0
+        assert "registry.example.com/image:latest" in result.output
 
 
-def test_cli_flag_overrides_env_var() -> None:
+@patch("slan_cuan.extract.manifest_fetch")
+def test_cli_flag_overrides_env_var(mock_manifest_fetch: Mock) -> None:
     """CLI flag value takes precedence over env var when both are set."""
+    fake_manifest = {
+        "layers": [
+            {
+                "digest": "sha256:abc",
+                "mediaType": (
+                    "application/vnd.lightwell.build-output.layer.v1+tar"
+                ),
+                "size": 1000,
+            }
+        ],
+        "annotations": {
+            "org.opencontainers.image.title": "TEST-build-output",
+        },
+    }
+    mock_manifest_fetch.return_value = fake_manifest
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "extract",
+                "--image",
+                "quay.io/flag/value:latest",
+                "--output-dir",
+                "output",
+            ],
+            env={"SLAN_CUAN_EXTRACT_IMAGE": "env-value"},
+        )
+
+        assert result.exit_code == 0
+        assert "quay.io/flag/value:latest" in result.output
+        assert "env-value" not in result.output
+
+
+def test_extract_shows_new_options_in_help() -> None:
+    """Extract help shows --output-dir, --registry-auth-file, --force."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["extract", "--help"])
+
+    assert result.exit_code == 0
+    assert "--output-dir" in result.output
+    assert "--registry-auth-file" in result.output
+    assert "--force" in result.output
+
+
+def test_extract_requires_output_dir() -> None:
+    """Extract without --output-dir produces error."""
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["extract", "--image", "flag-value"],
-        env={"SLAN_CUAN_EXTRACT_IMAGE": "env-value"},
+        ["extract", "--image", "quay.io/test/image:latest"],
     )
 
-    assert result.exit_code == 0
-    assert "flag-value" in result.output
-    assert "env-value" not in result.output
+    assert result.exit_code != 0
+    assert "--output-dir" in result.output or "Missing option" in result.output

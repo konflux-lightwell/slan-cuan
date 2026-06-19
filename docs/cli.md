@@ -33,6 +33,7 @@ module name matches the subcommand name exactly.
 ```python
 # slan_cuan/extract.py
 import click
+from pathlib import Path
 from slan_cuan.context import GlobalContext
 
 @click.command()
@@ -40,12 +41,34 @@ from slan_cuan.context import GlobalContext
     "--image",
     required=True,
     type=str,
-    help="Container image reference to extract artifacts from.",
+    help="OCI artifact reference to extract.",
+)
+@click.option(
+    "--output-dir",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Work directory for extraction.",
+)
+@click.option(
+    "--registry-auth-file",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to container auth file.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite existing output directory.",
 )
 @click.pass_obj
-def extract(ctx: GlobalContext, image: str) -> None:
+def extract(
+    ctx: GlobalContext,
+    image: str,
+    output_dir: Path,
+    registry_auth_file: Path | None,
+    force: bool,
+) -> None:
     """Extract artifacts from a PNC container image."""
-    click.echo(f"extract: image={image}")
+    click.echo(f"Extracting {image} to {output_dir}")
 ```
 
 ```python
@@ -77,6 +100,9 @@ environment variables. The prefix is `SLAN_CUAN`.
 | `--verbose` | `SLAN_CUAN_VERBOSE` |
 | `--dry-run` | `SLAN_CUAN_DRY_RUN` |
 | `extract --image` | `SLAN_CUAN_EXTRACT_IMAGE` |
+| `extract --output-dir` | `SLAN_CUAN_EXTRACT_OUTPUT_DIR` |
+| `extract --registry-auth-file` | `SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE` |
+| `extract --force` | `SLAN_CUAN_EXTRACT_FORCE` |
 
 **Precedence:** CLI flags always override environment variables.
 
@@ -93,7 +119,7 @@ automatically.
 
 | Subcommand | Options | Environment Variable | Description |
 |------------|---------|---------------------|-------------|
-| `extract` | `--image` (required) | `SLAN_CUAN_EXTRACT_IMAGE` | Extract artifacts from PNC container image |
+| `extract` | `--image` (required)<br>`--output-dir` (required)<br>`--registry-auth-file`<br>`--force` | `SLAN_CUAN_EXTRACT_IMAGE`<br>`SLAN_CUAN_EXTRACT_OUTPUT_DIR`<br>`SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE`<br>`SLAN_CUAN_EXTRACT_FORCE` | Extract artifacts from PNC container image |
 
 **Global options (all subcommands):**
 
