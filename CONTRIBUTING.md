@@ -45,3 +45,8 @@ All three must pass.
 - **Imports**: absolute only (no relative imports)
 - **Formatter/linter**: Ruff — do not use Black, isort, or flake8 separately
 - **Test files**: named `*_test.py`, placed side-by-side with the module they test
+- **Docstrings**: every module, class, and public method must have a docstring (one-line when sufficient)
+
+## CLI Development
+
+See [docs/cli.md](docs/cli.md) for the subcommand-per-module pattern, environment variable conventions, and how to add new subcommands.

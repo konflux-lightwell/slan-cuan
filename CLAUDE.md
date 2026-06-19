@@ -24,6 +24,8 @@ The application processes Java artifacts through these stages:
 
 Each subcommand maps 1:1 to a Tekton Task. The Tekton Task YAML invokes the corresponding subcommand inside the container image.
 
+For details on the subcommand pattern and environment variable conventions, see [CLI documentation](docs/cli.md).
+
 ### Configuration
 
 12-factor style (12factor.net): every setting is configurable via environment variables. CLI flags override environment variables when both are set. No config files.

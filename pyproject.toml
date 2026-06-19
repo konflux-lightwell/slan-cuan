@@ -25,8 +25,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
-dependencies = []
+dependencies = ["click >= 8.1"]
+
+[project.scripts]
+slan-cuan = "slan_cuan.cli:main"
 
 [project.optional-dependencies]
 dev = ["ruff", "pytest", "poethepoet"]
@@ -47,7 +52,8 @@ line-length = 82
 exclude = ["docs/**", "*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "TID", "T10"]
+select = ["E", "F", "W", "I", "D", "TID", "T10"]
+ignore = ["D203", "D213"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
