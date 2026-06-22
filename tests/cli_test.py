@@ -181,3 +181,31 @@ def test_help_lists_publish_subcommand() -> None:
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
     assert "publish" in result.output
+
+
+def test_ca_cert_shown_in_help() -> None:
+    """--ca-cert appears in the top-level --help output."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "--ca-cert" in result.output
+
+
+def test_ca_cert_rejects_nonexistent_path() -> None:
+    """--ca-cert with a nonexistent file produces an error."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--ca-cert",
+            "/nonexistent/ca.crt",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            ".",
+        ],
+    )
+    assert result.exit_code != 0

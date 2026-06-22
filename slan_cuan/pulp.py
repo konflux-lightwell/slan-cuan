@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -17,6 +18,7 @@ class PulpConfig:
 
     base_url: str
     verify_ssl: bool
+    ca_cert: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -51,9 +53,23 @@ class PulpMavenClient:
         """Initialize with connection config and target distribution."""
         self._config = config
         self._distribution = distribution
+
+        verify: ssl.SSLContext | bool = config.verify_ssl
+        if verify and config.ca_cert is not None:
+            try:
+                verify = ssl.create_default_context(
+                    cafile=str(config.ca_cert),
+                )
+            except (ssl.SSLError, OSError) as e:
+                raise PulpError(
+                    f"Failed to load CA certificate from {config.ca_cert}: {e}",
+                    status_code=0,
+                    response_body="",
+                ) from e
+
         self._client = httpx.Client(
             base_url=config.base_url,
-            verify=config.verify_ssl,
+            verify=verify,
             timeout=300.0,
         )
 

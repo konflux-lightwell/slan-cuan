@@ -1,5 +1,7 @@
 """CLI entry point and group definition."""
 
+from pathlib import Path
+
 import click
 
 from slan_cuan.context import GlobalContext
@@ -20,10 +22,25 @@ from slan_cuan.publish import publish
     default=False,
     help="Perform a dry run without making any changes.",
 )
+@click.option(
+    "--ca-cert",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to a custom CA certificate bundle for TLS verification.",
+)
 @click.pass_context
-def main(ctx: click.Context, verbose: bool, dry_run: bool) -> None:
+def main(
+    ctx: click.Context,
+    verbose: bool,
+    dry_run: bool,
+    ca_cert: Path | None,
+) -> None:
     """Release pipeline for Red Hat Lightwell Java artifacts."""
-    ctx.obj = GlobalContext(verbose=verbose, dry_run=dry_run)
+    ctx.obj = GlobalContext(
+        verbose=verbose,
+        dry_run=dry_run,
+        ca_cert=ca_cert,
+    )
 
 
 main.add_command(extract)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -212,6 +213,53 @@ class TestPulpError:
 
 class TestPulpConfig:
     """Tests for PulpConfig."""
+
+    @patch("slan_cuan.pulp.ssl.create_default_context")
+    def test_ca_cert_creates_ssl_context(
+        self, mock_create_ctx: Mock, tmp_path: Path
+    ) -> None:
+        """When ca_cert is set, an SSLContext is built from it."""
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_text("PEM data")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            ca_cert=ca_file,
+        )
+        client = PulpMavenClient(config, "test-dist")
+
+        mock_create_ctx.assert_called_once_with(
+            cafile=str(ca_file),
+        )
+        client.close()
+
+    def test_ca_cert_invalid_pem_raises_pulp_error(self, tmp_path: Path) -> None:
+        """Malformed CA cert raises PulpError, not ssl.SSLError."""
+        ca_file = tmp_path / "bad-ca.crt"
+        ca_file.write_text("not a real certificate")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            ca_cert=ca_file,
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            PulpMavenClient(config, "test-dist")
+
+        assert "Failed to load CA certificate" in exc_info.value.message
+
+    def test_ca_cert_ignored_when_insecure(self) -> None:
+        """When verify_ssl=False, ca_cert is ignored."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=False,
+            ca_cert=Path("/some/ca.crt"),
+        )
+        client = PulpMavenClient(config, "test-dist")
+        assert config.verify_ssl is False
+        client.close()
 
     def test_verify_ssl_propagates(self, tmp_path: Path) -> None:
         """Create client with verify_ssl=False, verify propagation."""

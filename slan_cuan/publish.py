@@ -89,6 +89,7 @@ def publish(
         config = PulpConfig(
             base_url=pulp_url,
             verify_ssl=not insecure,
+            ca_cert=ctx.ca_cert,
         )
 
         uploaded = 0

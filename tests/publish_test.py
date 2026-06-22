@@ -368,6 +368,47 @@ def test_publish_insecure_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_ca_cert_propagates(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Global --ca-cert is forwarded to PulpConfig."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    ca_cert = tmp_path / "custom-ca.crt"
+    ca_cert.write_text("PEM data")
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+        status_code=200,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--ca-cert",
+            str(ca_cert),
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    call_args = mock_client_cls.call_args
+    config = call_args[0][0]
+    assert config.ca_cert == ca_cert
+    assert config.verify_ssl is True
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
 @patch("slan_cuan.publish.BuildOutput.from_extract_result")
 def test_publish_skips_missing_files(
     mock_from_extract: Mock,
