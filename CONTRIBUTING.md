@@ -49,4 +49,19 @@ All three must pass.
 
 ## CLI Development
 
-See [docs/cli.md](docs/cli.md) for the subcommand-per-module pattern, environment variable conventions, and how to add new subcommands.
+See [docs/cli.md](docs/cli.md) for the CLI architecture,
+global options, and environment variable conventions.
+
+## Adding a New Subcommand
+
+1. **Create the module** -- Add `slan_cuan/<name>.py` with a single `@click.command()` function. The module name must match the subcommand name. Use `@click.pass_obj` to receive the `GlobalContext`. Include a docstring for `--help` output.
+
+2. **Register in cli.py** -- Import the command and call `main.add_command(<name>)` in `slan_cuan/cli.py`.
+
+3. **Add tests** -- Create a test module following the `*_test.py` naming convention. Test both missing-required and happy-path invocations using Click's `CliRunner`.
+
+4. **Environment variables** -- Automatic. The command's flags are recognized as `SLAN_CUAN_<SUBCOMMAND>_<FLAG>` with no additional configuration.
+
+5. **Add documentation** -- Create `docs/<name>.md` following the structure of the existing subcommand docs. Link it from the subcommands table in [docs/cli.md](docs/cli.md#subcommands).
+
+6. **Verify** -- Run `poe check`. All three checks (lint, format, unit tests) must pass.

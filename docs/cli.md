@@ -1,221 +1,49 @@
-# CLI Documentation
+# CLI Reference
 
-## Running the CLI
+The `slan-cuan` command is the entry point for all pipeline stages. Each subcommand maps 1:1 to a pipeline stage and a Tekton Task.
 
-Install the package in editable mode with development dependencies:
+## Architecture
 
-```bash
-pip install -e '.[dev]'
-```
+Each subcommand lives in its own Python module under `slan_cuan/`. The module name matches the subcommand name. Registration happens in `cli.py` via `main.add_command()`.
 
-The installation registers the `slan-cuan` command. View available options:
+This ensures each stage is independently testable and maintains a 1:1 correspondence between Python modules and Tekton Tasks.
 
-```bash
-slan-cuan --help
-slan-cuan extract --help
-slan-cuan publish --help
-```
+See [Adding a New Subcommand](../CONTRIBUTING.md#adding-a-new-subcommand) for the developer workflow.
 
-## Subcommand-per-Module Pattern
+## Global Options
 
-The CLI architecture follows a one-to-one mapping: each subcommand is defined
-in a single Python module with a single `@click.command()` function. The
-module name matches the subcommand name exactly.
+These options apply to all subcommands and are defined on the top-level group. All subcommands receive them via the shared `GlobalContext` object.
 
-**Registration:**
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--verbose` | flag | `False` | Detailed progress and file listings |
+| `--dry-run` | flag | `False` | Preview without side effects |
+| `--ca-cert` | path | `None` | Custom CA certificate bundle for TLS |
 
-1. Subcommand modules live in `slan_cuan/`
-2. Each module exports a Click command decorated with `@click.command()`
-3. Each command receives global context via `@click.pass_obj`
-4. `cli.py` registers subcommands with `main.add_command()`
+**Dry-run mode** executes all read operations normally but skips writes, displaying what would happen instead.
 
-**Example:**
+## Environment Variables
 
-```python
-# slan_cuan/extract.py
-import click
-from pathlib import Path
-from slan_cuan.context import GlobalContext
+The CLI uses Click's `auto_envvar_prefix` with prefix `SLAN_CUAN`. Every flag maps to an environment variable automatically.
 
-@click.command()
-@click.option(
-    "--image",
-    required=True,
-    type=str,
-    help="OCI artifact reference to extract.",
-)
-@click.option(
-    "--output-dir",
-    required=True,
-    type=click.Path(path_type=Path),
-    help="Work directory for extraction.",
-)
-@click.option(
-    "--registry-auth-file",
-    type=click.Path(exists=True, path_type=Path),
-    help="Path to container auth file.",
-)
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite existing output directory.",
-)
-@click.pass_obj
-def extract(
-    ctx: GlobalContext,
-    image: str,
-    output_dir: Path,
-    registry_auth_file: Path | None,
-    force: bool,
-) -> None:
-    """Extract artifacts from a PNC container image."""
-    click.echo(f"Extracting {image} to {output_dir}")
-```
+**Naming rules:**
 
-```python
-# slan_cuan/cli.py
-from slan_cuan.extract import extract
+- Global flags: `SLAN_CUAN_<FLAG>`
+- Subcommand flags: `SLAN_CUAN_<SUBCOMMAND>_<FLAG>`
 
-main.add_command(extract)
-```
+Hyphens in flag names become underscores. CLI flags always override environment variables when both are set.
 
-This pattern ensures:
-- Each subcommand is independently testable
-- Subcommand logic is isolated from CLI wiring
-- 1:1 correspondence between Python modules and Tekton Tasks
-
-## Environment Variable Convention
-
-The CLI uses Click's `auto_envvar_prefix` to automatically map CLI flags to
-environment variables. The prefix is `SLAN_CUAN`.
-
-**Naming:**
-
-- **Global flags:** `SLAN_CUAN_<FLAG>`
-- **Subcommand flags:** `SLAN_CUAN_<SUBCOMMAND>_<FLAG>`
-
-**Examples:**
-
-| CLI Flag | Environment Variable |
-|----------|---------------------|
+| Flag | Environment Variable |
+|------|---------------------|
 | `--verbose` | `SLAN_CUAN_VERBOSE` |
 | `--dry-run` | `SLAN_CUAN_DRY_RUN` |
-| `extract --image` | `SLAN_CUAN_EXTRACT_IMAGE` |
-| `extract --output-dir` | `SLAN_CUAN_EXTRACT_OUTPUT_DIR` |
-| `extract --registry-auth-file` | `SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE` |
-| `extract --force` | `SLAN_CUAN_EXTRACT_FORCE` |
+| `--ca-cert` | `SLAN_CUAN_CA_CERT` |
 
-**Precedence:** CLI flags always override environment variables.
+Subcommand-specific variables are documented in each subcommand's reference page.
 
-**Implementation:**
+## Subcommands
 
-```python
-@click.group(context_settings={"auto_envvar_prefix": "SLAN_CUAN"})
-```
-
-This applies to the group and all subcommands. Subcommands inherit the prefix
-automatically.
-
-## Current Subcommands
-
-| Subcommand | Options | Environment Variable | Description |
-|------------|---------|---------------------|-------------|
-| `extract` | `--image` (required)<br>`--output-dir` (required)<br>`--registry-auth-file`<br>`--force` | `SLAN_CUAN_EXTRACT_IMAGE`<br>`SLAN_CUAN_EXTRACT_OUTPUT_DIR`<br>`SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE`<br>`SLAN_CUAN_EXTRACT_FORCE` | Extract artifacts from PNC container image |
-| `publish` | `--pulp-url` (required)<br>`--pulp-repository` (required)<br>`--artifact-dir` (required)<br>`--insecure` | `SLAN_CUAN_PUBLISH_PULP_URL`<br>`SLAN_CUAN_PUBLISH_PULP_REPOSITORY`<br>`SLAN_CUAN_PUBLISH_ARTIFACT_DIR`<br>`SLAN_CUAN_PUBLISH_INSECURE` | Publish Maven artifacts to Pulp |
-
-**Global options (all subcommands):**
-
-| Flag | Environment Variable | Description |
-|------|---------------------|-------------|
-| `--verbose` | `SLAN_CUAN_VERBOSE` | Enable verbose output |
-| `--dry-run` | `SLAN_CUAN_DRY_RUN` | Perform dry run without changes |
-
-## Adding a New Subcommand
-
-Follow these steps to add a new subcommand:
-
-### 1. Create the subcommand module
-
-Create `slan_cuan/<name>.py` with the command function:
-
-```python
-import click
-from slan_cuan.context import GlobalContext
-
-
-@click.command()
-@click.option(
-    "--required-flag",
-    required=True,
-    type=str,
-    help="Example required option.",
-)
-@click.pass_obj
-def my_command(ctx: GlobalContext, required_flag: str) -> None:
-    """Short description of the command."""
-    click.echo(f"my_command: flag={required_flag}")
-```
-
-**Requirements:**
-- Module name must match subcommand name
-- Use `@click.pass_obj` to receive `GlobalContext`
-- Include a docstring for `--help` output
-- Follow the 82-character line length limit
-
-### 2. Register in cli.py
-
-Import and register the command in `slan_cuan/cli.py`:
-
-```python
-from slan_cuan.my_command import my_command
-
-# After the main() function definition:
-main.add_command(my_command)
-```
-
-### 3. Add tests
-
-Create tests in `tests/cli_test.py` or a dedicated test module:
-
-```python
-import pytest
-from click.testing import CliRunner
-from slan_cuan.cli import main
-
-
-def test_my_command_requires_flag():
-    runner = CliRunner()
-    result = runner.invoke(main, ["my_command"])
-    assert result.exit_code != 0
-    assert "required" in result.output.lower()
-
-
-def test_my_command_with_flag():
-    runner = CliRunner()
-    result = runner.invoke(main, ["my_command", "--required-flag", "value"])
-    assert result.exit_code == 0
-    assert "my_command: flag=value" in result.output
-```
-
-### 4. Environment variables
-
-Environment variable support is automatic. The command above will
-automatically recognize `SLAN_CUAN_MY_COMMAND_REQUIRED_FLAG`.
-
-Test it:
-
-```bash
-export SLAN_CUAN_MY_COMMAND_REQUIRED_FLAG=value
-slan-cuan my_command
-# Equivalent to: slan-cuan my_command --required-flag value
-```
-
-### 5. Verify
-
-Run the check suite:
-
-```bash
-poe check
-```
-
-All three checks (lint, format, unit tests) must pass.
+| Subcommand | Stage | Description |
+|------------|-------|-------------|
+| [extract](extract.md) | Extract | Pull artifacts from PNC container images |
+| [publish](publish.md) | Publish | Upload Maven artifacts to Pulp |
