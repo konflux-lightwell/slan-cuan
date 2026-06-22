@@ -4,6 +4,7 @@ import click
 
 from slan_cuan.context import GlobalContext
 from slan_cuan.extract import extract
+from slan_cuan.publish import publish
 
 
 @click.group(context_settings={"auto_envvar_prefix": "SLAN_CUAN"})
@@ -26,3 +27,7 @@ def main(ctx: click.Context, verbose: bool, dry_run: bool) -> None:
 
 
 main.add_command(extract)
+main.add_command(publish)
+
+if __name__ == "__main__":
+    main()

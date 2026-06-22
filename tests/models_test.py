@@ -699,3 +699,76 @@ class TestBuildOutput:
         # Find primary jar
         primary_jar = next(a for a in build.artifacts if a.classifier is None)
         assert primary_jar.extension == "jar"
+
+
+class TestPublishResult:
+    """Tests for PublishResult serialization."""
+
+    def test_to_json_returns_valid_json(self) -> None:
+        """to_json() produces valid JSON."""
+        from slan_cuan.models import MavenCoordinate, PublishResult
+
+        result = PublishResult(
+            pulp_url="https://pulp.example.com",
+            distribution="test-repo",
+            artifacts_uploaded=5,
+            artifacts_skipped=1,
+            coordinates=(
+                MavenCoordinate(
+                    group_id="org.example",
+                    artifact_id="test",
+                    version="1.0.0",
+                ),
+            ),
+            published_at="2026-06-22T12:00:00Z",
+        )
+
+        json_str = result.to_json()
+        data = json.loads(json_str)
+
+        assert data["pulp_url"] == "https://pulp.example.com"
+        assert data["distribution"] == "test-repo"
+        assert data["artifacts_uploaded"] == 5
+        assert data["artifacts_skipped"] == 1
+        assert len(data["coordinates"]) == 1
+        assert data["coordinates"][0]["group_id"] == "org.example"
+        assert data["published_at"] == "2026-06-22T12:00:00Z"
+
+    def test_save_and_from_file_roundtrip(self, tmp_path: Path) -> None:
+        """save() and from_file() round-trip correctly."""
+        from slan_cuan.models import MavenCoordinate, PublishResult
+
+        original = PublishResult(
+            pulp_url="https://pulp.example.com",
+            distribution="production",
+            artifacts_uploaded=10,
+            artifacts_skipped=2,
+            coordinates=(
+                MavenCoordinate(
+                    group_id="org.example",
+                    artifact_id="artifact1",
+                    version="1.0.0",
+                ),
+                MavenCoordinate(
+                    group_id="org.example",
+                    artifact_id="artifact2",
+                    version="2.0.0",
+                ),
+            ),
+            published_at="2026-06-22T12:30:00Z",
+        )
+
+        file_path = tmp_path / "publish-result.json"
+        original.save(file_path)
+
+        loaded = PublishResult.from_file(file_path)
+
+        assert loaded.pulp_url == original.pulp_url
+        assert loaded.distribution == original.distribution
+        assert loaded.artifacts_uploaded == original.artifacts_uploaded
+        assert loaded.artifacts_skipped == original.artifacts_skipped
+        assert len(loaded.coordinates) == len(original.coordinates)
+        assert loaded.coordinates[0].group_id == "org.example"
+        assert loaded.coordinates[0].artifact_id == "artifact1"
+        assert loaded.coordinates[1].artifact_id == "artifact2"
+        assert loaded.published_at == original.published_at

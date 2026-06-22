@@ -13,6 +13,7 @@ The installation registers the `slan-cuan` command. View available options:
 ```bash
 slan-cuan --help
 slan-cuan extract --help
+slan-cuan publish --help
 ```
 
 ## Subcommand-per-Module Pattern
@@ -120,6 +121,7 @@ automatically.
 | Subcommand | Options | Environment Variable | Description |
 |------------|---------|---------------------|-------------|
 | `extract` | `--image` (required)<br>`--output-dir` (required)<br>`--registry-auth-file`<br>`--force` | `SLAN_CUAN_EXTRACT_IMAGE`<br>`SLAN_CUAN_EXTRACT_OUTPUT_DIR`<br>`SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE`<br>`SLAN_CUAN_EXTRACT_FORCE` | Extract artifacts from PNC container image |
+| `publish` | `--pulp-url` (required)<br>`--pulp-repository` (required)<br>`--artifact-dir` (required)<br>`--insecure` | `SLAN_CUAN_PUBLISH_PULP_URL`<br>`SLAN_CUAN_PUBLISH_PULP_REPOSITORY`<br>`SLAN_CUAN_PUBLISH_ARTIFACT_DIR`<br>`SLAN_CUAN_PUBLISH_INSECURE` | Publish Maven artifacts to Pulp |
 
 **Global options (all subcommands):**
 

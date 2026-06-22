@@ -165,3 +165,19 @@ def test_extract_requires_output_dir() -> None:
 
     assert result.exit_code != 0
     assert "--output-dir" in result.output or "Missing option" in result.output
+
+
+def test_publish_subcommand_is_reachable() -> None:
+    """Publish subcommand responds to --help and shows --pulp-url."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+    assert result.exit_code == 0
+    assert "--pulp-url" in result.output
+
+
+def test_help_lists_publish_subcommand() -> None:
+    """slan-cuan --help includes publish in subcommand list."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "publish" in result.output

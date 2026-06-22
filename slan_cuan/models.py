@@ -6,6 +6,9 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+EXTRACT_RESULT_FILENAME = "extract-result.json"
+PUBLISH_RESULT_FILENAME = "publish-result.json"
+
 
 @dataclass(frozen=True)
 class ImageReference:
@@ -453,3 +456,50 @@ class ExtractResult:
         """
         with path.open("w") as f:
             f.write(self.to_json())
+
+
+@dataclass(frozen=True)
+class PublishResult:
+    """Result manifest for the publish stage."""
+
+    pulp_url: str
+    distribution: str
+    artifacts_uploaded: int
+    artifacts_skipped: int
+    coordinates: tuple[MavenCoordinate, ...]
+    published_at: str
+
+    def to_json(self) -> str:
+        """Serialize to JSON string."""
+        data = asdict(self)
+        data["coordinates"] = [asdict(c) for c in self.coordinates]
+        return json.dumps(data, indent=2)
+
+    def save(self, path: Path) -> None:
+        """Write JSON to file."""
+        with path.open("w") as f:
+            f.write(self.to_json())
+
+    @classmethod
+    def from_file(cls, path: Path) -> PublishResult:
+        """Deserialize from a JSON file."""
+        with path.open("r") as f:
+            data = json.load(f)
+
+        coordinates = tuple(
+            MavenCoordinate(
+                group_id=c["group_id"],
+                artifact_id=c["artifact_id"],
+                version=c["version"],
+            )
+            for c in data["coordinates"]
+        )
+
+        return cls(
+            pulp_url=data["pulp_url"],
+            distribution=data["distribution"],
+            artifacts_uploaded=data["artifacts_uploaded"],
+            artifacts_skipped=data["artifacts_skipped"],
+            coordinates=coordinates,
+            published_at=data["published_at"],
+        )

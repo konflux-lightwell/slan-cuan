@@ -12,6 +12,7 @@ import click
 
 from slan_cuan.context import GlobalContext
 from slan_cuan.models import (
+    EXTRACT_RESULT_FILENAME,
     ExtractResult,
     ImageReference,
     OCIManifest,
@@ -172,7 +173,7 @@ def extract(
             extracted_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        result_path = output_dir / "extract-result.json"
+        result_path = output_dir / EXTRACT_RESULT_FILENAME
         if ctx.verbose:
             click.echo(f"Writing result manifest to {result_path}")
         result.save(result_path)
