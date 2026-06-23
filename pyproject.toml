@@ -28,7 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
-dependencies = ["click >= 8.1", "httpx >= 0.27", "novabucks @ git+https://github.com/lightwell/novabucks.git@main"]
+dependencies = ["click >= 8.1", "httpx >= 0.27", "novabucks @ git+https://gitlab.cee.redhat.com/lightwell/konflux-definitions/pipeline-tools/novabucks.git@main"]
 
 [project.scripts]
 slan-cuan = "slan_cuan.cli:main"
