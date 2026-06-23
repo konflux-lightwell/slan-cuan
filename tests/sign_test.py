@@ -275,7 +275,7 @@ def test_sign_individual_workflow_error(
     mock_sign_individual: Mock,
     tmp_path: Path,
 ) -> None:
-    """Exception from sign_individual_artifacts_workflow is wrapped in ClickException."""
+    """sign_individual_artifacts_workflow error is wrapped in ClickException."""
     cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()

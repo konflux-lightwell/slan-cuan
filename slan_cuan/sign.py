@@ -6,11 +6,13 @@ import logging
 import tempfile
 from pathlib import Path
 
-
 import click
-
 from novabucks.logging import setup_logging
-from novabucks.workflows import sign_in_radas_workflow, sign_individual_artifacts_workflow
+from novabucks.workflows import (
+    sign_in_radas_workflow,
+    sign_individual_artifacts_workflow,
+)
+
 from slan_cuan.context import GlobalContext
 
 
@@ -20,14 +22,19 @@ from slan_cuan.context import GlobalContext
     "-u",
     required=True,
     type=str,
-    help="The pullspec of the image containing the maven repository. E.g. quay.io/someorg/maven:latest",
+    help=(
+        "The pullspec of the image containing the maven repository."
+        " E.g. quay.io/someorg/maven:latest"
+    ),
 )
 @click.option(
     "--repo-path",
     "-p",
     required=True,
     type=str,
-    help="The directory (or ZIP file) containing the downloaded maven repository.",
+    help=(
+        "The directory (or ZIP file) containing the downloaded maven repository."
+    ),
 )
 @click.option(
     "--signing-key",
@@ -65,8 +72,19 @@ from slan_cuan.context import GlobalContext
     type=str,
     help="The path to the root of maven's repository tree in the ZIP file.",
 )
-@click.option("--product-key", "-b", default="slan-cuan", type=str, help="The product key to use for metadata generation.")
-@click.option("--ignore-patterns", "-i", multiple=True, help="Regex patterns to filter out files from signing.")
+@click.option(
+    "--product-key",
+    "-b",
+    default="slan-cuan",
+    type=str,
+    help="The product key to use for metadata generation.",
+)
+@click.option(
+    "--ignore-patterns",
+    "-i",
+    multiple=True,
+    help="Regex patterns to filter out files from signing.",
+)
 @click.pass_obj
 def sign(
     ctx: GlobalContext,
@@ -85,7 +103,7 @@ def sign(
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
         setup_logging("sign", "slan-cuan", log_level, use_logfile=False)
-        
+
         # 1 - Sign the repository in RADAS
         click.echo("Signing the repository in RADAS...")
         sign_in_radas_workflow(
@@ -100,7 +118,9 @@ def sign(
         click.echo("Finding the signed JSON files in the output path...")
         signed_json_files = list(Path(output_path).rglob("*.json"))
         if not signed_json_files:
-            raise click.ClickException("No signed JSON file found in the output path")
+            raise click.ClickException(
+                "No signed JSON file found in the output path"
+            )
         signed_json_file = signed_json_files[0]
 
         # 3 - Sign the individual artifacts in RADAS
