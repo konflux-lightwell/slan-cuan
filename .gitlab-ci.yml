@@ -1,3 +1,9 @@
+workflow:
+  # The rules below prevent "build-container" to spawn duplicated pipelines on MR.
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
 .common:
   image: quay.io/redhat-aqe/tox:latest
   tags: [itup-alm-x86]
@@ -7,7 +13,16 @@
   before_script:
     - curl https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem
     - update-ca-trust
+    - dnf install -y git
     - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.cee.redhat.com/".insteadOf "https://gitlab.cee.redhat.com/"
+
+variables:
+  CONTAINER_REGISTRY: quay.io
+  CONTAINER_NAME: slan-cuan
+  CONTAINER_TAG: testing
+  CONTAINER_REGISTRY_PROJECT: light-castle
+  GITLAB_TOKEN: ${CI_JOB_TOKEN}
+  SECRET_DETECTION_ENABLED: 'true'
 
 stages:
   - lint
@@ -15,6 +30,7 @@ stages:
   - security
   - secret-detection
   - unit-tests
+  - build
 
 unit-tests:
   extends: .common
@@ -48,10 +64,44 @@ include:
   - template: Security/SAST.gitlab-ci.yml
   - template: Security/Secret-Detection.gitlab-ci.yml
 
-variables:
-  SECRET_DETECTION_ENABLED: 'true'
-
 secret_detection:
   stage: secret-detection
   tags: [itup-alm-x86]
 
+# variables below are required for pushing images
+#   - CONTAINER_REGISTRY_USER
+#   - CONTAINER_REGISTRY_PASSWORD
+container-build:
+  extends: .common
+  stage: build
+  image:
+    name: registry.redhat.io/rhel10/buildah:latest
+  variables:
+    CONTAINER_IMAGE: "$CONTAINER_REGISTRY/$CONTAINER_REGISTRY_PROJECT/$CONTAINER_NAME:$CONTAINER_TAG"
+
+  script:
+    - buildah build-using-dockerfile --build-arg GITLAB_TOKEN="${GITLAB_TOKEN}"
+      ${EXTRA_LABEL:+--label "$EXTRA_LABEL"}
+      --tag "${CONTAINER_IMAGE}"
+      -f "${CI_PROJECT_DIR}/Dockerfile"
+      "${CI_PROJECT_DIR}"
+    - buildah push
+      --creds "${CONTAINER_REGISTRY_USER}:${CONTAINER_REGISTRY_PASSWORD}"
+      "${CONTAINER_IMAGE}"
+      "docker://${CONTAINER_IMAGE}"
+    - echo Image pushed to "${CONTAINER_IMAGE}"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_BRANCH && $CI_PROJECT_NAMESPACE == "lightwell/konflux-definitions/pipeline-tools" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables:
+        CONTAINER_TAG: latest
+    - if: $CI_MERGE_REQUEST_IID
+      variables:
+        CONTAINER_TAG: "mr-$CI_MERGE_REQUEST_IID-$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+        EXTRA_LABEL: quay.expires-after=5d
+      when: manual
+    - if: $CI_COMMIT_TAG && $CI_PROJECT_NAMESPACE == "lightwell/konflux-definitions/pipeline-tools"
+      variables:
+        CONTAINER_TAG: $CI_COMMIT_TAG
+    - when: always
