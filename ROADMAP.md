@@ -5,17 +5,17 @@
 - [x] Bootstrap `pyproject.toml` with project metadata and dependencies
 - [x] Python Click CLI skeleton with top-level `slan-cuan` group
 - [x] `CONTRIBUTING.md` with development workflow and coding standards
-- [ ] `README.md` map-of-content index
+- [x] `README.md` map-of-content index
 
 ## Pipeline Stages (Subcommands)
 
 Each subcommand maps 1:1 to a Tekton Task.
 
-- [ ] `extract` -- Pull artifacts from the PNC-produced container image
+- [x] `extract` -- Pull artifacts from the PNC-produced container image
 - [ ] `identify` -- Determine Maven coordinates (GAV), components, and metadata
-- [ ] `sign` -- Cryptographically sign artifacts
-- [ ] `register` -- Upload SBOMs and attestations to Trustify (TPA)
-- [ ] `publish` -- Push signed artifacts to Pulp for `packages.redhat.com` distribution
+- [x] `sign` -- Cryptographically sign artifacts
+- [x] `register` -- Upload SBOMs and attestations to Trustify (TPA)
+- [x] `publish` -- Push signed artifacts to Pulp for `packages.redhat.com` distribution
 
 ## Packaging
 

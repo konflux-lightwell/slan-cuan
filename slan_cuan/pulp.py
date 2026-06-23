@@ -60,6 +60,9 @@ class PulpMavenClient:
                 verify = ssl.create_default_context(
                     cafile=str(config.ca_cert),
                 )
+                # Internal CAs may omit the "critical" flag on Basic
+                # Constraints; Python 3.14+ rejects them by default.
+                verify.verify_flags &= ~ssl.VERIFY_X509_STRICT
             except (ssl.SSLError, OSError) as e:
                 raise PulpError(
                     f"Failed to load CA certificate from {config.ca_cert}: {e}",
