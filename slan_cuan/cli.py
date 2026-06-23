@@ -7,6 +7,7 @@ import click
 from slan_cuan.context import GlobalContext
 from slan_cuan.extract import extract
 from slan_cuan.publish import publish
+from slan_cuan.sign import sign
 
 
 @click.group(context_settings={"auto_envvar_prefix": "SLAN_CUAN"})
@@ -45,6 +46,7 @@ def main(
 
 main.add_command(extract)
 main.add_command(publish)
+main.add_command(sign)
 
 if __name__ == "__main__":
     main()
