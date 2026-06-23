@@ -8,6 +8,7 @@ from pathlib import Path
 
 EXTRACT_RESULT_FILENAME = "extract-result.json"
 PUBLISH_RESULT_FILENAME = "publish-result.json"
+REGISTER_RESULT_FILENAME = "register-result.json"
 
 
 @dataclass(frozen=True)
@@ -502,4 +503,38 @@ class PublishResult:
             artifacts_skipped=data["artifacts_skipped"],
             coordinates=coordinates,
             published_at=data["published_at"],
+        )
+
+
+@dataclass(frozen=True)
+class RegisterResult:
+    """Result manifest for the register stage."""
+
+    trustify_api_url: str
+    sbom_urn: str
+    sbom_file: str
+    sbom_size: int
+    registered_at: str
+
+    def to_json(self) -> str:
+        """Serialize to JSON string."""
+        data = asdict(self)
+        return json.dumps(data, indent=2)
+
+    def save(self, path: Path) -> None:
+        """Write JSON to file."""
+        with path.open("w") as f:
+            f.write(self.to_json())
+
+    @classmethod
+    def from_file(cls, path: Path) -> RegisterResult:
+        """Deserialize from a JSON file."""
+        with path.open("r") as f:
+            data = json.load(f)
+        return cls(
+            trustify_api_url=data["trustify_api_url"],
+            sbom_urn=data["sbom_urn"],
+            sbom_file=data["sbom_file"],
+            sbom_size=data["sbom_size"],
+            registered_at=data["registered_at"],
         )

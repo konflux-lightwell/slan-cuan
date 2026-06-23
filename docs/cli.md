@@ -48,3 +48,4 @@ Subcommand-specific variables are documented in each subcommand's reference page
 | [extract](extract.md) | Extract | Pull artifacts from PNC container images |
 | [publish](publish.md) | Publish | Upload Maven artifacts to Pulp |
 | [sign](sign.md) | Sign | Cryptographically sign Maven artifacts on RADAS |
+| [register](register.md) | Register | Upload SBOMs to Trustify for vulnerability cross-referencing |
