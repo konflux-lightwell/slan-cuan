@@ -183,9 +183,9 @@ def test_sign_requires_radas_config() -> None:
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_successful_signing(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
@@ -209,7 +209,7 @@ def test_sign_successful_signing(
     assert result.exit_code == 0
     assert "Sign command completed successfully" in result.output
 
-    mock_setup_logging.assert_called_once()
+    mock_set_logging.assert_called_once()
     mock_sign_radas.assert_called_once()
     mock_sign_individual.assert_called_once()
 
@@ -226,9 +226,9 @@ def test_sign_successful_signing(
 
 
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_no_signed_json_found(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     tmp_path: Path,
 ) -> None:
@@ -245,9 +245,9 @@ def test_sign_no_signed_json_found(
 
 
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_radas_workflow_error(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     tmp_path: Path,
 ) -> None:
@@ -268,9 +268,9 @@ def test_sign_radas_workflow_error(
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_individual_workflow_error(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
@@ -297,9 +297,9 @@ def test_sign_individual_workflow_error(
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_custom_options(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
@@ -340,9 +340,9 @@ def test_sign_custom_options(
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_ignore_patterns(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
@@ -382,14 +382,14 @@ def test_sign_ignore_patterns(
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_verbose_sets_debug_logging(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
 ) -> None:
-    """With --verbose, setup_logging is called with DEBUG level."""
+    """With --verbose, set_logging is called with DEBUG level."""
     import logging
 
     cfg = _create_radas_config(tmp_path)
@@ -407,21 +407,21 @@ def test_sign_verbose_sets_debug_logging(
     )
 
     assert result.exit_code == 0
-    mock_setup_logging.assert_called_once_with(
+    mock_set_logging.assert_called_once_with(
         "sign", "slan-cuan", logging.DEBUG, use_logfile=False
     )
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_default_logging_level(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
 ) -> None:
-    """Without --verbose, setup_logging is called with INFO level."""
+    """Without --verbose, set_logging is called with INFO level."""
     import logging
 
     cfg = _create_radas_config(tmp_path)
@@ -437,16 +437,16 @@ def test_sign_default_logging_level(
     result = runner.invoke(main, _base_sign_args(cfg, output_path))
 
     assert result.exit_code == 0
-    mock_setup_logging.assert_called_once_with(
+    mock_set_logging.assert_called_once_with(
         "sign", "slan-cuan", logging.INFO, use_logfile=False
     )
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_env_var_for_radas_config(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
@@ -484,9 +484,9 @@ def test_sign_env_var_for_radas_config(
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
-@patch("slan_cuan.sign.setup_logging")
+@patch("slan_cuan.sign.set_logging")
 def test_sign_temp_dir_cleaned_up(
-    mock_setup_logging: Mock,
+    mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,

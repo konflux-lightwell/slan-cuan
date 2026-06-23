@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 import click
-from novabucks.logging import setup_logging
+from novabucks.utils.logs import set_logging
 from novabucks.workflows import (
     sign_in_radas_workflow,
     sign_individual_artifacts_workflow,
@@ -102,7 +102,7 @@ def sign(
     try:
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
-        setup_logging("sign", "slan-cuan", log_level, use_logfile=False)
+        set_logging("sign", "slan-cuan", log_level, use_logfile=False)
 
         # 1 - Sign the repository in RADAS
         click.echo("Signing the repository in RADAS...")
