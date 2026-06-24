@@ -1,5 +1,7 @@
 FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
 
+ARG RH_IT_CERT
+
 # Install the builder dependencies
 RUN dnf -y install \
     --setopt=install_weak_deps=false \
@@ -17,15 +19,10 @@ RUN dnf -y install \
 COPY . /src/
 WORKDIR /src
 
-ARG GITLAB_TOKEN
-
 # Authenticate in the internal git repository to fetch the dependencies such as novabucks
 # and generate the wheels
-RUN curl \
-    -L https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem \
-    -o /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
+RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
     && update-ca-trust extract \
-    && git config --global url."https://oauth2:${GITLAB_TOKEN}@gitlab.cee.redhat.com/".insteadOf "https://gitlab.cee.redhat.com/" \
     &&  pip3.12 wheel --wheel-dir=/export/wheels .
 
 
@@ -41,9 +38,7 @@ LABEL \
 COPY --from=builder /export/ /
 
 # Setup RH-IT-Root-CA certificate for RedHat
-RUN curl \
-    -L https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem \
-    -o /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
+RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
     && update-ca-trust extract \
     # Install dependencies
     && microdnf install -y \

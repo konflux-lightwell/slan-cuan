@@ -1,0 +1,55 @@
+name: Container Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: quay.io
+  REGISTRY_PROJECT: light-castle
+  IMAGE_NAME: slan-cuan
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "tag=pr-${{ github.event.pull_request.number }}-${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
+            echo "extra_label=quay.expires-after=5d" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=testing" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image
+        id: build
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.REGISTRY_PROJECT }}/${{ env.IMAGE_NAME }}
+          tags: ${{ steps.tag.outputs.tag }}
+          containerfiles: ./Dockerfile
+          build-args: RH_IT_CERT=${{ secrets.RH_IT_CERT }}
+          labels: ${{ steps.tag.outputs.extra_label }}
+
+      - name: Push to registry
+        if: github.event_name != 'pull_request'
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.CONTAINER_REGISTRY_USER }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
