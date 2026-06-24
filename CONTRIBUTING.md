@@ -65,3 +65,5 @@ global options, and environment variable conventions.
 5. **Add documentation** -- Create `docs/<name>.md` following the structure of the existing subcommand docs. Link it from the subcommands table in [docs/cli.md](docs/cli.md#subcommands).
 
 6. **Verify** -- Run `poe check`. All three checks (lint, format, unit tests) must pass.
+
+7. **Tekton bundle** -- CI automatically includes all YAML files from `tekton/tasks/` in the Tekton bundle. No manual bundle configuration needed.

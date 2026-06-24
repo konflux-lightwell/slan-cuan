@@ -53,3 +53,21 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.CONTAINER_REGISTRY_USER }}
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+
+      - name: Install Tekton CLI
+        if: github.event_name != 'pull_request'
+        uses: tektoncd/actions/setup-tektoncd-cli@main
+        with:
+          version: v0.44.0
+
+      - name: Push Tekton bundle
+        if: github.event_name != 'pull_request'
+        run: |
+          tkn bundle push \
+            "${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}-bundle" \
+            -f tekton/tasks/slan-cuan-extract.yaml \
+            -f tekton/tasks/slan-cuan-sign.yaml \
+            -f tekton/tasks/slan-cuan-register.yaml \
+            -f tekton/tasks/slan-cuan-publish.yaml \
+            --remote-username "${{ secrets.CONTAINER_REGISTRY_USER }}" \
+            --remote-password "${{ secrets.CONTAINER_REGISTRY_PASSWORD }}"

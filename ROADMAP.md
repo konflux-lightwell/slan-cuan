@@ -20,4 +20,4 @@ Each subcommand maps 1:1 to a Tekton Task.
 
 - [x] Containerfile producing the dual-purpose image (Python app + Tekton Task YAML)
 - [x] Tekton Task definitions for each subcommand
-- [ ] Konflux pipeline integration (Trusted Artifacts, bundle-referenced Tasks)
+- [x] Konflux pipeline integration (Trusted Artifacts, bundle-referenced Tasks)
