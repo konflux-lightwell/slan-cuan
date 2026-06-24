@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
+from slan_cuan.context import GlobalContext, write_tekton_result
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     REGISTER_RESULT_FILENAME,
@@ -80,7 +81,7 @@ def register(
 ) -> None:
     """Register SBOM with Trustify for vulnerability cross-referencing."""
     try:
-        result_path = artifact_dir / EXTRACT_RESULT_FILENAME
+        result_path = Path(os.path.join(artifact_dir, EXTRACT_RESULT_FILENAME))
         if not result_path.exists():
             raise click.ClickException(f"Extract result not found: {result_path}")
 
@@ -137,8 +138,15 @@ def register(
             sbom_size=upload_result.file_size,
             registered_at=datetime.now(timezone.utc).isoformat(),
         )
-        register_result_path = artifact_dir / REGISTER_RESULT_FILENAME
+        register_result_path = Path(
+            os.path.join(artifact_dir, REGISTER_RESULT_FILENAME)
+        )
         register_result.save(register_result_path)
+
+        # Write Tekton results
+        write_tekton_result(
+            ctx.tekton_results_dir, "SBOM_URN", upload_result.sbom_urn
+        )
 
         click.echo(
             (

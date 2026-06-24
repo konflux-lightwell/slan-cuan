@@ -19,6 +19,7 @@ These options apply to all subcommands and are defined on the top-level group. A
 | `--verbose` | flag | `False` | Detailed progress and file listings |
 | `--dry-run` | flag | `False` | Preview without side effects |
 | `--ca-cert` | path | `None` | Custom CA certificate bundle for TLS |
+| `--tekton-results-dir` | path | `None` | Directory for Tekton result files |
 
 **Dry-run mode** executes all read operations normally but skips writes, displaying what would happen instead.
 
@@ -38,6 +39,9 @@ Hyphens in flag names become underscores. CLI flags always override environment 
 | `--verbose` | `SLAN_CUAN_VERBOSE` |
 | `--dry-run` | `SLAN_CUAN_DRY_RUN` |
 | `--ca-cert` | `SLAN_CUAN_CA_CERT` |
+| `--tekton-results-dir` | `SLAN_CUAN_TEKTON_RESULTS_DIR` |
+
+**List-valued options:** Options that accept multiple values (e.g. `--ignore-patterns`) support comma-separated values in their environment variable form. For example, `SLAN_CUAN_SIGN_IGNORE_PATTERNS="pat1,pat2"` is equivalent to `--ignore-patterns pat1 --ignore-patterns pat2`.
 
 Subcommand-specific variables are documented in each subcommand's reference page.
 

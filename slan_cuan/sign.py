@@ -16,6 +16,17 @@ from novabucks.workflows import (
 from slan_cuan.context import GlobalContext
 
 
+def _split_ignore_patterns(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Split comma-separated patterns from environment variables."""
+    if len(value) == 1 and "," in value[0]:
+        return tuple(p.strip() for p in value[0].split(",") if p.strip())
+    return value
+
+
 @click.command()
 @click.option(
     "--repo-url",
@@ -83,6 +94,7 @@ from slan_cuan.context import GlobalContext
     "--ignore-patterns",
     "-i",
     multiple=True,
+    callback=_split_ignore_patterns,
     help="Regex patterns to filter out files from signing.",
 )
 @click.pass_obj
@@ -96,7 +108,7 @@ def sign(
     requester_id: str,
     zip_root_path: str,
     product_key: str,
-    ignore_patterns: list[str],
+    ignore_patterns: tuple[str, ...],
 ) -> None:
     """Sign Maven artifacts on RADAS."""
     try:

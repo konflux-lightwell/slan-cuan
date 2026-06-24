@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
+from slan_cuan.context import GlobalContext, write_tekton_result
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     PUBLISH_RESULT_FILENAME,
@@ -128,6 +129,23 @@ def publish(
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
+
+        # Write Tekton results
+        write_tekton_result(
+            ctx.tekton_results_dir, "ARTIFACTS_UPLOADED", str(uploaded)
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir, "ARTIFACTS_SKIPPED", str(skipped)
+        )
+        artifact_outputs = {
+            "uri": f"{pulp_url}/pulp/maven/{pulp_repository}/",
+            "digest": "",
+        }
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "PUBLISHED_ARTIFACT_OUTPUTS",
+            json.dumps(artifact_outputs),
+        )
 
         click.echo(
             f"Published: {uploaded} artifact(s) "

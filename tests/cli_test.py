@@ -209,3 +209,79 @@ def test_ca_cert_rejects_nonexistent_path() -> None:
         ],
     )
     assert result.exit_code != 0
+
+
+def test_tekton_results_dir_shown_in_help() -> None:
+    """--tekton-results-dir appears in the top-level --help output."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "--tekton-results-dir" in result.output
+
+
+@patch("slan_cuan.extract.manifest_fetch")
+def test_tekton_results_dir_env_var(mock_manifest_fetch: Mock) -> None:
+    """SLAN_CUAN_TEKTON_RESULTS_DIR sets --tekton-results-dir."""
+    fake_manifest = {
+        "layers": [
+            {
+                "digest": "sha256:abc",
+                "mediaType": (
+                    "application/vnd.lightwell.build-output.layer.v1+tar"
+                ),
+                "size": 1000,
+            }
+        ],
+        "annotations": {
+            "org.opencontainers.image.title": "TEST-build-output",
+        },
+    }
+    mock_manifest_fetch.return_value = fake_manifest
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "extract",
+                "--image",
+                "quay.io/test/image@sha256:abc123",
+                "--output-dir",
+                "output",
+            ],
+            env={"SLAN_CUAN_TEKTON_RESULTS_DIR": "results"},
+        )
+
+        assert result.exit_code == 0
+
+
+def test_write_tekton_result_creates_file(tmp_path) -> None:
+    """write_tekton_result creates a file with the given name and value."""
+    from slan_cuan.context import write_tekton_result
+
+    results_dir = tmp_path / "results"
+    write_tekton_result(results_dir, "TEST_RESULT", "test-value")
+
+    result_file = results_dir / "TEST_RESULT"
+    assert result_file.exists()
+    assert result_file.read_text() == "test-value"
+
+
+def test_write_tekton_result_creates_directory(tmp_path) -> None:
+    """write_tekton_result creates parent directories if they don't exist."""
+    from slan_cuan.context import write_tekton_result
+
+    results_dir = tmp_path / "nested" / "results"
+    write_tekton_result(results_dir, "TEST_RESULT", "test-value")
+
+    result_file = results_dir / "TEST_RESULT"
+    assert result_file.exists()
+    assert result_file.read_text() == "test-value"
+
+
+def test_write_tekton_result_noop_when_none() -> None:
+    """write_tekton_result does nothing when results_dir is None."""
+    from slan_cuan.context import write_tekton_result
+
+    write_tekton_result(None, "TEST_RESULT", "test-value")

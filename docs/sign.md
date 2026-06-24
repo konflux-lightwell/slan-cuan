@@ -51,6 +51,18 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 | `--product-key` | `SLAN_CUAN_SIGN_PRODUCT_KEY` |
 | `--ignore-patterns` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` |
 
+When set via environment variable, `SLAN_CUAN_SIGN_IGNORE_PATTERNS` accepts comma-separated values:
+
+```bash
+SLAN_CUAN_SIGN_IGNORE_PATTERNS=".*-sources\.jar$,.*-javadoc\.jar$"
+```
+
 ## External Dependencies
 
 Requires the `novabucks` Python package, which provides the RADAS workflow implementations (`sign_in_radas_workflow`, `sign_individual_artifacts_workflow`) and logging setup.
+
+## Tekton Task
+
+The corresponding Tekton Task is `slan-cuan-sign`, defined at `tekton/tasks/slan-cuan-sign.yaml`.
+
+See [Tekton Tasks](tekton.md) for integration details.

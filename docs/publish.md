@@ -57,3 +57,9 @@ slan-cuan --ca-cert /etc/ssl/certs/lan-ca.crt \
 ## Dry-Run Behavior
 
 With `--dry-run`, loads the extract result and discovers artifacts but does not upload. Displays the distribution name, Pulp URL, artifact count, coordinate count, and each artifact path that would be uploaded.
+
+## Tekton Task
+
+The corresponding Tekton Task is `slan-cuan-publish`, defined at `tekton/tasks/slan-cuan-publish.yaml`.
+
+See [Tekton Tasks](tekton.md) for integration details.

@@ -63,3 +63,9 @@ Transient HTTP errors (408, 429, 500, 502, 503, 504) and network errors are retr
 ## Dry-Run Behavior
 
 With `--dry-run`, loads the extract result and locates the SBOM but does not make any HTTP requests. Displays the Trustify API URL, OIDC token endpoint URL, SBOM file path, and file size.
+
+## Tekton Task
+
+The corresponding Tekton Task is `slan-cuan-register`, defined at `tekton/tasks/slan-cuan-register.yaml`.
+
+See [Tekton Tasks](tekton.md) for integration details.

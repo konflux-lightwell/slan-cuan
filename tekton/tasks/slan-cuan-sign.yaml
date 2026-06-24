@@ -1,0 +1,89 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-sign
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Security
+    tekton.dev/displayName: "slan-cuan: Sign Artifacts (RADAS)"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,maven,sign,security"
+spec:
+  description: >-
+    Sign Java artifacts using RADAS (Red Hat Artifact Digital Authentication Service).
+  params:
+    - name: REPO_URL
+      description: Pullspec of image containing Maven repository.
+      type: string
+    - name: SIGNING_KEY
+      description: Signing key name for RADAS.
+      type: string
+    - name: RADAS_CONFIG_SECRET
+      description: K8s Secret name containing RADAS config JSON.
+      type: string
+      default: "radas-config"
+    - name: REQUESTER_ID
+      description: Requester identity for signing operations.
+      type: string
+      default: "slan-cuan@redhat.com"
+    - name: ZIP_ROOT_PATH
+      description: Root of Maven repo tree inside ZIP.
+      type: string
+      default: "repository"
+    - name: PRODUCT_KEY
+      description: Product key for metadata.
+      type: string
+      default: "slan-cuan"
+    - name: IGNORE_PATTERNS
+      description: Comma-separated regex patterns to ignore during signing.
+      type: string
+      default: ""
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+    env:
+      - name: REQUESTS_CA_BUNDLE
+        value: /etc/pki/tls/cert.pem
+  steps:
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      args:
+        - sign
+      env:
+        - name: SLAN_CUAN_SIGN_REPO_URL
+          value: $(params.REPO_URL)
+        - name: SLAN_CUAN_SIGN_REPO_PATH
+          value: /var/workdir/extracted
+        - name: SLAN_CUAN_SIGN_SIGNING_KEY
+          value: $(params.SIGNING_KEY)
+        - name: SLAN_CUAN_SIGN_OUTPUT_PATH
+          value: /var/workdir/signed
+        - name: RADAS_CONFIG_PATH
+          value: /radas/config.json
+        - name: SLAN_CUAN_SIGN_REQUESTER_ID
+          value: $(params.REQUESTER_ID)
+        - name: SLAN_CUAN_SIGN_ZIP_ROOT_PATH
+          value: $(params.ZIP_ROOT_PATH)
+        - name: SLAN_CUAN_SIGN_PRODUCT_KEY
+          value: $(params.PRODUCT_KEY)
+        - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
+          value: $(params.IGNORE_PATTERNS)
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: $(step.results)
+      volumeMounts:
+        - name: radas-config
+          mountPath: /radas
+          readOnly: true
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: radas-config
+      secret:
+        secretName: $(params.RADAS_CONFIG_SECRET)

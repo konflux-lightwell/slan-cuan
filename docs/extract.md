@@ -61,3 +61,9 @@ Requires `oras` (OCI Registry as Storage) on `$PATH` for pulling artifacts and f
 ## Dry-Run Behavior
 
 With `--dry-run`, fetches the manifest but does not pull layers or create the output directory. Displays image metadata: reference, digest, layer count, total size, deliverable name, and annotations.
+
+## Tekton Task
+
+The corresponding Tekton Task is `slan-cuan-extract`, defined at `tekton/tasks/slan-cuan-extract.yaml`.
+
+See [Tekton Tasks](tekton.md) for integration details.

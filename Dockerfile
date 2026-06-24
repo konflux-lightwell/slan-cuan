@@ -57,5 +57,8 @@ RUN curl \
 # Set the internal certificates
 ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/cert.pem
 
+# Embed Tekton Task definitions
+COPY tekton/tasks/ /tekton/tasks/
+
 # Run the CLI
-ENTRYPOINT ["bash", "-c", "slan-cuan $@"]
+ENTRYPOINT ["slan-cuan"]

@@ -412,3 +412,81 @@ def test_extract_missing_deliverable_annotation(
 
     assert result.exit_code != 0
     assert "Could not determine deliverable name" in result.output
+
+
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_writes_tekton_results(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """When --tekton-results-dir is set, extract writes Tekton result files."""
+    output_dir = tmp_path / "output"
+    results_dir = tmp_path / "results"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        create_mock_deliverable(out_dir)
+
+    mock_pull.side_effect = side_effect_pull
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify Tekton result files were created
+    manifest_digest_file = results_dir / "MANIFEST_DIGEST"
+    deliverable_dir_file = results_dir / "DELIVERABLE_DIR"
+
+    assert manifest_digest_file.exists()
+    assert deliverable_dir_file.exists()
+
+    # Verify content
+    assert manifest_digest_file.read_text() == "sha256:abc123"
+    assert deliverable_dir_file.read_text() == "TEST-build-output"
+
+
+@patch("slan_cuan.extract.manifest_fetch")
+def test_extract_dry_run_skips_tekton_results(
+    mock_manifest_fetch: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """In dry-run mode, no Tekton result files are written."""
+    output_dir = tmp_path / "output"
+    results_dir = tmp_path / "results"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "--tekton-results-dir",
+            str(results_dir),
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify no Tekton result files were created
+    assert not results_dir.exists()

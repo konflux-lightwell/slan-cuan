@@ -30,18 +30,26 @@ from slan_cuan.sign import sign
     default=None,
     help="Path to a custom CA certificate bundle for TLS verification.",
 )
+@click.option(
+    "--tekton-results-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory where Tekton result files should be written.",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
     verbose: bool,
     dry_run: bool,
     ca_cert: Path | None,
+    tekton_results_dir: Path | None,
 ) -> None:
     """Release pipeline for Red Hat Lightwell Java artifacts."""
     ctx.obj = GlobalContext(
         verbose=verbose,
         dry_run=dry_run,
         ca_cert=ca_cert,
+        tekton_results_dir=tekton_results_dir,
     )
 
 

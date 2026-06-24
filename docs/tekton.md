@@ -1,0 +1,163 @@
+# Tekton Tasks
+
+Each CLI subcommand has a corresponding Tekton Task under `tekton/tasks/`. The Task YAML invokes the CLI via environment variables inside the container image.
+
+## Task Naming Convention
+
+Tasks follow the pattern `slan-cuan-<subcommand>`:
+
+| Subcommand | Tekton Task | Task YAML |
+|------------|-------------|-----------|
+| `extract` | `slan-cuan-extract` | `tekton/tasks/slan-cuan-extract.yaml` |
+| `sign` | `slan-cuan-sign` | `tekton/tasks/slan-cuan-sign.yaml` |
+| `register` | `slan-cuan-register` | `tekton/tasks/slan-cuan-register.yaml` |
+| `publish` | `slan-cuan-publish` | `tekton/tasks/slan-cuan-publish.yaml` |
+
+## Task Structure
+
+Each Task contains a single `run` step that executes the corresponding CLI subcommand. The step uses environment variables to configure the CLI:
+
+```yaml
+steps:
+  - name: run
+    image: quay.io/light-castle/slan-cuan:latest
+    args:
+      - <subcommand>
+    env:
+      - name: SLAN_CUAN_<SUBCOMMAND>_<OPTION>
+        value: $(params.OPTION)
+      - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+        value: $(step.results)
+```
+
+Task parameters map directly to CLI options. See [Environment Variable Mapping](#environment-variable-mapping) for the full list.
+
+## Trusted Artifacts
+
+Tasks do NOT include Trusted Artifact steps for data movement. Consumer pipelines are responsible for orchestrating data flow between Tasks.
+
+The typical three-step pattern for pipeline operators:
+
+1. **use-trusted-artifact** -- Fetch inputs from OCI artifact storage
+2. **slan-cuan-<subcommand>** -- Run the CLI step
+3. **create-trusted-artifact** -- Push outputs to OCI artifact storage
+
+This separation keeps Tasks focused on business logic and allows pipeline authors to choose their data movement strategy (Trusted Artifacts, workspaces, or other mechanisms).
+
+## Container Image
+
+The container image is published at `quay.io/light-castle/slan-cuan`. It contains:
+
+- The `slan-cuan` CLI (entrypoint)
+- Tekton Task YAML definitions at `/tekton/tasks/`
+
+Pipeline operators can extract the Task YAML from the image or reference it from OCI bundles.
+
+## Required Kubernetes Secrets
+
+Tasks reference these Kubernetes Secrets via parameters:
+
+| Secret Name | Format | Used By | Keys |
+|-------------|--------|---------|------|
+| `registry-auth` | `.dockerconfigjson` | extract | Standard Docker config format |
+| `radas-config` | Opaque | sign | `config.json` (RADAS configuration) |
+| `trustify-sso` | Opaque | register | `client-id`, `client-secret` |
+| Custom CA cert | Opaque | register, publish | `ca.crt` (optional) |
+
+Secret names are configurable via Task parameters. Default names are shown above.
+
+## Environment Variable Mapping
+
+Tasks expose CLI options as Tekton parameters. The parameter values map to environment variables consumed by the CLI.
+
+### Global Options
+
+| Task Parameter | Environment Variable | Used By |
+|----------------|---------------------|---------|
+| `CA_CERT_PATH` | `SLAN_CUAN_CA_CERT` | All |
+| `VERBOSE` | `SLAN_CUAN_VERBOSE` | All |
+| `DRY_RUN` | `SLAN_CUAN_DRY_RUN` | All |
+
+All Tasks automatically set `SLAN_CUAN_TEKTON_RESULTS_DIR=$(step.results)` to enable result file output.
+
+### Extract
+
+| Task Parameter | Environment Variable | CLI Flag |
+|----------------|---------------------|----------|
+| `IMAGE` | `SLAN_CUAN_EXTRACT_IMAGE` | `--image` |
+| `REGISTRY_AUTH_SECRET` | `SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE` | `--registry-auth-file` |
+| `FORCE` | `SLAN_CUAN_EXTRACT_FORCE` | `--force` |
+
+**Results:**
+- `MANIFEST_DIGEST` -- OCI manifest digest of the extracted image
+- `DELIVERABLE_DIR` -- Name of the deliverable directory inside the artifact
+
+### Sign
+
+| Task Parameter | Environment Variable | CLI Flag |
+|----------------|---------------------|----------|
+| `REPO_URL` | `SLAN_CUAN_SIGN_REPO_URL` | `--repo-url` |
+| `SIGNING_KEY` | `SLAN_CUAN_SIGN_SIGNING_KEY` | `--signing-key` |
+| `RADAS_CONFIG_SECRET` | `RADAS_CONFIG_PATH` | `--radas-config` |
+| `REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
+| `ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
+| `PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
+| `IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |
+
+**Results:** None
+
+### Register
+
+| Task Parameter | Environment Variable | CLI Flag |
+|----------------|---------------------|----------|
+| `TRUSTIFY_API_URL` | `SLAN_CUAN_REGISTER_TRUSTIFY_API_URL` | `--trustify-api-url` |
+| `SSO_TOKEN_URL` | `SLAN_CUAN_REGISTER_SSO_TOKEN_URL` | `--sso-token-url` |
+| `SSO_CLIENT_ID` | `SLAN_CUAN_REGISTER_SSO_CLIENT_ID` | `--sso-client-id` |
+| `SSO_CLIENT_SECRET` | `SLAN_CUAN_REGISTER_SSO_CLIENT_SECRET` | `--sso-client-secret` |
+| `INSECURE` | `SLAN_CUAN_REGISTER_INSECURE` | `--insecure` |
+| `RETRIES` | `SLAN_CUAN_REGISTER_RETRIES` | `--retries` |
+
+**Results:**
+- `SBOM_URN` -- Trustify URN of the uploaded SBOM
+
+### Publish
+
+| Task Parameter | Environment Variable | CLI Flag |
+|----------------|---------------------|----------|
+| `PULP_URL` | `SLAN_CUAN_PUBLISH_PULP_URL` | `--pulp-url` |
+| `PULP_REPOSITORY` | `SLAN_CUAN_PUBLISH_PULP_REPOSITORY` | `--pulp-repository` |
+| `INSECURE` | `SLAN_CUAN_PUBLISH_INSECURE` | `--insecure` |
+
+**Results:**
+- `ARTIFACTS_UPLOADED` -- Count of successfully uploaded artifacts
+- `ARTIFACTS_SKIPPED` -- Count of skipped artifacts (already published)
+- `PUBLISHED_ARTIFACT_OUTPUTS` -- JSON object with `uri` and `digest` keys for Tekton Chains SLSA provenance
+
+## Pipeline Topology
+
+The typical pipeline topology is sequential:
+
+```
+extract → sign → register → publish
+```
+
+Data flows between Tasks via a shared workspace or Trusted Artifacts. Each stage consumes the output of the previous stage:
+
+1. **extract** produces `extract-result.json` in the artifact directory
+2. **sign** reads the artifact directory and produces signed outputs
+3. **register** reads `extract-result.json` to locate the SBOM
+4. **publish** reads `extract-result.json` to discover artifacts for upload
+
+Pipeline authors MUST ensure the artifact directory persists across Tasks (via PVC workspace, Trusted Artifacts, or equivalent).
+
+## Tekton Chains Integration
+
+The `publish` Task emits a `PUBLISHED_ARTIFACT_OUTPUTS` result as a JSON object with `uri` and `digest` keys:
+
+```json
+{"uri": "https://pulp.example.com/pulp/maven/repo/", "digest": ""}
+```
+
+The `-ARTIFACT_OUTPUTS` suffix triggers Tekton Chains to include the published artifacts as SLSA provenance subjects. The `uri` field contains the Pulp distribution URL; `digest` is reserved for future per-artifact attestation.
+
+For Chains to process the result, the Task result type must be `object` with `uri` and `digest` properties. See the Tekton Chains documentation for details.

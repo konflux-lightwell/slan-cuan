@@ -516,3 +516,83 @@ def test_sign_temp_dir_cleaned_up(
     assert len(captured_tmp_dir) == 1
     # Temp dir should be cleaned up after the context manager exits
     assert not Path(captured_tmp_dir[0]).exists()
+
+
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_ignore_patterns_from_env_var_comma_separated(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_sign_individual: Mock,
+    tmp_path: Path,
+) -> None:
+    """Comma-separated SLAN_CUAN_SIGN_IGNORE_PATTERNS produces patterns."""
+    cfg = _create_radas_config(tmp_path)
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+
+    def radas_side_effect(**kwargs):
+        (Path(kwargs["result_path"]) / "result.json").write_text("{}")
+
+    mock_sign_radas.side_effect = radas_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        _base_sign_args(cfg, output_path),
+        env={
+            "SLAN_CUAN_SIGN_IGNORE_PATTERNS": (
+                ".*-sources\\.jar$,.*-javadoc\\.jar$"
+            )
+        },
+    )
+
+    assert result.exit_code == 0
+
+    # Verify both patterns forwarded to workflows
+    radas_kwargs = mock_sign_radas.call_args.kwargs
+    assert ".*-sources\\.jar$" in radas_kwargs["ignore_patterns"]
+    assert ".*-javadoc\\.jar$" in radas_kwargs["ignore_patterns"]
+
+    individual_kwargs = mock_sign_individual.call_args.kwargs
+    assert ".*-sources\\.jar$" in individual_kwargs["ignore_patterns"]
+    assert ".*-javadoc\\.jar$" in individual_kwargs["ignore_patterns"]
+
+
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_ignore_patterns_single_from_env_var(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_sign_individual: Mock,
+    tmp_path: Path,
+) -> None:
+    """Single pattern from SLAN_CUAN_SIGN_IGNORE_PATTERNS works correctly."""
+    cfg = _create_radas_config(tmp_path)
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+
+    def radas_side_effect(**kwargs):
+        (Path(kwargs["result_path"]) / "result.json").write_text("{}")
+
+    mock_sign_radas.side_effect = radas_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        _base_sign_args(cfg, output_path),
+        env={"SLAN_CUAN_SIGN_IGNORE_PATTERNS": ".*-sources\\.jar$"},
+    )
+
+    assert result.exit_code == 0
+
+    # Verify single pattern forwarded to workflows
+    radas_kwargs = mock_sign_radas.call_args.kwargs
+    assert ".*-sources\\.jar$" in radas_kwargs["ignore_patterns"]
+    assert len(radas_kwargs["ignore_patterns"]) == 1
+
+    individual_kwargs = mock_sign_individual.call_args.kwargs
+    assert ".*-sources\\.jar$" in individual_kwargs["ignore_patterns"]
+    assert len(individual_kwargs["ignore_patterns"]) == 1

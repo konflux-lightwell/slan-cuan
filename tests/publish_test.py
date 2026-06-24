@@ -492,3 +492,56 @@ def test_publish_skips_missing_files(
     assert "Warning: skipping missing file:" in result.output
     assert "1 artifact(s) uploaded, 1 skipped" in result.output
     assert mock_client.upload_artifact.call_count == 1
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_writes_tekton_results(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """When --tekton-results-dir is set, publish writes result files."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    results_dir = tmp_path / "results"
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+        status_code=200,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify Tekton result files were created
+    uploaded_file = results_dir / "ARTIFACTS_UPLOADED"
+    skipped_file = results_dir / "ARTIFACTS_SKIPPED"
+    outputs_file = results_dir / "PUBLISHED_ARTIFACT_OUTPUTS"
+
+    assert uploaded_file.exists()
+    assert skipped_file.exists()
+    assert outputs_file.exists()
+
+    # Verify content
+    assert uploaded_file.read_text() == "2"
+    assert skipped_file.read_text() == "0"
+
+    # Verify JSON format for artifact outputs
+    outputs_data = json.loads(outputs_file.read_text())
+    assert outputs_data["uri"] == "https://pulp.example.com/pulp/maven/test-repo/"
+    assert "digest" in outputs_data

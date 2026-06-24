@@ -34,7 +34,25 @@ For details on the subcommand pattern and environment variable conventions, see 
 
 The single container image contains:
 - The Python CLI application (entrypoint)
-- Tekton Task YAML definitions (embedded, extracted during pipeline setup)
+- Tekton Task YAML definitions (embedded at `/tekton/tasks/`)
+
+### Tekton Tasks
+
+Each CLI subcommand has a corresponding Tekton Task under `tekton/tasks/`.
+The naming convention is `slan-cuan-<subcommand>`.
+
+| Subcommand | Tekton Task | Task YAML |
+|------------|-------------|-----------|
+| `extract` | `slan-cuan-extract` | `tekton/tasks/slan-cuan-extract.yaml` |
+| `sign` | `slan-cuan-sign` | `tekton/tasks/slan-cuan-sign.yaml` |
+| `register` | `slan-cuan-register` | `tekton/tasks/slan-cuan-register.yaml` |
+| `publish` | `slan-cuan-publish` | `tekton/tasks/slan-cuan-publish.yaml` |
+
+**Invariant:** When adding or modifying a CLI subcommand, the corresponding
+Tekton Task MUST be updated (and vice versa). The Task's `run` step
+environment variables must match the subcommand's Click options and their
+`envvar=` declarations. See [Tekton integration](docs/tekton.md) for the
+full environment variable mapping.
 
 ## Domain Context
 

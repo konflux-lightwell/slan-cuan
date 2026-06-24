@@ -520,3 +520,47 @@ def test_register_retries_option(mock_client_cls: Mock, tmp_path: Path) -> None:
     call_args = mock_client_cls.call_args
     config = call_args[0][0]
     assert config.retries == 5
+
+
+@patch("slan_cuan.register.TrustifyClient")
+def test_register_writes_tekton_results(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """When --tekton-results-dir is set, register writes SBOM_URN file."""
+    artifact_dir = create_test_artifact_dir_with_sbom(tmp_path)
+    results_dir = tmp_path / "results"
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_sbom.return_value = SBOMUploadResult(
+        file_path=str(artifact_dir / "TEST-build-output" / "cyclonedx.json"),
+        file_size=123,
+        sbom_urn="urn:uuid:test-tekton-results",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "register",
+            "--trustify-api-url",
+            "https://trustify.example.com",
+            "--sso-token-url",
+            "https://sso.example.com/token",
+            "--sso-client-id",
+            "client-id",
+            "--sso-client-secret",
+            "client-secret",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify Tekton result file was created
+    sbom_urn_file = results_dir / "SBOM_URN"
+    assert sbom_urn_file.exists()
+    assert sbom_urn_file.read_text() == "urn:uuid:test-tekton-results"

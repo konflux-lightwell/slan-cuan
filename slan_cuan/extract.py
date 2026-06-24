@@ -10,7 +10,7 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
+from slan_cuan.context import GlobalContext, write_tekton_result
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     ExtractResult,
@@ -177,6 +177,14 @@ def extract(
         if ctx.verbose:
             click.echo(f"Writing result manifest to {result_path}")
         result.save(result_path)
+
+        # Write Tekton results
+        write_tekton_result(
+            ctx.tekton_results_dir, "MANIFEST_DIGEST", manifest_digest
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir, "DELIVERABLE_DIR", deliverable_name
+        )
 
         # Log summary
         jar_count = sum(

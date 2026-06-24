@@ -10,5 +10,8 @@ Packaged as a container image that provides both the Python CLI application and 
 |----------|---------|
 | [CLI Reference](docs/cli.md) | Global options, environment variables, architecture |
 | [Extract](docs/extract.md) | Extract artifacts from PNC container images |
+| [Sign](docs/sign.md) | Cryptographically sign Maven artifacts on RADAS |
+| [Register](docs/register.md) | Upload SBOMs to Trustify for vulnerability cross-referencing |
 | [Publish](docs/publish.md) | Publish Maven artifacts to Pulp |
+| [Tekton Tasks](docs/tekton.md) | Tekton Task definitions and pipeline integration |
 | [Contributing](CONTRIBUTING.md) | Development setup, code style, adding subcommands |

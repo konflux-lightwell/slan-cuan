@@ -1,0 +1,91 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-register
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Security
+    tekton.dev/displayName: "slan-cuan: Register SBOM (Trustify)"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,sbom,trustify,security"
+spec:
+  description: >-
+    Register SBOM with Trustify for continuous CVE cross-referencing.
+  params:
+    - name: TRUSTIFY_API_URL
+      description: Trustify instance API URL.
+      type: string
+    - name: SSO_TOKEN_URL
+      description: OIDC token endpoint URL.
+      type: string
+    - name: SSO_SECRET_NAME
+      description: K8s Secret name with keys client-id and client-secret.
+      type: string
+      default: "trustify-sso"
+    - name: INSECURE
+      description: Disable TLS verification (true/false).
+      type: string
+      default: "false"
+    - name: RETRIES
+      description: Number of retry attempts for API calls.
+      type: string
+      default: "3"
+    - name: CA_CERT_SECRET
+      description: K8s Secret name for custom CA cert (optional).
+      type: string
+      default: ""
+  results:
+    - name: SBOM_URN
+      description: URN of the SBOM registered in Trustify.
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+    env:
+      - name: REQUESTS_CA_BUNDLE
+        value: /etc/pki/tls/cert.pem
+  steps:
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      args:
+        - register
+      env:
+        - name: SLAN_CUAN_REGISTER_TRUSTIFY_API_URL
+          value: $(params.TRUSTIFY_API_URL)
+        - name: SLAN_CUAN_REGISTER_SSO_TOKEN_URL
+          value: $(params.SSO_TOKEN_URL)
+        - name: SLAN_CUAN_REGISTER_SSO_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: $(params.SSO_SECRET_NAME)
+              key: client-id
+        - name: SLAN_CUAN_REGISTER_SSO_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: $(params.SSO_SECRET_NAME)
+              key: client-secret
+        - name: SLAN_CUAN_REGISTER_ARTIFACT_DIR
+          value: /var/workdir/extracted
+        - name: SLAN_CUAN_REGISTER_INSECURE
+          value: $(params.INSECURE)
+        - name: SLAN_CUAN_REGISTER_RETRIES
+          value: $(params.RETRIES)
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: $(step.results)
+      volumeMounts:
+        - name: ca-cert
+          mountPath: /certs
+          readOnly: true
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: ca-cert
+      secret:
+        secretName: $(params.CA_CERT_SECRET)
+        optional: true

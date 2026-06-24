@@ -1,0 +1,81 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-publish
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Deploy
+    tekton.dev/displayName: "slan-cuan: Publish to Pulp"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,maven,pulp,publish"
+spec:
+  description: >-
+    Publish signed Java artifacts to Pulp repository for distribution.
+  params:
+    - name: PULP_URL
+      description: Pulp instance base URL.
+      type: string
+    - name: PULP_REPOSITORY
+      description: Pulp Maven distribution name.
+      type: string
+    - name: INSECURE
+      description: Disable TLS verification (true/false).
+      type: string
+      default: "false"
+    - name: CA_CERT_SECRET
+      description: K8s Secret name for custom CA cert (optional).
+      type: string
+      default: ""
+  results:
+    - name: ARTIFACTS_UPLOADED
+      description: Number of artifacts uploaded to Pulp.
+    - name: ARTIFACTS_SKIPPED
+      description: Number of artifacts skipped during upload.
+    - name: PUBLISHED_ARTIFACT_OUTPUTS
+      description: >-
+        JSON object for Tekton Chains SLSA provenance.
+        Contains uri and digest of the published artifacts.
+      type: object
+      properties:
+        uri: {}
+        digest: {}
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+    env:
+      - name: REQUESTS_CA_BUNDLE
+        value: /etc/pki/tls/cert.pem
+  steps:
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      args:
+        - publish
+      env:
+        - name: SLAN_CUAN_PUBLISH_PULP_URL
+          value: $(params.PULP_URL)
+        - name: SLAN_CUAN_PUBLISH_PULP_REPOSITORY
+          value: $(params.PULP_REPOSITORY)
+        - name: SLAN_CUAN_PUBLISH_ARTIFACT_DIR
+          value: /var/workdir/extracted
+        - name: SLAN_CUAN_PUBLISH_INSECURE
+          value: $(params.INSECURE)
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: $(step.results)
+      volumeMounts:
+        - name: ca-cert
+          mountPath: /certs
+          readOnly: true
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: ca-cert
+      secret:
+        secretName: $(params.CA_CERT_SECRET)
+        optional: true

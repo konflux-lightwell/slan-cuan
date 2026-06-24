@@ -1,0 +1,69 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-extract
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Build
+    tekton.dev/displayName: "slan-cuan: Extract PNC Artifacts"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,maven,extract"
+spec:
+  description: >-
+    Extract Java artifacts from a PNC container image.
+  params:
+    - name: IMAGE
+      description: PNC container image reference to extract artifacts from.
+      type: string
+    - name: REGISTRY_AUTH_SECRET
+      description: K8s Secret name for registry auth (.dockerconfigjson format).
+      type: string
+      default: "registry-auth"
+    - name: FORCE
+      description: Overwrite existing output directory if it exists.
+      type: string
+      default: "false"
+  results:
+    - name: MANIFEST_DIGEST
+      description: OCI manifest digest of the extracted image.
+    - name: DELIVERABLE_DIR
+      description: Name of the deliverable directory inside the artifact.
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+    env:
+      - name: REQUESTS_CA_BUNDLE
+        value: /etc/pki/tls/cert.pem
+  steps:
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      args:
+        - extract
+      env:
+        - name: SLAN_CUAN_EXTRACT_IMAGE
+          value: $(params.IMAGE)
+        - name: SLAN_CUAN_EXTRACT_OUTPUT_DIR
+          value: /var/workdir/extracted
+        - name: SLAN_CUAN_EXTRACT_REGISTRY_AUTH_FILE
+          value: /auth/.dockerconfigjson
+        - name: SLAN_CUAN_EXTRACT_FORCE
+          value: $(params.FORCE)
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: $(step.results)
+      volumeMounts:
+        - name: registry-auth
+          mountPath: /auth
+          readOnly: true
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: registry-auth
+      secret:
+        secretName: $(params.REGISTRY_AUTH_SECRET)
