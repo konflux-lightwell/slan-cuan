@@ -26,15 +26,49 @@ spec:
       description: Overwrite existing output directory if it exists.
       type: string
       default: "false"
+    - name: ociStorage
+      description: The OCI repository where the Trusted Artifact is stored.
+      type: string
+      default: "empty"
+    - name: ociArtifactExpiresAfter
+      description: Expiration date for the trusted artifact in the OCI repository.
+      type: string
+      default: "1d"
+    - name: orasOptions
+      description: oras options to pass to Trusted Artifacts calls.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: "trusted-ca"
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: "ca-bundle.crt"
+    - name: catalogGitUrl
+      description: The url to the git repo where the release-service-catalog stepactions are stored.
+      type: string
+      default: https://github.com/arewm/release-service-catalog.git
+    - name: catalogGitRevision
+      description: The revision in the catalogGitUrl repo to be used.
+      type: string
+      default: lightwell-pipeline
   results:
     - name: MANIFEST_DIGEST
       description: OCI manifest digest of the extracted image.
     - name: DELIVERABLE_DIR
       description: Name of the deliverable directory inside the artifact.
+    - name: sourceDataArtifact
+      description: Trusted Artifact URI of the extracted artifact directory.
+      type: string
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir
         name: workdir
+      - name: trusted-ca
+        mountPath: /mnt/trusted-ca
+        readOnly: true
     securityContext:
       runAsNonRoot: true
       readOnlyRootFilesystem: false
@@ -61,9 +95,34 @@ spec:
         - name: registry-auth
           mountPath: /auth
           readOnly: true
+    - name: create-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: /var/workdir/extracted
+        - name: sourceDataArtifact
+          value: $(results.sourceDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
   volumes:
     - name: workdir
       emptyDir: {}
     - name: registry-auth
       secret:
         secretName: $(params.REGISTRY_AUTH_SECRET)
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        optional: true
