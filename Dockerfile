@@ -37,10 +37,7 @@ USER 0
 ARG RH_IT_CERT
 
 # Install dependencies
-RUN echo "${RH_IT_CERT}" | base64 -d | sha256sum \
-    && echo "${RH_IT_CERT}" | base64 -d > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
-    && update-ca-trust extract \
-    && microdnf install -y \
+RUN microdnf install -y \
         python3.12-pip \
     # for CVEs in base image
     && microdnf update -y \
@@ -51,6 +48,11 @@ RUN echo "${RH_IT_CERT}" | base64 -d | sha256sum \
 # Set the internal certificates
 ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/cert.pem
 ENV SSL_CERT_FILE=/etc/pki/tls/cert.pem
+
+# Hack: We need to install python-qpid-proton==0.38.0 to avoid SLL Errors on AMPQ
+RUN microdnf install -y gcc gcc-c++ make cmake python3-devel openssl-devel cyrus-sasl-devel \
+    && python3 -m pip install --upgrade pip \
+    && pip3 install python-qpid-proton==0.38.0
 
 # Embed Tekton Task definitions
 COPY tekton/tasks/ /tekton/tasks/
