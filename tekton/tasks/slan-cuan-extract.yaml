@@ -80,6 +80,7 @@ spec:
   steps:
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
       args:
         - extract
       env:

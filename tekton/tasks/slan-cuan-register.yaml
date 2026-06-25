@@ -106,6 +106,7 @@ spec:
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
       args:
         - register
       env:
