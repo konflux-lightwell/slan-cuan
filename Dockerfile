@@ -1,7 +1,5 @@
 FROM registry.access.redhat.com/ubi10/ubi:latest AS builder
 
-ARG RH_IT_CERT
-
 # Install the builder dependencies
 RUN dnf -y install \
     --setopt=install_weak_deps=false \
@@ -35,6 +33,8 @@ LABEL \
 COPY --from=builder /export/ /
 
 USER 0
+
+ARG RH_IT_CERT
 
 # Install dependencies
 RUN echo "${RH_IT_CERT}" | sha256sum \
