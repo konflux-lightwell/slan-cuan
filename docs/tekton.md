@@ -95,11 +95,11 @@ Tasks reference these Kubernetes Secrets via parameters:
 | Secret Name | Format | Used By | Keys |
 |-------------|--------|---------|------|
 | `registry-auth` | `.dockerconfigjson` | extract | Standard Docker config format |
-| `radas-config` | Opaque | sign | `config.json` (RADAS configuration) |
+| `lightwell-radas-certificates` | Opaque | sign | `nonprod.crt`, `nonprod.pem`, `nonprod.pw`, `ca-custom-bundle.crt` (RADAS certificates and key password) |
 | `trustify-sso` | Opaque | register | `client-id`, `client-secret` |
 | Custom CA cert | Opaque | register, publish | `ca.crt` (optional) |
 
-Secret names are configurable via Task parameters. Default names are shown above.
+Secret names for `registry-auth` and `trustify-sso` are configurable via Task parameters. The `lightwell-radas-certificates` secret name is hardcoded in the sign Task.
 
 ## Environment Variable Mapping
 
@@ -131,13 +131,20 @@ All Tasks automatically set `SLAN_CUAN_TEKTON_RESULTS_DIR=$(step.results)` to en
 
 | Task Parameter | Environment Variable | CLI Flag |
 |----------------|---------------------|----------|
-| `REPO_URL` | `SLAN_CUAN_SIGN_REPO_URL` | `--repo-url` |
-| `SIGNING_KEY` | `SLAN_CUAN_SIGN_SIGNING_KEY` | `--signing-key` |
-| `RADAS_CONFIG_SECRET` | `RADAS_CONFIG_PATH` | `--radas-config` |
-| `REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
-| `ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
-| `PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
-| `IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |
+| `SLAN_CUAN_SIGN_REPO_URL` | `SLAN_CUAN_SIGN_REPO_URL` | `--repo-url` |
+| `SLAN_CUAN_SIGN_SIGNING_KEY` | `SLAN_CUAN_SIGN_SIGNING_KEY` | `--signing-key` |
+| `SLAN_CUAN_RADAS_UMB_HOST` | `SLAN_CUAN_RADAS_UMB_HOST` | `--radas-umb-host` |
+| `SLAN_CUAN_RADAS_RESULT_QUEUE` | `SLAN_CUAN_RADAS_RESULT_QUEUE` | `--radas-result-queue` |
+| `SLAN_CUAN_RADAS_REQUEST_CHANNEL` | `SLAN_CUAN_RADAS_REQUEST_CHANNEL` | `--radas-request-channel` |
+| -- | `SLAN_CUAN_RADAS_CLIENT_CA` | `--radas-client-ca` |
+| -- | `SLAN_CUAN_RADAS_CLIENT_KEY` | `--radas-client-key` |
+| -- | `SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE` | `--radas-client-key-pass-file` |
+| -- | `SLAN_CUAN_RADAS_ROOT_CA` | `--radas-root-ca` |
+| `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` | `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` | `--radas-receiver-timeout` |
+| `SLAN_CUAN_SIGN_REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
+| `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
+| `SLAN_CUAN_SIGN_PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
+| `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |
 
 **Results:** None
 

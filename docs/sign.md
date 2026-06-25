@@ -19,13 +19,18 @@ The command delegates to `novabucks` workflows for the actual RADAS interaction.
 | `--repo-path` | `-p` | string | Yes | -- | Directory or ZIP file with the downloaded Maven repository |
 | `--signing-key` | `-k` | string | Yes | -- | The signing key name for RADAS |
 | `--output-path` | `-o` | string | Yes | -- | Directory for signed output files |
-| `--radas-config` | `-c` | path | Yes | -- | Path to the RADAS configuration file (JSON) |
+| `--radas-umb-host` | -- | string | Yes | -- | Host of the RADAS UMB service |
+| `--radas-result-queue` | -- | string | Yes | -- | Result queue name for RADAS |
+| `--radas-request-channel` | -- | string | Yes | -- | Request channel name for RADAS |
+| `--radas-client-ca` | -- | string | Yes | -- | Path to the RADAS client CA certificate |
+| `--radas-client-key` | -- | string | Yes | -- | Path to the RADAS client key |
+| `--radas-client-key-pass-file` | -- | string | Yes | -- | Path to the file containing the RADAS client key password |
+| `--radas-root-ca` | -- | string | Yes | -- | Path to the RADAS root CA certificate |
+| `--radas-receiver-timeout` | -- | int | No | `3600` | Timeout for the RADAS receiver (seconds) |
 | `--requester-id` | `-r` | string | No | `slan-cuan@redhat.com` | Requester identity for the signature |
 | `--zip-root-path` | `-z` | string | No | `repository` | Root of the Maven repository tree inside the ZIP file |
 | `--product-key` | `-b` | string | No | `slan-cuan` | Product key for metadata generation |
 | `--ignore-patterns` | `-i` | string (multiple) | No | -- | Regex patterns to exclude files from signing |
-
-The `--radas-config` flag also accepts the `RADAS_CONFIG_PATH` environment variable directly (not prefixed), for compatibility with shared RADAS tooling.
 
 The `--ignore-patterns` flag can be repeated to specify multiple patterns:
 
@@ -45,7 +50,14 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 | `--repo-path` | `SLAN_CUAN_SIGN_REPO_PATH` |
 | `--signing-key` | `SLAN_CUAN_SIGN_SIGNING_KEY` |
 | `--output-path` | `SLAN_CUAN_SIGN_OUTPUT_PATH` |
-| `--radas-config` | `RADAS_CONFIG_PATH` |
+| `--radas-umb-host` | `SLAN_CUAN_RADAS_UMB_HOST` |
+| `--radas-result-queue` | `SLAN_CUAN_RADAS_RESULT_QUEUE` |
+| `--radas-request-channel` | `SLAN_CUAN_RADAS_REQUEST_CHANNEL` |
+| `--radas-client-ca` | `SLAN_CUAN_RADAS_CLIENT_CA` |
+| `--radas-client-key` | `SLAN_CUAN_RADAS_CLIENT_KEY` |
+| `--radas-client-key-pass-file` | `SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE` |
+| `--radas-root-ca` | `SLAN_CUAN_RADAS_ROOT_CA` |
+| `--radas-receiver-timeout` | `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` |
 | `--requester-id` | `SLAN_CUAN_SIGN_REQUESTER_ID` |
 | `--zip-root-path` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` |
 | `--product-key` | `SLAN_CUAN_SIGN_PRODUCT_KEY` |

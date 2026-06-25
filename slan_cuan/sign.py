@@ -27,6 +27,33 @@ def _split_ignore_patterns(
     return value
 
 
+def _build_radas_config_from_env(
+    radas_umb_host: str,
+    radas_result_queue: str,
+    radas_request_channel: str,
+    radas_client_ca: str,
+    radas_client_key: str,
+    radas_client_key_pass_file: str,
+    radas_root_ca: str,
+    radas_receiver_timeout: int,
+) -> str:
+    """Build a RADAS JSON configuration file from environment variables.
+
+    Returns the path to a temporary JSON file. The caller is responsible
+    for deleting it when no longer needed.
+    """
+    return {
+        "umb_host": radas_umb_host,
+        "result_queue": radas_result_queue,
+        "request_channel": radas_request_channel,
+        "client_ca": radas_client_ca,
+        "client_key": radas_client_key,
+        "client_key_pass_file": radas_client_key_pass_file,
+        "root_ca": radas_root_ca,
+        "radas_receiver_timeout": radas_receiver_timeout,
+    }
+
+
 @click.command()
 @click.option(
     "--repo-url",
@@ -62,12 +89,60 @@ def _split_ignore_patterns(
     help="The path to output the signed file(s).",
 )
 @click.option(
-    "--radas-config",
-    "-c",
+    "--radas-umb-host",
+    envvar="SLAN_CUAN_RADAS_UMB_HOST",
     required=True,
-    envvar="RADAS_CONFIG_PATH",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="The path to the RADAS configuration file (JSON).",
+    type=str,
+    help="The host of the RADAS UMB service.",
+)
+@click.option(
+    "--radas-result-queue",
+    envvar="SLAN_CUAN_RADAS_RESULT_QUEUE",
+    required=True,
+    type=str,
+    help="The result queue name for RADAS.",
+)
+@click.option(
+    "--radas-request-channel",
+    envvar="SLAN_CUAN_RADAS_REQUEST_CHANNEL",
+    required=True,
+    type=str,
+    help="The request channel name for RADAS.",
+)
+@click.option(
+    "--radas-client-ca",
+    envvar="SLAN_CUAN_RADAS_CLIENT_CA",
+    required=True,
+    type=str,
+    help="The path to the RADAS client CA certificate.",
+)
+@click.option(
+    "--radas-client-key",
+    envvar="SLAN_CUAN_RADAS_CLIENT_KEY",
+    required=True,
+    type=str,
+    help="The path to the RADAS client key.",
+)
+@click.option(
+    "--radas-client-key-pass-file",
+    envvar="SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE",
+    required=True,
+    type=str,
+    help="The path to the file containing the RADAS client key password.",
+)
+@click.option(
+    "--radas-root-ca",
+    envvar="SLAN_CUAN_RADAS_ROOT_CA",
+    required=True,
+    type=str,
+    help="The path to the RADAS root CA certificate.",
+)
+@click.option(
+    "--radas-receiver-timeout",
+    envvar="SLAN_CUAN_RADAS_RECEIVER_TIMEOUT",
+    default=3600,
+    type=int,
+    help="The timeout for the RADAS receiver.",
 )
 @click.option(
     "--requester-id",
@@ -104,19 +179,37 @@ def sign(
     repo_path: str,
     signing_key: str,
     output_path: str,
-    radas_config: Path,
+    radas_umb_host: str,
+    radas_result_queue: str,
+    radas_request_channel: str,
+    radas_client_ca: str,
+    radas_client_key: str,
+    radas_client_key_pass_file: str,
+    radas_root_ca: str,
+    radas_receiver_timeout: int,
     requester_id: str,
     zip_root_path: str,
     product_key: str,
     ignore_patterns: tuple[str, ...],
 ) -> None:
     """Sign Maven artifacts on RADAS."""
+    radas_config = None
     try:
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
         set_logging("sign", "slan-cuan", log_level, use_logfile=False)
 
         # 1 - Sign the repository in RADAS
+        radas_config = _build_radas_config_from_env(
+            radas_umb_host=radas_umb_host,
+            radas_result_queue=radas_result_queue,
+            radas_request_channel=radas_request_channel,
+            radas_client_ca=radas_client_ca,
+            radas_client_key=radas_client_key,
+            radas_client_key_pass_file=radas_client_key_pass_file,
+            radas_root_ca=radas_root_ca,
+            radas_receiver_timeout=radas_receiver_timeout,
+        )
         click.echo("Signing the repository in RADAS...")
         sign_in_radas_workflow(
             repo_url=repo_url,
