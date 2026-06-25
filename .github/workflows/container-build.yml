@@ -41,8 +41,7 @@ jobs:
           image: ${{ env.REGISTRY_PROJECT }}/${{ env.IMAGE_NAME }}
           tags: ${{ steps.tag.outputs.tag }}
           containerfiles: ./Dockerfile
-          build-args: |
-              RH_IT_CERT="${{ secrets.RH_IT_CERT }}"
+          build-args: RH_IT_CERT=${{ secrets.RH_IT_CERT }}
           labels: ${{ steps.tag.outputs.extra_label }}
 
       - name: Push to registry
