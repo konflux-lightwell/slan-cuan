@@ -44,14 +44,49 @@ The typical three-step pattern for pipeline operators:
 
 This separation keeps Tasks focused on business logic and allows pipeline authors to choose their data movement strategy (Trusted Artifacts, workspaces, or other mechanisms).
 
-## Container Image
+## Distribution
+
+### Container Image
 
 The container image is published at `quay.io/light-castle/slan-cuan`. It contains:
 
 - The `slan-cuan` CLI (entrypoint)
 - Tekton Task YAML definitions at `/tekton/tasks/`
 
-Pipeline operators can extract the Task YAML from the image or reference it from OCI bundles.
+### Tekton Bundle
+
+Task definitions are also published as a Tekton OCI bundle:
+
+    quay.io/light-castle/slan-cuan:<tag>-bundle
+
+The bundle contains all four Task resources. Tags are synchronized with the CLI image (`latest` → `latest-bundle`, `0.1.0` → `0.1.0-bundle`).
+
+#### Referencing Tasks from the Bundle
+
+```yaml
+taskRef:
+  resolver: bundles
+  params:
+    - name: bundle
+      value: quay.io/light-castle/slan-cuan:latest-bundle
+    - name: name
+      value: slan-cuan-extract
+    - name: kind
+      value: task
+```
+
+For production pipelines, pin by digest:
+
+```yaml
+- name: bundle
+  value: quay.io/light-castle/slan-cuan@sha256:<digest>
+```
+
+#### Inspecting the Bundle
+
+```bash
+tkn bundle list quay.io/light-castle/slan-cuan:latest-bundle
+```
 
 ## Required Kubernetes Secrets
 

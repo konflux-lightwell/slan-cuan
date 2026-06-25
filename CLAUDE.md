@@ -36,6 +36,8 @@ The single container image contains:
 - The Python CLI application (entrypoint)
 - Tekton Task YAML definitions (embedded at `/tekton/tasks/`)
 
+Task definitions are also published as a Tekton OCI bundle (`<tag>-bundle`) for the `bundles` resolver. See [Tekton Bundle](docs/tekton.md#tekton-bundle).
+
 ### Tekton Tasks
 
 Each CLI subcommand has a corresponding Tekton Task under `tekton/tasks/`.
@@ -73,7 +75,7 @@ full environment variable mapping.
 Tasks run inside Konflux pipelines. Key patterns:
 - **Trusted Artifacts (TA)** -- Source and build outputs pass between Tasks as OCI artifacts (`SOURCE_ARTIFACT`), not PVC-backed workspaces.
 - **Tekton Chains** -- SLSA provenance signing happens automatically for container images; JAR-level attestation requires explicit `ARTIFACT_OUTPUTS` type hints.
-- **Bundle-referenced Tasks** -- Tasks are distributed as OCI bundles with SHA256 digests for immutability and Enterprise Contract verification.
+- **Bundle-referenced Tasks** -- Tasks are published as a Tekton OCI bundle at `quay.io/light-castle/slan-cuan:<tag>-bundle`. Consumers reference individual Tasks via the `bundles` resolver. See [Tekton Bundle](docs/tekton.md#tekton-bundle).
 - **computeResources** -- Override step-level resource limits at the PipelineRun level via `taskRunSpecs[]` to avoid quota exhaustion from Tekton's container-per-step model.
 
 ## Documentation
