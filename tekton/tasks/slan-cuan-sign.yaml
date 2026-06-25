@@ -96,7 +96,7 @@ spec:
         - name: SLAN_CUAN_SIGN_REQUESTER_ID
           value: $(params.SIGN_REQUESTER_ID)
         - name: SLAN_CUAN_SIGN_ZIP_ROOT_PATH
-          value: $(params.ZIP_ROOT_PATH)
+          value: $(params.SIGN_ZIP_ROOT_PATH)
         - name: SLAN_CUAN_SIGN_PRODUCT_KEY
           value: $(params.SIGN_PRODUCT_KEY)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
