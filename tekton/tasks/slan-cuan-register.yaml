@@ -37,6 +37,10 @@ spec:
       description: K8s Secret name for custom CA cert (optional).
       type: string
       default: ""
+    - name: CA_CERT_PATH
+      description: Path to the CA certificate file inside the mounted secret.
+      type: string
+      default: ""
   results:
     - name: SBOM_URN
       description: URN of the SBOM registered in Trustify.
@@ -70,6 +74,8 @@ spec:
             secretKeyRef:
               name: $(params.SSO_SECRET_NAME)
               key: client-secret
+        - name: SLAN_CUAN_CA_CERT
+          value: $(params.CA_CERT_PATH)
         - name: SLAN_CUAN_REGISTER_ARTIFACT_DIR
           value: /var/workdir/extracted
         - name: SLAN_CUAN_REGISTER_INSECURE

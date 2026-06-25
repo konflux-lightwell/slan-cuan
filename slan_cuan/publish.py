@@ -46,6 +46,36 @@ from slan_cuan.pulp import PulpConfig, PulpError, PulpMavenClient
     default=False,
     help="Disable TLS certificate verification.",
 )
+@click.option(
+    "--pulp-auth-type",
+    type=click.Choice(["tbr", "cert"], case_sensitive=False),
+    default="tbr",
+    help="Pulp authentication method.",
+)
+@click.option(
+    "--pulp-username",
+    type=str,
+    default=None,
+    help="Username for TBR basic auth.",
+)
+@click.option(
+    "--pulp-password",
+    type=str,
+    default=None,
+    help="Password for TBR basic auth.",
+)
+@click.option(
+    "--pulp-client-cert",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Client certificate path for entitlement cert auth.",
+)
+@click.option(
+    "--pulp-client-key",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Client key path for entitlement cert auth.",
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -53,6 +83,11 @@ def publish(
     pulp_repository: str,
     artifact_dir: Path,
     insecure: bool,
+    pulp_auth_type: str,
+    pulp_username: str | None,
+    pulp_password: str | None,
+    pulp_client_cert: Path | None,
+    pulp_client_key: Path | None,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -76,6 +111,7 @@ def publish(
         if ctx.dry_run:
             click.echo(f"Distribution: {pulp_repository}")
             click.echo(f"Pulp URL: {pulp_url}")
+            click.echo(f"Auth type: {pulp_auth_type}")
             click.echo(f"Artifacts: {len(build.artifacts)}")
             click.echo(f"Coordinates: {len(build.coordinates)}")
             for artifact in build.artifacts:
@@ -87,10 +123,34 @@ def publish(
             )
             return
 
+        ca_cert = ctx.ca_cert if ctx.ca_cert and ctx.ca_cert.exists() else None
+        if pulp_client_cert is not None and not pulp_client_cert.exists():
+            pulp_client_cert = None
+        if pulp_client_key is not None and not pulp_client_key.exists():
+            pulp_client_key = None
+
+        if pulp_auth_type == "tbr" and (not pulp_username or not pulp_password):
+            raise click.UsageError(
+                "--pulp-username and --pulp-password are required "
+                "when --pulp-auth-type is 'tbr'."
+            )
+        if pulp_auth_type == "cert" and (
+            pulp_client_cert is None or pulp_client_key is None
+        ):
+            raise click.UsageError(
+                "--pulp-client-cert and --pulp-client-key are required "
+                "when --pulp-auth-type is 'cert'."
+            )
+
         config = PulpConfig(
             base_url=pulp_url,
             verify_ssl=not insecure,
-            ca_cert=ctx.ca_cert,
+            ca_cert=ca_cert,
+            auth_type=pulp_auth_type,
+            username=pulp_username,
+            password=pulp_password,
+            client_cert=pulp_client_cert,
+            client_key=pulp_client_key,
         )
 
         uploaded = 0
