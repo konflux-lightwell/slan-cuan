@@ -636,7 +636,7 @@ def test_sign_radas_config_passed_as_file_like(
     mock_sign_individual: Mock,
     tmp_path: Path,
 ) -> None:
-    """RADAS config is passed as a file-like JSON object to sign_in_radas_workflow."""
+    """RADAS config is passed as a file-like JSON object."""
     output_path = tmp_path / "output"
     output_path.mkdir()
 
