@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 import tempfile
 from pathlib import Path
+from typing import IO
 
 import click
 from novabucks.utils.logs import set_logging
@@ -36,13 +39,9 @@ def _build_radas_config_from_env(
     radas_client_key_pass_file: str,
     radas_root_ca: str,
     radas_receiver_timeout: int,
-) -> str:
-    """Build a RADAS JSON configuration file from environment variables.
-
-    Returns the path to a temporary JSON file. The caller is responsible
-    for deleting it when no longer needed.
-    """
-    return {
+) -> IO[str]:
+    """Build a RADAS JSON configuration as a file-like object from environment variables."""
+    config = {
         "umb_host": radas_umb_host,
         "result_queue": radas_result_queue,
         "request_channel": radas_request_channel,
@@ -52,6 +51,7 @@ def _build_radas_config_from_env(
         "root_ca": radas_root_ca,
         "radas_receiver_timeout": radas_receiver_timeout,
     }
+    return io.StringIO(json.dumps(config))
 
 
 @click.command()
@@ -197,7 +197,7 @@ def sign(
     try:
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
-        set_logging("sign", "slan-cuan", log_level, use_logfile=False)
+        set_logging("sign", "slan-cuan", log_level, use_log_file=False)
 
         # 1 - Sign the repository in RADAS
         radas_config = _build_radas_config_from_env(
@@ -216,8 +216,9 @@ def sign(
             requester=requester_id,
             sign_key=signing_key,
             result_path=output_path,
-            ignore_patterns=ignore_patterns,
-            radas_config=radas_config,
+            ignore_patterns=list(ignore_patterns),
+            # upstream annotates as RadasConfig but calls json.load() on it
+            radas_config=radas_config,  # type: ignore[arg-type]
         )
         # 2 - Find the signed JSON files in the output path
         click.echo("Finding the signed JSON files in the output path...")
@@ -235,10 +236,10 @@ def sign(
                 repos=[repo_path],
                 product_key=product_key,
                 root_path=zip_root_path,
-                sign_result=signed_json_file,
+                sign_result_file=str(signed_json_file),
                 destination_dir=output_path,
-                tmp_dir=tmp_dir,
-                ignore_patterns=ignore_patterns,
+                temp_dir=tmp_dir,
+                ignore_patterns=list(ignore_patterns),
             )
     except Exception as e:
         raise click.ClickException(f"Error signing artifacts: {e}") from e

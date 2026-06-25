@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -231,8 +232,8 @@ def test_sign_successful_signing(
     radas_kwargs = mock_sign_radas.call_args.kwargs
     assert radas_kwargs["repo_url"] == "quay.io/someorg/maven:latest"
     assert radas_kwargs["sign_key"] == "/keys/signing.key"
-    assert isinstance(radas_kwargs["radas_config"], dict)
-    assert radas_kwargs["radas_config"]["umb_host"] == "umb.example.com"
+    radas_config = json.load(radas_kwargs["radas_config"])
+    assert radas_config["umb_host"] == "umb.example.com"
 
     individual_kwargs = mock_sign_individual.call_args.kwargs
     assert individual_kwargs["repos"] == ["/repos/maven-repo.zip"]
@@ -413,7 +414,7 @@ def test_sign_verbose_sets_debug_logging(
 
     assert result.exit_code == 0
     mock_set_logging.assert_called_once_with(
-        "sign", "slan-cuan", logging.DEBUG, use_logfile=False
+        "sign", "slan-cuan", logging.DEBUG, use_log_file=False
     )
 
 
@@ -442,7 +443,7 @@ def test_sign_default_logging_level(
 
     assert result.exit_code == 0
     mock_set_logging.assert_called_once_with(
-        "sign", "slan-cuan", logging.INFO, use_logfile=False
+        "sign", "slan-cuan", logging.INFO, use_log_file=False
     )
 
 
@@ -512,8 +513,8 @@ def test_sign_temp_dir_cleaned_up(
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
 
     def individual_side_effect(**kwargs):
-        captured_tmp_dir.append(kwargs["tmp_dir"])
-        assert Path(kwargs["tmp_dir"]).exists()
+        captured_tmp_dir.append(kwargs["temp_dir"])
+        assert Path(kwargs["temp_dir"]).exists()
 
     mock_sign_radas.side_effect = radas_side_effect
     mock_sign_individual.side_effect = individual_side_effect
@@ -603,8 +604,8 @@ def test_sign_ignore_patterns_single_from_env_var(
 
 
 def test_build_radas_config_from_env() -> None:
-    """_build_radas_config_from_env returns a config dict."""
-    config = _build_radas_config_from_env(
+    """_build_radas_config_from_env returns a file-like JSON object."""
+    config_io = _build_radas_config_from_env(
         radas_umb_host="umb.example.com",
         radas_result_queue=42,
         radas_request_channel="test-channel",
@@ -615,7 +616,7 @@ def test_build_radas_config_from_env() -> None:
         radas_receiver_timeout=3600,
     )
 
-    assert isinstance(config, dict)
+    config = json.load(config_io)
     assert config["umb_host"] == "umb.example.com"
     assert config["result_queue"] == 42
     assert config["request_channel"] == "test-channel"
@@ -629,13 +630,13 @@ def test_build_radas_config_from_env() -> None:
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
 @patch("slan_cuan.sign.set_logging")
-def test_sign_radas_config_passed_as_dict(
+def test_sign_radas_config_passed_as_file_like(
     mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
 ) -> None:
-    """RADAS config is passed as a dict to sign_in_radas_workflow."""
+    """RADAS config is passed as a file-like JSON object to sign_in_radas_workflow."""
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -649,7 +650,6 @@ def test_sign_radas_config_passed_as_dict(
 
     assert result.exit_code == 0
     radas_kwargs = mock_sign_radas.call_args.kwargs
-    config = radas_kwargs["radas_config"]
-    assert isinstance(config, dict)
+    config = json.load(radas_kwargs["radas_config"])
     assert config["umb_host"] == "umb.example.com"
     assert config["request_channel"] == "test-channel"
