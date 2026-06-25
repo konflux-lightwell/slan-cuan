@@ -110,6 +110,7 @@ spec:
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
       args:
+        - --verbose
         - sign
       env:
         - name: SLAN_CUAN_SIGN_REPO_URL
