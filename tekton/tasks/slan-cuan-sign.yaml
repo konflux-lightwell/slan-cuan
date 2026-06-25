@@ -139,7 +139,7 @@ spec:
         - name: SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE
           value: /var/run/secrets/radas/nonprod.pw
         - name: SLAN_CUAN_RADAS_ROOT_CA
-          value: /var/run/secrets/radas/ca-custom-bundle.crt
+          value: /etc/pki/tls/cert.pem
         - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
           value: $(params.RADAS_RECEIVER_TIMEOUT)
         - name: SLAN_CUAN_SIGN_REQUESTER_ID
