@@ -58,7 +58,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: tektoncd/actions/setup-tektoncd-cli@main
         with:
-          version: v0.44.0
+          version: latest
 
       - name: Push Tekton bundle
         if: github.event_name != 'pull_request'
