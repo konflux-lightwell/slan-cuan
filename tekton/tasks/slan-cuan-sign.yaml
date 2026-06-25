@@ -83,9 +83,9 @@ spec:
     securityContext:
       runAsNonRoot: true
       readOnlyRootFilesystem: false
-    env:
-      - name: REQUESTS_CA_BUNDLE
-        value: /etc/pki/tls/cert.pem
+    # env:
+    #   - name: REQUESTS_CA_BUNDLE
+    #     value: /etc/pki/tls/cert.pem
   steps:
     - name: use-trusted-artifact
       ref:
