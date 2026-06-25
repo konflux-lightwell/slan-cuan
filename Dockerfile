@@ -50,6 +50,7 @@ RUN echo "${RH_IT_CERT}" | base64 -d | sha256sum \
 
 # Set the internal certificates
 ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/cert.pem
+ENV SSL_CERT_FILE=/etc/pki/tls/cert.pem
 
 # Embed Tekton Task definitions
 COPY tekton/tasks/ /tekton/tasks/
