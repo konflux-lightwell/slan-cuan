@@ -133,20 +133,20 @@ All Tasks automatically set `SLAN_CUAN_TEKTON_RESULTS_DIR=$(step.results)` to en
 
 | Task Parameter | Environment Variable | CLI Flag |
 |----------------|---------------------|----------|
-| `SLAN_CUAN_SIGN_REPO_URL` | `SLAN_CUAN_SIGN_REPO_URL` | `--repo-url` |
-| `SLAN_CUAN_SIGN_SIGNING_KEY` | `SLAN_CUAN_SIGN_SIGNING_KEY` | `--signing-key` |
-| `SLAN_CUAN_RADAS_UMB_HOST` | `SLAN_CUAN_RADAS_UMB_HOST` | `--radas-umb-host` |
-| `SLAN_CUAN_RADAS_RESULT_QUEUE` | `SLAN_CUAN_RADAS_RESULT_QUEUE` | `--radas-result-queue` |
-| `SLAN_CUAN_RADAS_REQUEST_CHANNEL` | `SLAN_CUAN_RADAS_REQUEST_CHANNEL` | `--radas-request-channel` |
+| `SIGN_REPO_URL` | `SLAN_CUAN_SIGN_REPO_URL` | `--repo-url` |
+| `SIGNING_KEY` | `SLAN_CUAN_SIGN_SIGNING_KEY` | `--signing-key` |
+| `RADAS_UMB_HOST` | `SLAN_CUAN_RADAS_UMB_HOST` | `--radas-umb-host` |
+| `RADAS_RESULT_QUEUE` | `SLAN_CUAN_RADAS_RESULT_QUEUE` | `--radas-result-queue` |
+| `RADAS_REQUEST_CHANNEL` | `SLAN_CUAN_RADAS_REQUEST_CHANNEL` | `--radas-request-channel` |
 | -- | `SLAN_CUAN_RADAS_CLIENT_CA` | `--radas-client-ca` |
 | -- | `SLAN_CUAN_RADAS_CLIENT_KEY` | `--radas-client-key` |
 | -- | `SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE` | `--radas-client-key-pass-file` |
 | -- | `SLAN_CUAN_RADAS_ROOT_CA` | `--radas-root-ca` |
-| `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` | `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` | `--radas-receiver-timeout` |
-| `SLAN_CUAN_SIGN_REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
-| `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
-| `SLAN_CUAN_SIGN_PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
-| `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |
+| `RADAS_RECEIVER_TIMEOUT` | `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` | `--radas-receiver-timeout` |
+| `SIGN_REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
+| `SIGN_ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
+| `SIGN_PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
+| `SIGN_IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |
 
 **Results:** None
 

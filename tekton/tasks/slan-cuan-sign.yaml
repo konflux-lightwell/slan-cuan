@@ -15,38 +15,38 @@ spec:
   description: >-
     Sign Java artifacts using RADAS (Red Hat Artifact Digital Authentication Service).
   params:
-    - name: SLAN_CUAN_SIGN_REPO_URL
+    - name: SIGN_REPO_URL
       description: Pullspec of image containing Maven repository.
       type: string
-    - name: SLAN_CUAN_SIGN_SIGNING_KEY
+    - name: SIGNING_KEY
       description: Signing key name for RADAS.
       type: string
-    - name: SLAN_CUAN_RADAS_UMB_HOST
+    - name: RADAS_UMB_HOST
       description: Host of the RADAS UMB service.
       type: string
-    - name: SLAN_CUAN_RADAS_RESULT_QUEUE
+    - name: RADAS_RESULT_QUEUE
       description: Result queue name for RADAS.
       type: string
-    - name: SLAN_CUAN_RADAS_REQUEST_CHANNEL
+    - name: RADAS_REQUEST_CHANNEL
       description: Request channel name for RADAS.
       type: string
-    - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
+    - name: RADAS_RECEIVER_TIMEOUT
       description: Timeout for the RADAS receiver.
       type: string
       default: "3600"
-    - name: SLAN_CUAN_SIGN_REQUESTER_ID
+    - name: SIGN_REQUESTER_ID
       description: Requester identity for signing operations.
       type: string
       default: "slan-cuan@redhat.com"
-    - name: SLAN_CUAN_SIGN_ZIP_ROOT_PATH
+    - name: SIGN_ZIP_ROOT_PATH
       description: Root of Maven repo tree inside ZIP.
       type: string
       default: "repository"
-    - name: SLAN_CUAN_SIGN_PRODUCT_KEY
+    - name: SIGN_PRODUCT_KEY
       description: Product key for metadata.
       type: string
       default: "slan-cuan"
-    - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
+    - name: SIGN_IGNORE_PATTERNS
       description: Comma-separated regex patterns to ignore during signing.
       type: string
       default: ""
@@ -70,19 +70,19 @@ spec:
         - sign
       env:
         - name: SLAN_CUAN_SIGN_REPO_URL
-          value: $(params.SLAN_CUAN_SIGN_REPO_URL)
+          value: $(params.SIGN_REPO_URL)
         - name: SLAN_CUAN_SIGN_REPO_PATH
           value: /var/workdir/extracted
         - name: SLAN_CUAN_SIGN_SIGNING_KEY
-          value: $(params.SLAN_CUAN_SIGN_SIGNING_KEY)
+          value: $(params.SIGNING_KEY)
         - name: SLAN_CUAN_SIGN_OUTPUT_PATH
           value: /var/workdir/signed
         - name: SLAN_CUAN_RADAS_UMB_HOST
-          value: $(params.SLAN_CUAN_RADAS_UMB_HOST)
+          value: $(params.RADAS_UMB_HOST)
         - name: SLAN_CUAN_RADAS_RESULT_QUEUE
-          value: $(params.SLAN_CUAN_RADAS_RESULT_QUEUE)
+          value: $(params.RADAS_RESULT_QUEUE)
         - name: SLAN_CUAN_RADAS_REQUEST_CHANNEL
-          value: $(params.SLAN_CUAN_RADAS_REQUEST_CHANNEL)
+          value: $(params.RADAS_REQUEST_CHANNEL)
         - name: SLAN_CUAN_RADAS_CLIENT_CA
           value: /var/run/secrets/radas/nonprod.crt
         - name: SLAN_CUAN_RADAS_CLIENT_KEY
@@ -92,15 +92,15 @@ spec:
         - name: SLAN_CUAN_RADAS_ROOT_CA
           value: /var/run/secrets/radas/ca-custom-bundle.crt
         - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
-          value: $(params.SLAN_CUAN_RADAS_RECEIVER_TIMEOUT)
+          value: $(params.RADAS_RECEIVER_TIMEOUT)
         - name: SLAN_CUAN_SIGN_REQUESTER_ID
-          value: $(params.SLAN_CUAN_SIGN_REQUESTER_ID)
+          value: $(params.SIGN_REQUESTER_ID)
         - name: SLAN_CUAN_SIGN_ZIP_ROOT_PATH
-          value: $(params.SLAN_CUAN_SIGN_ZIP_ROOT_PATH)
+          value: $(params.ZIP_ROOT_PATH)
         - name: SLAN_CUAN_SIGN_PRODUCT_KEY
-          value: $(params.SLAN_CUAN_SIGN_PRODUCT_KEY)
+          value: $(params.SIGN_PRODUCT_KEY)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
-          value: $(params.SLAN_CUAN_SIGN_IGNORE_PATTERNS)
+          value: $(params.SIGN_IGNORE_PATTERNS)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
   volumes:
