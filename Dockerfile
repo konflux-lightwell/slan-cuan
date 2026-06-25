@@ -23,7 +23,11 @@ WORKDIR /src
 # and generate the wheels
 RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
     && update-ca-trust extract \
-    &&  pip3.12 wheel --wheel-dir=/export/wheels .
+    &&  pip3.12 wheel --wheel-dir=/export/wheels . \
+    && ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') \
+    && ORAS_VERSION=$(curl -fsSL "https://api.github.com/repos/oras-project/oras/releases/latest" | python3.12 -c "import sys,json;print(json.load(sys.stdin)['tag_name'].lstrip('v'))") \
+    && curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${ARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin oras
 
 
 # Build the final image using ubi-minimal to reduce the image size
@@ -34,8 +38,9 @@ LABEL \
     maintainer="Lightwell Developers" \
     licence="Apache-2.0"
 
-# Copy the wheels from the builder stage
+# Copy the wheels and oras CLI from the builder stage
 COPY --from=builder /export/ /
+COPY --from=builder /usr/local/bin/oras /usr/local/bin/oras
 
 # Setup RH-IT-Root-CA certificate for RedHat
 RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \

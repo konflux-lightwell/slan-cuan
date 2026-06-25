@@ -55,6 +55,8 @@ spec:
       type: string
       default: lightwell-pipeline
   results:
+    - name: sourceDataArtifact
+      description: OCI artifact reference for the extracted source data.
     - name: MANIFEST_DIGEST
       description: OCI manifest digest of the extracted image.
     - name: DELIVERABLE_DIR
