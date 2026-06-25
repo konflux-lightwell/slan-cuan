@@ -24,12 +24,6 @@ spec:
     - name: RADAS_UMB_HOST
       description: Host of the RADAS UMB service.
       type: string
-    - name: RADAS_RESULT_QUEUE
-      description: Result queue name for RADAS.
-      type: string
-    - name: RADAS_REQUEST_CHANNEL
-      description: Request channel name for RADAS.
-      type: string
     - name: RADAS_RECEIVER_TIMEOUT
       description: Timeout for the RADAS receiver.
       type: string
@@ -80,9 +74,15 @@ spec:
         - name: SLAN_CUAN_RADAS_UMB_HOST
           value: $(params.RADAS_UMB_HOST)
         - name: SLAN_CUAN_RADAS_RESULT_QUEUE
-          value: $(params.RADAS_RESULT_QUEUE)
+          valueFrom:
+            secretKeyRef:
+              name: lightwell-radas-credentials
+              key: result_queue
         - name: SLAN_CUAN_RADAS_REQUEST_CHANNEL
-          value: $(params.RADAS_REQUEST_CHANNEL)
+          valueFrom:
+            secretKeyRef:
+              name: lightwell-radas-credentials
+              key: request_channel
         - name: SLAN_CUAN_RADAS_CLIENT_CA
           value: /var/run/secrets/radas/nonprod.crt
         - name: SLAN_CUAN_RADAS_CLIENT_KEY
