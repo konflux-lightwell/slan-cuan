@@ -40,7 +40,7 @@ def _build_radas_config_from_env(
     radas_root_ca: str,
     radas_receiver_timeout: int,
 ) -> IO[str]:
-    """Build a RADAS JSON configuration as a file-like object from environment variables."""
+    """Build a RADAS JSON config as a file-like object."""
     config = {
         "umb_host": radas_umb_host,
         "result_queue": radas_result_queue,
