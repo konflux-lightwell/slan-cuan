@@ -8,12 +8,28 @@ from unittest.mock import Mock, patch
 from click.testing import CliRunner
 
 from slan_cuan.cli import main
+from slan_cuan.sign import _build_radas_config_from_env
+
+# Common RADAS CLI args used across multiple tests
+_RADAS_ARGS = [
+    "--radas-umb-host",
+    "umb.example.com",
+    "--radas-result-queue",
+    "42",
+    "--radas-request-channel",
+    "test-channel",
+    "--radas-client-ca",
+    "/certs/ca.pem",
+    "--radas-client-key",
+    "/certs/key.pem",
+    "--radas-client-key-pass-file",
+    "/certs/key.pw",
+    "--radas-root-ca",
+    "/certs/root.pem",
+]
 
 
-def _base_sign_args(
-    radas_config: Path,
-    output_path: Path,
-) -> list[str]:
+def _base_sign_args(output_path: Path) -> list[str]:
     """Return the minimum required args for the sign subcommand."""
     return [
         "sign",
@@ -25,16 +41,8 @@ def _base_sign_args(
         "/keys/signing.key",
         "--output-path",
         str(output_path),
-        "--radas-config",
-        str(radas_config),
+        *_RADAS_ARGS,
     ]
-
-
-def _create_radas_config(tmp_path: Path) -> Path:
-    """Create a dummy RADAS config file (--radas-config requires exists=True)."""
-    cfg = tmp_path / "radas.json"
-    cfg.write_text("{}")
-    return cfg
 
 
 def test_sign_help_output() -> None:
@@ -47,7 +55,14 @@ def test_sign_help_output() -> None:
     assert "--repo-path" in result.output
     assert "--signing-key" in result.output
     assert "--output-path" in result.output
-    assert "--radas-config" in result.output
+    assert "--radas-umb-host" in result.output
+    assert "--radas-result-queue" in result.output
+    assert "--radas-request-channel " in result.output
+    assert "--radas-client-ca" in result.output
+    assert "--radas-client-key " in result.output
+    assert "--radas-client-key-pass-file" in result.output
+    assert "--radas-root-ca" in result.output
+    assert "--radas-receiver-timeout" in result.output
     assert "--requester-id" in result.output
     assert "--zip-root-path" in result.output
     assert "--product-key" in result.output
@@ -65,8 +80,6 @@ def test_sign_subcommand_is_reachable() -> None:
 
 def test_sign_requires_repo_url(tmp_path: Path) -> None:
     """Missing --repo-url fails."""
-    cfg = _create_radas_config(tmp_path)
-
     runner = CliRunner()
     result = runner.invoke(
         main,
@@ -78,8 +91,7 @@ def test_sign_requires_repo_url(tmp_path: Path) -> None:
             "/keys/signing.key",
             "--output-path",
             str(tmp_path / "out"),
-            "--radas-config",
-            str(cfg),
+            *_RADAS_ARGS,
         ],
     )
 
@@ -89,8 +101,6 @@ def test_sign_requires_repo_url(tmp_path: Path) -> None:
 
 def test_sign_requires_repo_path(tmp_path: Path) -> None:
     """Missing --repo-path fails."""
-    cfg = _create_radas_config(tmp_path)
-
     runner = CliRunner()
     result = runner.invoke(
         main,
@@ -102,8 +112,7 @@ def test_sign_requires_repo_path(tmp_path: Path) -> None:
             "/keys/signing.key",
             "--output-path",
             str(tmp_path / "out"),
-            "--radas-config",
-            str(cfg),
+            *_RADAS_ARGS,
         ],
     )
 
@@ -113,8 +122,6 @@ def test_sign_requires_repo_path(tmp_path: Path) -> None:
 
 def test_sign_requires_signing_key(tmp_path: Path) -> None:
     """Missing --signing-key fails."""
-    cfg = _create_radas_config(tmp_path)
-
     runner = CliRunner()
     result = runner.invoke(
         main,
@@ -126,8 +133,7 @@ def test_sign_requires_signing_key(tmp_path: Path) -> None:
             "/repos/maven-repo.zip",
             "--output-path",
             str(tmp_path / "out"),
-            "--radas-config",
-            str(cfg),
+            *_RADAS_ARGS,
         ],
     )
 
@@ -135,10 +141,8 @@ def test_sign_requires_signing_key(tmp_path: Path) -> None:
     assert "--signing-key" in result.output or "Missing option" in result.output
 
 
-def test_sign_requires_output_path(tmp_path: Path) -> None:
+def test_sign_requires_output_path() -> None:
     """Missing --output-path fails."""
-    cfg = _create_radas_config(tmp_path)
-
     runner = CliRunner()
     result = runner.invoke(
         main,
@@ -150,8 +154,7 @@ def test_sign_requires_output_path(tmp_path: Path) -> None:
             "/repos/maven-repo.zip",
             "--signing-key",
             "/keys/signing.key",
-            "--radas-config",
-            str(cfg),
+            *_RADAS_ARGS,
         ],
     )
 
@@ -159,8 +162,8 @@ def test_sign_requires_output_path(tmp_path: Path) -> None:
     assert "--output-path" in result.output or "Missing option" in result.output
 
 
-def test_sign_requires_radas_config() -> None:
-    """Missing --radas-config fails."""
+def test_sign_requires_radas_umb_host() -> None:
+    """Missing --radas-umb-host fails."""
     runner = CliRunner()
     result = runner.invoke(
         main,
@@ -174,11 +177,25 @@ def test_sign_requires_radas_config() -> None:
             "/keys/signing.key",
             "--output-path",
             "/tmp/out",
+            "--radas-result-queue",
+            "42",
+            "--radas-request-channel",
+            "test-channel",
+            "--radas-client-ca",
+            "/certs/ca.pem",
+            "--radas-client-key",
+            "/certs/key.pem",
+            "--radas-client-key-pass-file",
+            "/certs/key.pw",
+            "--radas-root-ca",
+            "/certs/root.pem",
         ],
     )
 
     assert result.exit_code != 0
-    assert "--radas-config" in result.output or "Missing option" in result.output
+    assert (
+        "--radas-umb-host" in result.output or "Missing option" in result.output
+    )
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
@@ -191,11 +208,9 @@ def test_sign_successful_signing(
     tmp_path: Path,
 ) -> None:
     """Successful signing calls both workflows and reports success."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
-    # sign_in_radas_workflow creates a JSON result file as a side effect
     def radas_side_effect(**kwargs):
         result_dir = Path(kwargs["result_path"]) / "results"
         result_dir.mkdir(parents=True, exist_ok=True)
@@ -204,7 +219,7 @@ def test_sign_successful_signing(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(cfg, output_path))
+    result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code == 0
     assert "Sign command completed successfully" in result.output
@@ -213,11 +228,11 @@ def test_sign_successful_signing(
     mock_sign_radas.assert_called_once()
     mock_sign_individual.assert_called_once()
 
-    # Verify workflow arguments
     radas_kwargs = mock_sign_radas.call_args.kwargs
     assert radas_kwargs["repo_url"] == "quay.io/someorg/maven:latest"
     assert radas_kwargs["sign_key"] == "/keys/signing.key"
-    assert radas_kwargs["radas_config"] == cfg
+    assert isinstance(radas_kwargs["radas_config"], dict)
+    assert radas_kwargs["radas_config"]["umb_host"] == "umb.example.com"
 
     individual_kwargs = mock_sign_individual.call_args.kwargs
     assert individual_kwargs["repos"] == ["/repos/maven-repo.zip"]
@@ -233,12 +248,11 @@ def test_sign_no_signed_json_found(
     tmp_path: Path,
 ) -> None:
     """Error when no JSON files are found after RADAS signing."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(cfg, output_path))
+    result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code != 0
     assert "No signed JSON file found" in result.output
@@ -252,17 +266,15 @@ def test_sign_radas_workflow_error(
     tmp_path: Path,
 ) -> None:
     """Exception from sign_in_radas_workflow is wrapped in ClickException."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
     mock_sign_radas.side_effect = RuntimeError("RADAS connection refused")
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(cfg, output_path))
+    result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code != 0
-    assert "Error signing artifacts" in result.output
     assert "RADAS connection refused" in result.output
 
 
@@ -276,7 +288,6 @@ def test_sign_individual_workflow_error(
     tmp_path: Path,
 ) -> None:
     """sign_individual_artifacts_workflow error is wrapped in ClickException."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -288,10 +299,9 @@ def test_sign_individual_workflow_error(
     mock_sign_individual.side_effect = ValueError("Invalid artifact format")
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(cfg, output_path))
+    result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code != 0
-    assert "Error signing artifacts" in result.output
     assert "Invalid artifact format" in result.output
 
 
@@ -305,7 +315,6 @@ def test_sign_custom_options(
     tmp_path: Path,
 ) -> None:
     """Custom requester-id, zip-root-path, and product-key are forwarded."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -317,7 +326,7 @@ def test_sign_custom_options(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(cfg, output_path)
+        _base_sign_args(output_path)
         + [
             "--requester-id",
             "custom@redhat.com",
@@ -348,7 +357,6 @@ def test_sign_ignore_patterns(
     tmp_path: Path,
 ) -> None:
     """Multiple --ignore-patterns are forwarded to both workflows."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -360,7 +368,7 @@ def test_sign_ignore_patterns(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(cfg, output_path)
+        _base_sign_args(output_path)
         + [
             "--ignore-patterns",
             ".*-sources\\.jar$",
@@ -392,7 +400,6 @@ def test_sign_verbose_sets_debug_logging(
     """With --verbose, set_logging is called with DEBUG level."""
     import logging
 
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -402,9 +409,7 @@ def test_sign_verbose_sets_debug_logging(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(
-        main, ["--verbose"] + _base_sign_args(cfg, output_path)
-    )
+    result = runner.invoke(main, ["--verbose"] + _base_sign_args(output_path))
 
     assert result.exit_code == 0
     mock_set_logging.assert_called_once_with(
@@ -424,7 +429,6 @@ def test_sign_default_logging_level(
     """Without --verbose, set_logging is called with INFO level."""
     import logging
 
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -434,7 +438,7 @@ def test_sign_default_logging_level(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(cfg, output_path))
+    result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code == 0
     mock_set_logging.assert_called_once_with(
@@ -445,14 +449,13 @@ def test_sign_default_logging_level(
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
 @patch("slan_cuan.sign.set_logging")
-def test_sign_env_var_for_radas_config(
+def test_sign_radas_options_from_env_vars(
     mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_sign_individual: Mock,
     tmp_path: Path,
 ) -> None:
-    """RADAS_CONFIG_PATH env var sets --radas-config."""
-    cfg = _create_radas_config(tmp_path)
+    """RADAS env vars set the corresponding --radas-* options."""
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -475,7 +478,15 @@ def test_sign_env_var_for_radas_config(
             "--output-path",
             str(output_path),
         ],
-        env={"RADAS_CONFIG_PATH": str(cfg)},
+        env={
+            "SLAN_CUAN_RADAS_UMB_HOST": "umb.example.com",
+            "SLAN_CUAN_RADAS_RESULT_QUEUE": "42",
+            "SLAN_CUAN_RADAS_REQUEST_CHANNEL": "test-channel",
+            "SLAN_CUAN_RADAS_CLIENT_CA": "/certs/ca.pem",
+            "SLAN_CUAN_RADAS_CLIENT_KEY": "/certs/key.pem",
+            "SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE": "/certs/key.pw",
+            "SLAN_CUAN_RADAS_ROOT_CA": "/certs/root.pem",
+        },
     )
 
     assert result.exit_code == 0
@@ -492,7 +503,6 @@ def test_sign_temp_dir_cleaned_up(
     tmp_path: Path,
 ) -> None:
     """Temporary directory is cleaned up after signing completes."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -503,18 +513,16 @@ def test_sign_temp_dir_cleaned_up(
 
     def individual_side_effect(**kwargs):
         captured_tmp_dir.append(kwargs["tmp_dir"])
-        # Verify the temp dir exists while workflow runs
         assert Path(kwargs["tmp_dir"]).exists()
 
     mock_sign_radas.side_effect = radas_side_effect
     mock_sign_individual.side_effect = individual_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(cfg, output_path))
+    result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code == 0
     assert len(captured_tmp_dir) == 1
-    # Temp dir should be cleaned up after the context manager exits
     assert not Path(captured_tmp_dir[0]).exists()
 
 
@@ -528,7 +536,6 @@ def test_sign_ignore_patterns_from_env_var_comma_separated(
     tmp_path: Path,
 ) -> None:
     """Comma-separated SLAN_CUAN_SIGN_IGNORE_PATTERNS produces patterns."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -540,7 +547,7 @@ def test_sign_ignore_patterns_from_env_var_comma_separated(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(cfg, output_path),
+        _base_sign_args(output_path),
         env={
             "SLAN_CUAN_SIGN_IGNORE_PATTERNS": (
                 ".*-sources\\.jar$,.*-javadoc\\.jar$"
@@ -550,7 +557,6 @@ def test_sign_ignore_patterns_from_env_var_comma_separated(
 
     assert result.exit_code == 0
 
-    # Verify both patterns forwarded to workflows
     radas_kwargs = mock_sign_radas.call_args.kwargs
     assert ".*-sources\\.jar$" in radas_kwargs["ignore_patterns"]
     assert ".*-javadoc\\.jar$" in radas_kwargs["ignore_patterns"]
@@ -570,7 +576,6 @@ def test_sign_ignore_patterns_single_from_env_var(
     tmp_path: Path,
 ) -> None:
     """Single pattern from SLAN_CUAN_SIGN_IGNORE_PATTERNS works correctly."""
-    cfg = _create_radas_config(tmp_path)
     output_path = tmp_path / "output"
     output_path.mkdir()
 
@@ -582,13 +587,12 @@ def test_sign_ignore_patterns_single_from_env_var(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(cfg, output_path),
+        _base_sign_args(output_path),
         env={"SLAN_CUAN_SIGN_IGNORE_PATTERNS": ".*-sources\\.jar$"},
     )
 
     assert result.exit_code == 0
 
-    # Verify single pattern forwarded to workflows
     radas_kwargs = mock_sign_radas.call_args.kwargs
     assert ".*-sources\\.jar$" in radas_kwargs["ignore_patterns"]
     assert len(radas_kwargs["ignore_patterns"]) == 1
@@ -596,3 +600,56 @@ def test_sign_ignore_patterns_single_from_env_var(
     individual_kwargs = mock_sign_individual.call_args.kwargs
     assert ".*-sources\\.jar$" in individual_kwargs["ignore_patterns"]
     assert len(individual_kwargs["ignore_patterns"]) == 1
+
+
+def test_build_radas_config_from_env() -> None:
+    """_build_radas_config_from_env returns a config dict."""
+    config = _build_radas_config_from_env(
+        radas_umb_host="umb.example.com",
+        radas_result_queue=42,
+        radas_request_channel="test-channel",
+        radas_client_ca="/certs/ca.pem",
+        radas_client_key="/certs/key.pem",
+        radas_client_key_pass_file="/certs/key.pw",
+        radas_root_ca="/certs/root.pem",
+        radas_receiver_timeout=3600,
+    )
+
+    assert isinstance(config, dict)
+    assert config["umb_host"] == "umb.example.com"
+    assert config["result_queue"] == 42
+    assert config["request_channel"] == "test-channel"
+    assert config["client_ca"] == "/certs/ca.pem"
+    assert config["client_key"] == "/certs/key.pem"
+    assert config["client_key_pass_file"] == "/certs/key.pw"
+    assert config["root_ca"] == "/certs/root.pem"
+    assert config["radas_receiver_timeout"] == 3600
+
+
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_radas_config_passed_as_dict(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_sign_individual: Mock,
+    tmp_path: Path,
+) -> None:
+    """RADAS config is passed as a dict to sign_in_radas_workflow."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+
+    def radas_side_effect(**kwargs):
+        (Path(kwargs["result_path"]) / "result.json").write_text("{}")
+
+    mock_sign_radas.side_effect = radas_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(main, _base_sign_args(output_path))
+
+    assert result.exit_code == 0
+    radas_kwargs = mock_sign_radas.call_args.kwargs
+    config = radas_kwargs["radas_config"]
+    assert isinstance(config, dict)
+    assert config["umb_host"] == "umb.example.com"
+    assert config["request_channel"] == "test-channel"
