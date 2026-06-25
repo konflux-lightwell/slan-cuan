@@ -1,6 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
-
-ARG RH_IT_CERT
+FROM registry.access.redhat.com/ubi10/ubi:latest AS builder
 
 # Install the builder dependencies
 RUN dnf -y install \
@@ -19,34 +17,25 @@ RUN dnf -y install \
 COPY . /src/
 WORKDIR /src
 
-# Authenticate in the internal git repository to fetch the dependencies such as novabucks
-# and generate the wheels
-RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
-    && update-ca-trust extract \
-    &&  pip3.12 wheel --wheel-dir=/export/wheels . \
-    && ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') \
-    && ORAS_VERSION=$(curl -fsSL "https://api.github.com/repos/oras-project/oras/releases/latest" | python3.12 -c "import sys,json;print(json.load(sys.stdin)['tag_name'].lstrip('v'))") \
-    && curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${ARCH}.tar.gz" \
-        | tar -xz -C /usr/local/bin oras
+# Generate the wheels
+RUN pip3.12 wheel --wheel-dir=/export/wheels .
 
 
-# Build the final image using ubi-minimal to reduce the image size
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# Build the final image using task-runner which includes oras and other Tekton tooling
+FROM quay.io/konflux-ci/task-runner:1.5.0
 
 LABEL \
     name="slan-cuan" \
     maintainer="Lightwell Developers" \
     licence="Apache-2.0"
 
-# Copy the wheels and oras CLI from the builder stage
+# Copy the wheels from the builder stage
 COPY --from=builder /export/ /
-COPY --from=builder /usr/local/bin/oras /usr/local/bin/oras
 
-# Setup RH-IT-Root-CA certificate for RedHat
-RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
-    && update-ca-trust extract \
-    # Install dependencies
-    && microdnf install -y \
+USER 0
+
+# Install dependencies
+RUN microdnf install -y \
         python3.12-pip \
     # for CVEs in base image
     && microdnf update -y \
