@@ -56,4 +56,4 @@ ENV SSL_CERT_FILE=/etc/pki/tls/cert.pem
 COPY tekton/tasks/ /tekton/tasks/
 
 # Run the CLI
-ENTRYPOINT ["slan-cuan"]
+ENTRYPOINT ["slan-cuan", "--verbose" ]
