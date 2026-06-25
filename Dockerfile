@@ -37,8 +37,8 @@ USER 0
 ARG RH_IT_CERT
 
 # Install dependencies
-RUN echo "${RH_IT_CERT}" | sha256sum \
-    && echo "${RH_IT_CERT}" > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
+RUN echo "${RH_IT_CERT}" | base64 -d | sha256sum \
+    && echo "${RH_IT_CERT}" | base64 -d > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
     && update-ca-trust extract \
     && microdnf install -y \
         python3.12-pip \
