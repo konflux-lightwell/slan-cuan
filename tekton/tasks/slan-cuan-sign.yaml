@@ -124,12 +124,12 @@ spec:
         - name: SLAN_CUAN_RADAS_RESULT_QUEUE
           valueFrom:
             secretKeyRef:
-              name: lightwell-radas-credentials
+              name: lightwell-radas-certificates
               key: result_queue
         - name: SLAN_CUAN_RADAS_REQUEST_CHANNEL
           valueFrom:
             secretKeyRef:
-              name: lightwell-radas-credentials
+              name: lightwell-radas-certificates
               key: request_channel
         - name: SLAN_CUAN_RADAS_CLIENT_CA
           value: /var/run/secrets/radas/nonprod.crt
