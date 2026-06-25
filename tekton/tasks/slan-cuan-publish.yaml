@@ -29,6 +29,34 @@ spec:
       description: K8s Secret name for custom CA cert (optional).
       type: string
       default: ""
+    - name: CA_CERT_PATH
+      description: Path to the CA certificate file inside the mounted secret.
+      type: string
+      default: ""
+    - name: PULP_AUTH_TYPE
+      description: Pulp authentication method (tbr or cert).
+      type: string
+      default: "tbr"
+    - name: PULP_AUTH_SECRET
+      description: >-
+        K8s Secret name containing TBR credentials
+        (keys: username, password).
+      type: string
+      default: ""
+    - name: PULP_CERT_SECRET
+      description: >-
+        K8s Secret name containing client certificate for
+        entitlement cert auth (keys: tls.crt, tls.key).
+      type: string
+      default: ""
+    - name: PULP_CLIENT_CERT_PATH
+      description: Path to the client certificate file inside the mounted secret.
+      type: string
+      default: ""
+    - name: PULP_CLIENT_KEY_PATH
+      description: Path to the client key file inside the mounted secret.
+      type: string
+      default: ""
   results:
     - name: ARTIFACTS_UPLOADED
       description: Number of artifacts uploaded to Pulp.
@@ -58,6 +86,8 @@ spec:
       args:
         - publish
       env:
+        - name: SLAN_CUAN_CA_CERT
+          value: $(params.CA_CERT_PATH)
         - name: SLAN_CUAN_PUBLISH_PULP_URL
           value: $(params.PULP_URL)
         - name: SLAN_CUAN_PUBLISH_PULP_REPOSITORY
@@ -66,11 +96,32 @@ spec:
           value: /var/workdir/extracted
         - name: SLAN_CUAN_PUBLISH_INSECURE
           value: $(params.INSECURE)
+        - name: SLAN_CUAN_PUBLISH_PULP_AUTH_TYPE
+          value: $(params.PULP_AUTH_TYPE)
+        - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: $(params.PULP_AUTH_SECRET)
+              key: username
+              optional: true
+        - name: SLAN_CUAN_PUBLISH_PULP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: $(params.PULP_AUTH_SECRET)
+              key: password
+              optional: true
+        - name: SLAN_CUAN_PUBLISH_PULP_CLIENT_CERT
+          value: $(params.PULP_CLIENT_CERT_PATH)
+        - name: SLAN_CUAN_PUBLISH_PULP_CLIENT_KEY
+          value: $(params.PULP_CLIENT_KEY_PATH)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
       volumeMounts:
         - name: ca-cert
           mountPath: /certs
+          readOnly: true
+        - name: client-cert
+          mountPath: /certs/client
           readOnly: true
   volumes:
     - name: workdir
@@ -78,4 +129,8 @@ spec:
     - name: ca-cert
       secret:
         secretName: $(params.CA_CERT_SECRET)
+        optional: true
+    - name: client-cert
+      secret:
+        secretName: $(params.PULP_CERT_SECRET)
         optional: true

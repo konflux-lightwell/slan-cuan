@@ -11,6 +11,10 @@ import httpx
 
 MAVEN_DEPLOY_PATH = "/pulp/maven/"
 
+AUTH_TYPE_TBR: str = "tbr"
+AUTH_TYPE_CERT: str = "cert"
+AUTH_TYPES: frozenset[str] = frozenset({AUTH_TYPE_TBR, AUTH_TYPE_CERT})
+
 
 @dataclass(frozen=True)
 class PulpConfig:
@@ -19,6 +23,42 @@ class PulpConfig:
     base_url: str
     verify_ssl: bool
     ca_cert: Path | None = None
+    auth_type: str = AUTH_TYPE_TBR
+    username: str | None = None
+    password: str | None = None
+    client_cert: Path | None = None
+    client_key: Path | None = None
+
+
+def _validate_auth(config: PulpConfig) -> None:
+    """Validate auth fields are consistent with auth_type.
+
+    Raises:
+        PulpError: If required credentials are missing or inconsistent.
+
+    """
+    if config.auth_type not in AUTH_TYPES:
+        raise PulpError(
+            f"Invalid auth type '{config.auth_type}', "
+            f"must be one of: {', '.join(sorted(AUTH_TYPES))}",
+            status_code=0,
+            response_body="",
+        )
+    if config.auth_type == AUTH_TYPE_TBR:
+        if not config.username or not config.password:
+            raise PulpError(
+                "TBR auth requires --pulp-username and --pulp-password",
+                status_code=0,
+                response_body="",
+            )
+    elif config.auth_type == AUTH_TYPE_CERT:
+        if config.client_cert is None or config.client_key is None:
+            raise PulpError(
+                "Certificate auth requires "
+                "--pulp-client-cert and --pulp-client-key",
+                status_code=0,
+                response_body="",
+            )
 
 
 @dataclass(frozen=True)
@@ -53,6 +93,7 @@ class PulpMavenClient:
         """Initialize with connection config and target distribution."""
         self._config = config
         self._distribution = distribution
+        _validate_auth(config)
 
         verify: ssl.SSLContext | bool = config.verify_ssl
         if verify and config.ca_cert is not None:
@@ -70,10 +111,32 @@ class PulpMavenClient:
                     response_body="",
                 ) from e
 
+        if config.auth_type == AUTH_TYPE_CERT:
+            if not isinstance(verify, ssl.SSLContext):
+                verify = ssl.create_default_context()
+                verify.verify_flags &= ~ssl.VERIFY_X509_STRICT
+            try:
+                verify.load_cert_chain(
+                    certfile=str(config.client_cert),
+                    keyfile=str(config.client_key),
+                )
+            except (ssl.SSLError, OSError) as e:
+                raise PulpError(
+                    f"Failed to load client certificate: {e}",
+                    status_code=0,
+                    response_body="",
+                ) from e
+
+        auth = None
+        tbr_ready = config.auth_type == AUTH_TYPE_TBR
+        if tbr_ready and config.username and config.password:
+            auth = (config.username, config.password)
+
         self._client = httpx.Client(
             base_url=config.base_url,
             verify=verify,
             timeout=300.0,
+            auth=auth,
         )
 
     def __enter__(self) -> PulpMavenClient:

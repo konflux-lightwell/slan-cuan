@@ -97,6 +97,8 @@ Tasks reference these Kubernetes Secrets via parameters:
 | `registry-auth` | `.dockerconfigjson` | extract | Standard Docker config format |
 | `radas-config` | Opaque | sign | `config.json` (RADAS configuration) |
 | `trustify-sso` | Opaque | register | `client-id`, `client-secret` |
+| `pulp-tbr-auth` | Opaque | publish | `username`, `password` |
+| `pulp-entitlement-cert` | kubernetes.io/tls | publish | `tls.crt`, `tls.key` |
 | Custom CA cert | Opaque | register, publish | `ca.crt` (optional) |
 
 Secret names are configurable via Task parameters. Default names are shown above.
@@ -162,6 +164,11 @@ All Tasks automatically set `SLAN_CUAN_TEKTON_RESULTS_DIR=$(step.results)` to en
 | `PULP_URL` | `SLAN_CUAN_PUBLISH_PULP_URL` | `--pulp-url` |
 | `PULP_REPOSITORY` | `SLAN_CUAN_PUBLISH_PULP_REPOSITORY` | `--pulp-repository` |
 | `INSECURE` | `SLAN_CUAN_PUBLISH_INSECURE` | `--insecure` |
+| `PULP_AUTH_TYPE` | `SLAN_CUAN_PUBLISH_PULP_AUTH_TYPE` | `--pulp-auth-type` |
+| `PULP_USERNAME` | `SLAN_CUAN_PUBLISH_PULP_USERNAME` | `--pulp-username` |
+| `PULP_PASSWORD` | `SLAN_CUAN_PUBLISH_PULP_PASSWORD` | `--pulp-password` |
+| `PULP_CLIENT_CERT` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_CERT` | `--pulp-client-cert` |
+| `PULP_CLIENT_KEY` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_KEY` | `--pulp-client-key` |
 
 **Results:**
 - `ARTIFACTS_UPLOADED` -- Count of successfully uploaded artifacts

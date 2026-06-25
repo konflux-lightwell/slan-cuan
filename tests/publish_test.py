@@ -204,6 +204,10 @@ def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> Non
             "test-repo",
             "--artifact-dir",
             str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -256,6 +260,10 @@ def test_publish_env_var_precedence(tmp_path: Path) -> None:
                 "test-repo",
                 "--artifact-dir",
                 str(artifact_dir),
+                "--pulp-username",
+                "testuser",
+                "--pulp-password",
+                "testpass",
             ],
             env={"SLAN_CUAN_PUBLISH_PULP_URL": "https://env.pulp.com"},
         )
@@ -288,6 +296,10 @@ def test_publish_verbose_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
             "test-repo",
             "--artifact-dir",
             str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -323,6 +335,10 @@ def test_publish_pulp_error_handling(
             "test-repo",
             "--artifact-dir",
             str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -356,6 +372,10 @@ def test_publish_insecure_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
             "--artifact-dir",
             str(artifact_dir),
             "--insecure",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -397,6 +417,10 @@ def test_publish_ca_cert_propagates(
             "test-repo",
             "--artifact-dir",
             str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -485,6 +509,10 @@ def test_publish_skips_missing_files(
             "test-repo",
             "--artifact-dir",
             str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -523,6 +551,10 @@ def test_publish_writes_tekton_results(
             "test-repo",
             "--artifact-dir",
             str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
         ],
     )
 
@@ -545,3 +577,149 @@ def test_publish_writes_tekton_results(
     outputs_data = json.loads(outputs_file.read_text())
     assert outputs_data["uri"] == "https://pulp.example.com/pulp/maven/test-repo/"
     assert "digest" in outputs_data
+
+
+def test_publish_tbr_without_credentials(tmp_path: Path) -> None:
+    """TBR auth without username/password raises UsageError."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-auth-type",
+            "tbr",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--pulp-username and --pulp-password" in result.output
+
+
+def test_publish_cert_without_files(tmp_path: Path) -> None:
+    """Certificate auth without cert/key files raises UsageError."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-auth-type",
+            "cert",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--pulp-client-cert and --pulp-client-key" in result.output
+
+
+def test_publish_default_auth_type() -> None:
+    """Help output shows default auth type is tbr."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+
+    assert result.exit_code == 0
+    assert "--pulp-auth-type" in result.output
+    assert "tbr" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_env_var_auth_type(mock_client_cls: Mock, tmp_path: Path) -> None:
+    """Auth type via environment variable works."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    cert_file = tmp_path / "client.crt"
+    cert_file.write_text("cert content")
+    key_file = tmp_path / "client.key"
+    key_file.write_text("key content")
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+        status_code=200,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-client-cert",
+            str(cert_file),
+            "--pulp-client-key",
+            str(key_file),
+        ],
+        env={"SLAN_CUAN_PUBLISH_PULP_AUTH_TYPE": "cert"},
+    )
+
+    assert result.exit_code == 0
+    call_args = mock_client_cls.call_args
+    config = call_args[0][0]
+    assert config.auth_type == "cert"
+
+
+def test_publish_help_shows_new_options() -> None:
+    """Help output includes all authentication options."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+
+    assert result.exit_code == 0
+    assert "--pulp-auth-type" in result.output
+    assert "--pulp-username" in result.output
+    assert "--pulp-password" in result.output
+    assert "--pulp-client-cert" in result.output
+    assert "--pulp-client-key" in result.output
+
+
+def test_publish_dry_run_shows_auth_type(tmp_path: Path) -> None:
+    """Dry run output shows auth type."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    cert_file = tmp_path / "client.crt"
+    cert_file.write_text("cert content")
+    key_file = tmp_path / "client.key"
+    key_file.write_text("key content")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-auth-type",
+            "cert",
+            "--pulp-client-cert",
+            str(cert_file),
+            "--pulp-client-key",
+            str(key_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Auth type: cert" in result.output

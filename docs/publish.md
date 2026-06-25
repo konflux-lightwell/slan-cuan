@@ -22,6 +22,11 @@ The artifact directory must be the output of the `extract` stage, containing a v
 | `--pulp-repository` | string | Yes | -- | Maven distribution name |
 | `--artifact-dir` | path | Yes | -- | Extract stage output directory |
 | `--insecure` | flag | No | `False` | Disable TLS certificate verification |
+| `--pulp-auth-type` | choice | No | `tbr` | Authentication method (`tbr` or `cert`) |
+| `--pulp-username` | string | When `tbr` | -- | Username for TBR basic auth |
+| `--pulp-password` | string | When `tbr` | -- | Password for TBR basic auth |
+| `--pulp-client-cert` | path | When `cert` | -- | Client certificate for entitlement cert auth |
+| `--pulp-client-key` | path | When `cert` | -- | Client key for entitlement cert auth |
 
 The `--pulp-repository` is the Maven distribution name visible at `<pulp-url>/pulp/maven/<repository>/`.
 
@@ -37,6 +42,42 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 | `--pulp-repository` | `SLAN_CUAN_PUBLISH_PULP_REPOSITORY` |
 | `--artifact-dir` | `SLAN_CUAN_PUBLISH_ARTIFACT_DIR` |
 | `--insecure` | `SLAN_CUAN_PUBLISH_INSECURE` |
+| `--pulp-auth-type` | `SLAN_CUAN_PUBLISH_PULP_AUTH_TYPE` |
+| `--pulp-username` | `SLAN_CUAN_PUBLISH_PULP_USERNAME` |
+| `--pulp-password` | `SLAN_CUAN_PUBLISH_PULP_PASSWORD` |
+| `--pulp-client-cert` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_CERT` |
+| `--pulp-client-key` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_KEY` |
+
+## Authentication
+
+The `publish` command supports two authentication methods for Pulp, selected by `--pulp-auth-type`.
+
+### TBR Basic Auth (default)
+
+TBR (Terms-Based Registry) uses HTTP Basic Authentication. Both `--pulp-username` and `--pulp-password` are required.
+
+```bash
+slan-cuan publish \
+    --pulp-url https://pulp.example.com \
+    --pulp-repository my-repo \
+    --pulp-username "$PULP_USER" \
+    --pulp-password "$PULP_PASS" \
+    --artifact-dir /var/workdir/extracted
+```
+
+### Entitlement Certificate Auth
+
+Entitlement certificate auth uses mTLS (mutual TLS). Both `--pulp-client-cert` and `--pulp-client-key` are required.
+
+```bash
+slan-cuan publish \
+    --pulp-url https://pulp.example.com \
+    --pulp-repository my-repo \
+    --pulp-auth-type cert \
+    --pulp-client-cert /certs/client/tls.crt \
+    --pulp-client-key /certs/client/tls.key \
+    --artifact-dir /var/workdir/extracted
+```
 
 ## TLS Configuration
 
@@ -56,7 +97,7 @@ slan-cuan --ca-cert /etc/ssl/certs/lan-ca.crt \
 
 ## Dry-Run Behavior
 
-With `--dry-run`, loads the extract result and discovers artifacts but does not upload. Displays the distribution name, Pulp URL, artifact count, coordinate count, and each artifact path that would be uploaded.
+With `--dry-run`, loads the extract result and discovers artifacts but does not upload. Displays the authentication type, distribution name, Pulp URL, artifact count, coordinate count, and each artifact path that would be uploaded.
 
 ## Tekton Task
 

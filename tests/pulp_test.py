@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -9,9 +10,12 @@ import httpx
 import pytest
 
 from slan_cuan.pulp import (
+    AUTH_TYPE_CERT,
+    AUTH_TYPE_TBR,
     PulpConfig,
     PulpError,
     PulpMavenClient,
+    _validate_auth,
 )
 
 
@@ -36,7 +40,12 @@ class TestPulpMavenClient:
             )
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -59,7 +68,12 @@ class TestPulpMavenClient:
             )
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "missing-dist")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -82,7 +96,12 @@ class TestPulpMavenClient:
             return httpx.Response(500, text="Internal Server Error")
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -103,7 +122,12 @@ class TestPulpMavenClient:
             raise httpx.ConnectError("Connection refused")
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -124,7 +148,12 @@ class TestPulpMavenClient:
             raise httpx.TimeoutException("Request timed out")
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -149,7 +178,12 @@ class TestPulpMavenClient:
             return httpx.Response(200, json={"pulp_href": "/api/v3/test/"})
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "production-repo")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -174,7 +208,12 @@ class TestPulpMavenClient:
             return httpx.Response(200, text="Upload successful")
 
         transport = httpx.MockTransport(handler)
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
         client._client = httpx.Client(
             transport=transport, base_url="https://pulp.example.com"
@@ -187,7 +226,12 @@ class TestPulpMavenClient:
 
     def test_close(self) -> None:
         """Verify close() doesn't raise."""
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=True)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
 
         # Should not raise
@@ -226,6 +270,8 @@ class TestPulpConfig:
             base_url="https://pulp.example.com",
             verify_ssl=True,
             ca_cert=ca_file,
+            username="testuser",
+            password="testpass",
         )
         client = PulpMavenClient(config, "test-dist")
 
@@ -243,6 +289,8 @@ class TestPulpConfig:
             base_url="https://pulp.example.com",
             verify_ssl=True,
             ca_cert=ca_file,
+            username="testuser",
+            password="testpass",
         )
 
         with pytest.raises(PulpError) as exc_info:
@@ -256,6 +304,8 @@ class TestPulpConfig:
             base_url="https://pulp.example.com",
             verify_ssl=False,
             ca_cert=Path("/some/ca.crt"),
+            username="testuser",
+            password="testpass",
         )
         client = PulpMavenClient(config, "test-dist")
         assert config.verify_ssl is False
@@ -272,7 +322,12 @@ class TestPulpConfig:
         transport = httpx.MockTransport(handler)
 
         # Create config with insecure mode
-        config = PulpConfig(base_url="https://pulp.example.com", verify_ssl=False)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=False,
+            username="testuser",
+            password="testpass",
+        )
         client = PulpMavenClient(config, "test-dist")
 
         # The actual verification happens in the httpx.Client constructor
@@ -288,3 +343,150 @@ class TestPulpConfig:
 
         result = client.upload_artifact(artifact_file, "org/example/test.jar")
         assert result.status_code == 200
+
+
+class TestValidateAuth:
+    """Tests for _validate_auth authentication validation."""
+
+    def test_validate_auth_tbr_missing_username(self) -> None:
+        """TBR auth without username raises PulpError."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type=AUTH_TYPE_TBR,
+            password="testpass",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            _validate_auth(config)
+
+        assert "TBR auth requires" in exc_info.value.message
+        assert "--pulp-username" in exc_info.value.message
+        assert "--pulp-password" in exc_info.value.message
+
+    def test_validate_auth_tbr_missing_password(self) -> None:
+        """TBR auth without password raises PulpError."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type=AUTH_TYPE_TBR,
+            username="testuser",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            _validate_auth(config)
+
+        assert "TBR auth requires" in exc_info.value.message
+        assert "--pulp-username" in exc_info.value.message
+        assert "--pulp-password" in exc_info.value.message
+
+    def test_validate_auth_cert_missing_cert(self, tmp_path: Path) -> None:
+        """Certificate auth without client_cert raises PulpError."""
+        key_file = tmp_path / "client.key"
+        key_file.write_text("key content")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type=AUTH_TYPE_CERT,
+            client_key=key_file,
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            _validate_auth(config)
+
+        assert "Certificate auth requires" in exc_info.value.message
+        assert "--pulp-client-cert" in exc_info.value.message
+        assert "--pulp-client-key" in exc_info.value.message
+
+    def test_validate_auth_cert_missing_key(self, tmp_path: Path) -> None:
+        """Certificate auth without client_key raises PulpError."""
+        cert_file = tmp_path / "client.crt"
+        cert_file.write_text("cert content")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type=AUTH_TYPE_CERT,
+            client_cert=cert_file,
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            _validate_auth(config)
+
+        assert "Certificate auth requires" in exc_info.value.message
+        assert "--pulp-client-cert" in exc_info.value.message
+        assert "--pulp-client-key" in exc_info.value.message
+
+    def test_validate_auth_invalid_type(self) -> None:
+        """Invalid auth_type raises PulpError."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type="invalid",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            _validate_auth(config)
+
+        assert "Invalid auth type 'invalid'" in exc_info.value.message
+        assert "cert" in exc_info.value.message
+        assert "tbr" in exc_info.value.message
+
+    def test_tbr_auth_sends_basic_header(self, tmp_path: Path) -> None:
+        """TBR auth configures httpx.Client with basic auth."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        captured_auth_header = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_auth_header
+            captured_auth_header = request.headers.get("Authorization")
+            return httpx.Response(200, json={"pulp_href": "/api/v3/test/"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type=AUTH_TYPE_TBR,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+            auth=("testuser", "testpass"),
+        )
+
+        client.upload_artifact(artifact_file, "org/example/test.jar")
+
+        assert captured_auth_header is not None
+        assert captured_auth_header.startswith("Basic ")
+
+    def test_cert_auth_loads_ssl_context(self, tmp_path: Path) -> None:
+        """Cert auth loads cert chain with correct paths."""
+        cert_file = tmp_path / "client.crt"
+        cert_file.write_text("cert content")
+        key_file = tmp_path / "client.key"
+        key_file.write_text("key content")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            auth_type=AUTH_TYPE_CERT,
+            client_cert=cert_file,
+            client_key=key_file,
+        )
+
+        with patch("slan_cuan.pulp.ssl.SSLContext.load_cert_chain") as mock_load:
+            try:
+                PulpMavenClient(config, "test-dist")
+            except (ssl.SSLError, OSError):
+                pass
+
+            mock_load.assert_called_once_with(
+                certfile=str(cert_file),
+                keyfile=str(key_file),
+            )

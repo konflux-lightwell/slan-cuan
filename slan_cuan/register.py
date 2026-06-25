@@ -81,6 +81,8 @@ def register(
 ) -> None:
     """Register SBOM with Trustify for vulnerability cross-referencing."""
     try:
+        ca_cert = ctx.ca_cert if ctx.ca_cert and ctx.ca_cert.exists() else None
+
         result_path = Path(os.path.join(artifact_dir, EXTRACT_RESULT_FILENAME))
         if not result_path.exists():
             raise click.ClickException(f"Extract result not found: {result_path}")
@@ -118,7 +120,7 @@ def register(
             sso_client_id=sso_client_id,
             sso_client_secret=sso_client_secret,
             verify_ssl=not insecure,
-            ca_cert=ctx.ca_cert,
+            ca_cert=ca_cert,
             retries=retries,
         )
 
