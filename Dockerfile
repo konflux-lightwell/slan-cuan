@@ -1,7 +1,5 @@
 FROM registry.access.redhat.com/ubi10/ubi:latest AS builder
 
-ARG RH_IT_CERT
-
 # Install the builder dependencies
 RUN dnf -y install \
     --setopt=install_weak_deps=false \
@@ -36,8 +34,11 @@ COPY --from=builder /export/ /
 
 USER 0
 
+ARG RH_IT_CERT
+
 # Install dependencies
-RUN echo ${RH_IT_CERT} > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
+RUN echo "${RH_IT_CERT}" | sha256sum \
+    && echo "${RH_IT_CERT}" > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
     && update-ca-trust extract \
     && microdnf install -y \
         python3.12-pip \
