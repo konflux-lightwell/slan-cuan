@@ -6,8 +6,8 @@ import hashlib
 import io
 import json
 import logging
-import shutil
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -21,6 +21,7 @@ from novabucks.workflows import (
 
 from slan_cuan.context import GlobalContext
 from slan_cuan.models import EXTRACT_RESULT_FILENAME
+
 
 def _split_ignore_patterns(
     ctx: click.Context,
@@ -281,7 +282,7 @@ def sign(
         # 4 - Copy the whole content of the original directory to the output path
         original_dir = os.path.dirname(repo_path)
         shutil.copytree(original_dir, output_path, dirs_exist_ok=True)
-        
+
         # 5. Adjust the EXTRACT_RESULT_FILENAME to point to the signed directory
         extract_result_path = os.path.join(output_path, EXTRACT_RESULT_FILENAME)
         with open(extract_result_path, "r") as f:

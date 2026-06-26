@@ -22,12 +22,10 @@ _DIAG_MAX_ENTRIES = 50
 
 
 def _list_entries(path: Path, recursive: bool = False) -> None:
-    """List directory contents for diagnostics, capped at _DIAG_MAX_ENTRIES."""
+    """List directory contents for diagnostics, capped."""
     try:
         if recursive:
-            entries = sorted(
-                e for e in path.rglob("*") if e.is_file()
-            )
+            entries = sorted(e for e in path.rglob("*") if e.is_file())
             for entry in entries[:_DIAG_MAX_ENTRIES]:
                 click.echo(f"    {entry.relative_to(path)}")
         else:
@@ -36,9 +34,7 @@ def _list_entries(path: Path, recursive: bool = False) -> None:
                 kind = "dir" if entry.is_dir() else "file"
                 click.echo(f"    {entry.name} ({kind})")
         if len(entries) > _DIAG_MAX_ENTRIES:
-            click.echo(
-                f"    ... and {len(entries) - _DIAG_MAX_ENTRIES} more"
-            )
+            click.echo(f"    ... and {len(entries) - _DIAG_MAX_ENTRIES} more")
     except (PermissionError, OSError) as e:
         click.echo(f"    (error reading directory: {e})")
 
@@ -50,8 +46,7 @@ def _diagnose_empty_build(artifact_dir: Path, deliverable_dir: str) -> None:
 
     if not deliverable_path.exists():
         click.echo(
-            f"  WARNING: deliverable path does not exist: "
-            f"{deliverable_path}"
+            f"  WARNING: deliverable path does not exist: {deliverable_path}"
         )
         click.echo(f"  Contents of {artifact_dir}:")
         _list_entries(artifact_dir)
