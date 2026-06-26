@@ -21,6 +21,10 @@ spec:
     - name: PULP_REPOSITORY
       description: Pulp Maven distribution name.
       type: string
+    - name: PULP_DOMAIN
+      description: Pulp domain for hosted content API.
+      type: string
+      default: "lightwell"
     - name: INSECURE
       description: Disable TLS verification (true/false).
       type: string
@@ -142,6 +146,8 @@ spec:
           value: $(params.PULP_URL)
         - name: SLAN_CUAN_PUBLISH_PULP_REPOSITORY
           value: $(params.PULP_REPOSITORY)
+        - name: SLAN_CUAN_PUBLISH_PULP_DOMAIN
+          value: $(params.PULP_DOMAIN)
         - name: SLAN_CUAN_PUBLISH_ARTIFACT_DIR
           value: /var/workdir/extracted
         - name: SLAN_CUAN_PUBLISH_INSECURE

@@ -416,12 +416,14 @@ def test_sign_verbose_sets_debug_logging(
     assert mock_set_logging.call_count == 2
     # Verify both loggers are configured with DEBUG level
     calls = mock_set_logging.call_args_list
-    assert calls[0] == ((
-        "sign", "slan-cuan", logging.DEBUG
-    ), {"use_log_file": False})
-    assert calls[1] == ((
-        "sign", "novabucks", logging.DEBUG
-    ), {"use_log_file": False})
+    assert calls[0] == (
+        ("sign", "slan-cuan", logging.DEBUG),
+        {"use_log_file": False},
+    )
+    assert calls[1] == (
+        ("sign", "novabucks", logging.DEBUG),
+        {"use_log_file": False},
+    )
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
@@ -451,12 +453,14 @@ def test_sign_default_logging_level(
     assert mock_set_logging.call_count == 2
     # Verify both loggers are configured with INFO level
     calls = mock_set_logging.call_args_list
-    assert calls[0] == ((
-        "sign", "slan-cuan", logging.INFO
-    ), {"use_log_file": False})
-    assert calls[1] == ((
-        "sign", "novabucks", logging.INFO
-    ), {"use_log_file": False})
+    assert calls[0] == (
+        ("sign", "slan-cuan", logging.INFO),
+        {"use_log_file": False},
+    )
+    assert calls[1] == (
+        ("sign", "novabucks", logging.INFO),
+        {"use_log_file": False},
+    )
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")

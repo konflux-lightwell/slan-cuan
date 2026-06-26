@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import ssl
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -490,3 +492,746 @@ class TestValidateAuth:
                 certfile=str(cert_file),
                 keyfile=str(key_file),
             )
+
+
+def _content_handler(
+    content_response: dict[str, object] | None = None,
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Create a handler for single-step content upload."""
+    if content_response is None:
+        content_response = {
+            "pulp_href": "/api/v3/content/maven/artifact/abc123/",
+            "relative_path": "org/example/test/1.0.0/test-1.0.0.jar",
+            "group_id": "org.example",
+            "artifact_id": "test",
+            "version": "1.0.0",
+            "filename": "test-1.0.0.jar",
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/api/v3/content/maven/artifact/" in url:
+            return httpx.Response(200, json=content_response)
+        return httpx.Response(404)
+
+    return handler
+
+
+class TestUploadContent:
+    """Tests for upload_content() single-step method."""
+
+    def test_upload_content_success(self, tmp_path: Path) -> None:
+        """Single POST returns ContentUnit with correct fields."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        handler = _content_handler()
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        result = client.upload_content(
+            artifact_file,
+            "org/example/test/1.0.0/test-1.0.0.jar",
+            group_id="org.example",
+            artifact_id="test",
+            version="1.0.0",
+            filename="test-1.0.0.jar",
+        )
+
+        assert result.pulp_href == "/api/v3/content/maven/artifact/abc123/"
+        assert result.relative_path == "org/example/test/1.0.0/test-1.0.0.jar"
+        assert result.group_id == "org.example"
+        assert result.artifact_id == "test"
+        assert result.version == "1.0.0"
+        assert result.filename == "test-1.0.0.jar"
+
+    def test_upload_content_with_gav(self, tmp_path: Path) -> None:
+        """Verify GAV fields are sent as multipart form data."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        captured_fields: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            ct = request.headers.get("content-type", "")
+            if "multipart" in ct:
+                body = request.content.decode("utf-8", errors="replace")
+                for field in [
+                    "relative_path",
+                    "group_id",
+                    "artifact_id",
+                    "version",
+                ]:
+                    if f'name="{field}"' in body:
+                        captured_fields[field] = field
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/abc/",
+                    "relative_path": "org/example/test.jar",
+                    "group_id": "org.example",
+                    "artifact_id": "test",
+                    "version": "1.0.0",
+                    "filename": "test.jar",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_content(
+            artifact_file,
+            "org/example/test.jar",
+            group_id="org.example",
+            artifact_id="test",
+            version="1.0.0",
+        )
+
+        assert "relative_path" in captured_fields
+        assert "group_id" in captured_fields
+
+    def test_upload_content_error(self, tmp_path: Path) -> None:
+        """Server returns 500, raises PulpError."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="Internal Server Error")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert exc_info.value.status_code == 500
+        assert "Content upload failed" in exc_info.value.message
+
+    def test_upload_content_duplicate(self, tmp_path: Path) -> None:
+        """Server returns 400 for duplicate, raises PulpError."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, text="Bad Request: duplicate content")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert exc_info.value.status_code == 400
+        assert "Content upload failed" in exc_info.value.message
+
+    def test_upload_content_url_construction(self, tmp_path: Path) -> None:
+        """Verify single POST URL uses domain template."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        captured_url = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_url
+            captured_url = str(request.url)
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/abc/",
+                    "relative_path": "org/example/test.jar",
+                    "group_id": "org.example",
+                    "artifact_id": "test",
+                    "version": "1.0.0",
+                    "filename": "test.jar",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="lightwell",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert captured_url is not None
+        content_url = "/api/pulp/lightwell/api/v3/content/maven/artifact/"
+        assert content_url in captured_url
+
+    def test_upload_content_multipart(self, tmp_path: Path) -> None:
+        """Verify POST uses multipart form data with file."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        captured_content_type = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_content_type
+            captured_content_type = request.headers.get("content-type", "")
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/abc/",
+                    "relative_path": "org/example/test.jar",
+                    "group_id": "org.example",
+                    "artifact_id": "test",
+                    "version": "1.0.0",
+                    "filename": "test.jar",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert captured_content_type is not None
+        assert "multipart" in captured_content_type.lower()
+
+    def test_upload_content_requires_domain(self, tmp_path: Path) -> None:
+        """Config with domain=None, verify PulpError about domain."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain=None,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert "Domain is required" in exc_info.value.message
+        assert exc_info.value.status_code == 0
+
+    def test_upload_content_connection_error(self, tmp_path: Path) -> None:
+        """Mock ConnectError, verify PulpError."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("Connection refused")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert exc_info.value.status_code == 0
+        assert "Connection failed" in exc_info.value.message
+
+    def test_upload_content_timeout(self, tmp_path: Path) -> None:
+        """Mock TimeoutException, verify PulpError."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.TimeoutException("Request timed out")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert exc_info.value.status_code == 0
+        assert "Request timed out" in exc_info.value.message
+
+
+class TestPollTask:
+    """Tests for poll_task() method."""
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_immediate_completion(self, mock_sleep: Mock) -> None:
+        """Task returns 'completed' on first poll."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "state": "completed",
+                    "created_resources": [
+                        "/api/v3/repositories/maven/maven/uuid/versions/1/",
+                    ],
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert result["state"] == "completed"
+        mock_sleep.assert_not_called()
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_eventual_completion(self, mock_sleep: Mock) -> None:
+        """First poll 'running', second poll 'completed'."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                return httpx.Response(200, json={"state": "running"})
+            return httpx.Response(
+                200,
+                json={
+                    "state": "completed",
+                    "created_resources": [],
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert result["state"] == "completed"
+        assert call_count == 2
+        mock_sleep.assert_called()
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_failed(self, mock_sleep: Mock) -> None:
+        """Task returns 'failed' with error details, verify PulpError."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "state": "failed",
+                    "error": {"description": "Content validation failed"},
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert "Task failed" in exc_info.value.message
+        assert "Content validation failed" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_canceled(self, mock_sleep: Mock) -> None:
+        """Task returns 'canceled', verify PulpError."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"state": "canceled", "error": {}},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert "Task canceled" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout(self, mock_sleep: Mock) -> None:
+        """Use very short timeout, verify PulpError with 'timed out'."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"state": "running"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task(
+                "/api/v3/tasks/task-uuid/",
+                timeout=0.01,
+                interval=0.005,
+            )
+
+        assert "timed out" in exc_info.value.message
+
+
+class TestModifyRepository:
+    """Tests for modify_repository() method."""
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_modify_repository_success(self, mock_sleep: Mock) -> None:
+        """Mock 202 with task href, then completed task, verify ModifyResult."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+
+            # First call is the modify POST
+            if "modify/" in str(request.url):
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/task-uuid/"},
+                )
+            # Second call is the task poll
+            else:
+                return httpx.Response(
+                    200,
+                    json={
+                        "state": "completed",
+                        "created_resources": [
+                            "/api/v3/repositories/maven/maven/uuid/versions/2/",
+                        ],
+                    },
+                )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.modify_repository(
+            "/api/v3/repositories/maven/maven/uuid/",
+            [
+                "/api/v3/content/maven/artifact/abc/",
+                "/api/v3/content/maven/artifact/def/",
+            ],
+        )
+
+        assert result.task_href == "/api/v3/tasks/task-uuid/"
+        assert result.state == "completed"
+        repo_ver = "/api/v3/repositories/maven/maven/uuid/versions/2/"
+        assert result.repository_version == repo_ver
+        assert result.content_units_added == 2
+
+    def test_modify_repository_error_status(self) -> None:
+        """Mock 500, verify PulpError."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="Internal Server Error")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.modify_repository(
+                "/api/v3/repositories/maven/maven/uuid/",
+                ["/api/v3/content/maven/artifact/abc/"],
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "Repository modify failed" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_modify_repository_request_payload(self, mock_sleep: Mock) -> None:
+        """Capture JSON body, verify add_content_units payload."""
+        captured_payload = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_payload
+
+            # Capture modify request
+            if "modify/" in str(request.url):
+                captured_payload = json.loads(request.content)
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/task-uuid/"},
+                )
+            # Task poll
+            else:
+                return httpx.Response(
+                    200,
+                    json={"state": "completed", "created_resources": []},
+                )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.modify_repository(
+            "/api/v3/repositories/maven/maven/uuid/",
+            [
+                "/api/v3/content/maven/artifact/abc/",
+                "/api/v3/content/maven/artifact/def/",
+            ],
+        )
+
+        assert captured_payload is not None
+        assert "add_content_units" in captured_payload
+        assert len(captured_payload["add_content_units"]) == 2
+        units = captured_payload["add_content_units"]
+        assert "/api/v3/content/maven/artifact/abc/" in units
+
+
+class TestResolveRepository:
+    """Tests for resolve_repository() method."""
+
+    def test_resolve_repository_success(self) -> None:
+        """Mock 200 with results list, verify returned pulp_href."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "count": 1,
+                    "results": [
+                        {
+                            "pulp_href": (
+                                "/api/v3/repositories/maven/maven/uuid123/"
+                            ),
+                            "name": "lightwell-test",
+                        }
+                    ],
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="lightwell",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        href = client.resolve_repository("lightwell-test")
+
+        assert href == "/api/v3/repositories/maven/maven/uuid123/"
+
+    def test_resolve_repository_not_found(self) -> None:
+        """Mock 200 with empty results, verify PulpError(404)."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"count": 0, "results": []},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="lightwell",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.resolve_repository("nonexistent-repo")
+
+        assert exc_info.value.status_code == 404
+        assert "not found" in exc_info.value.message
+        assert "nonexistent-repo" in exc_info.value.message
+
+    def test_resolve_repository_requires_domain(self) -> None:
+        """Config with domain=None, verify PulpError."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain=None,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+
+        with pytest.raises(PulpError) as exc_info:
+            client.resolve_repository("test-repo")
+
+        assert "Domain is required" in exc_info.value.message
+        assert exc_info.value.status_code == 0
+
+    def test_resolve_repository_url_construction(self) -> None:
+        """Capture URL, verify domain template and name param."""
+        captured_url = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_url
+            captured_url = str(request.url)
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"pulp_href": "/api/v3/repositories/maven/maven/uuid/"}
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="mydom",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.resolve_repository("my-repo")
+
+        assert captured_url is not None
+        assert "/api/pulp/mydom/api/v3/repositories/maven/maven/" in captured_url
+        assert "name=my-repo" in captured_url

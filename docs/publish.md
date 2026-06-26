@@ -6,11 +6,12 @@ Upload Maven artifacts to a Pulp repository for distribution via `packages.redha
 
 1. Reads `extract-result.json` from the artifact directory
 2. Discovers Maven artifacts in the `repository/` tree
-3. Parses Maven coordinates (group, artifact, version) from
-   directory paths
+3. Parses Maven coordinates (group, artifact, version) from directory paths
 4. Reads checksum sidecars (`.md5`, `.sha1`, `.sha256`)
-5. Uploads each artifact to Pulp via REST API (`PUT`)
+5. Uploads each artifact to Pulp via the Maven deploy endpoint
 6. Saves `publish-result.json` with upload summary
+
+When `--pulp-domain` is set, the deploy URL includes the domain segment (`/pulp/maven/{domain}/{distribution}/{path}`). When not set, it uses the standard path (`/pulp/maven/{distribution}/{path}`).
 
 The artifact directory must be the output of the `extract` stage, containing a valid `extract-result.json`.
 
@@ -20,6 +21,7 @@ The artifact directory must be the output of the `extract` stage, containing a v
 |------|------|----------|---------|-------------|
 | `--pulp-url` | string | Yes | -- | Pulp instance base URL |
 | `--pulp-repository` | string | Yes | -- | Maven distribution name |
+| `--pulp-domain` | string | No | -- | Pulp domain for domain-scoped deployments (e.g. `lightwell`) |
 | `--artifact-dir` | path | Yes | -- | Extract stage output directory |
 | `--insecure` | flag | No | `False` | Disable TLS certificate verification |
 | `--pulp-auth-type` | choice | No | `tbr` | Authentication method (`tbr` or `cert`) |
@@ -27,8 +29,6 @@ The artifact directory must be the output of the `extract` stage, containing a v
 | `--pulp-password` | string | When `tbr` | -- | Password for TBR basic auth |
 | `--pulp-client-cert` | path | When `cert` | -- | Client certificate for entitlement cert auth |
 | `--pulp-client-key` | path | When `cert` | -- | Client key for entitlement cert auth |
-
-The `--pulp-repository` is the Maven distribution name visible at `<pulp-url>/pulp/maven/<repository>/`.
 
 The `--insecure` flag is intended for development only. In production, use the global `--ca-cert` option for custom certificate authorities.
 
@@ -40,6 +40,7 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 |------|---------------------|
 | `--pulp-url` | `SLAN_CUAN_PUBLISH_PULP_URL` |
 | `--pulp-repository` | `SLAN_CUAN_PUBLISH_PULP_REPOSITORY` |
+| `--pulp-domain` | `SLAN_CUAN_PUBLISH_PULP_DOMAIN` |
 | `--artifact-dir` | `SLAN_CUAN_PUBLISH_ARTIFACT_DIR` |
 | `--insecure` | `SLAN_CUAN_PUBLISH_INSECURE` |
 | `--pulp-auth-type` | `SLAN_CUAN_PUBLISH_PULP_AUTH_TYPE` |
@@ -60,6 +61,7 @@ TBR (Terms-Based Registry) uses HTTP Basic Authentication. Both `--pulp-username
 slan-cuan publish \
     --pulp-url https://pulp.example.com \
     --pulp-repository my-repo \
+    --pulp-domain lightwell \
     --pulp-username "$PULP_USER" \
     --pulp-password "$PULP_PASS" \
     --artifact-dir /var/workdir/extracted
@@ -73,11 +75,18 @@ Entitlement certificate auth uses mTLS (mutual TLS). Both `--pulp-client-cert` a
 slan-cuan publish \
     --pulp-url https://pulp.example.com \
     --pulp-repository my-repo \
+    --pulp-domain lightwell \
     --pulp-auth-type cert \
     --pulp-client-cert /certs/client/tls.crt \
     --pulp-client-key /certs/client/tls.key \
     --artifact-dir /var/workdir/extracted
 ```
+
+## Domain-Scoped Deployments
+
+When Pulp has `DOMAIN_ENABLED=True`, set `--pulp-domain` to include the domain segment in deploy URLs. The Tekton Task defaults `PULP_DOMAIN` to `lightwell`.
+
+Without `--pulp-domain`, the deploy URL is `/pulp/maven/{distribution}/{path}`. With `--pulp-domain`, it becomes `/pulp/maven/{domain}/{distribution}/{path}`.
 
 ## TLS Configuration
 
