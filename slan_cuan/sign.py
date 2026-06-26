@@ -198,6 +198,8 @@ def sign(
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
         set_logging("sign", "slan-cuan", log_level, use_log_file=False)
+        # Also set up logging for novabucks to propagate its logs
+        set_logging("sign", "novabucks", log_level, use_log_file=False)
 
         # 1 - Sign the repository in RADAS
         radas_config = _build_radas_config_from_env(
