@@ -304,9 +304,15 @@ def test_publish_verbose_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Loaded extract result:" in result.output
+    assert "Extract result file:" in result.output
+    assert "Artifact directory:" in result.output
+    assert "Deliverable directory:" in result.output
     assert "Discovered" in result.output
+    assert "Repository root:" in result.output
+    assert "Pulp URL:" in result.output
+    assert "Distribution:" in result.output
     assert "Uploading:" in result.output
+    assert "Publish result saved:" in result.output
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
