@@ -76,6 +76,13 @@ from slan_cuan.pulp import PulpConfig, PulpError, PulpMavenClient
     default=None,
     help="Client key path for entitlement cert auth.",
 )
+@click.option(
+    "--pulp-domain",
+    envvar="SLAN_CUAN_PUBLISH_PULP_DOMAIN",
+    type=str,
+    default=None,
+    help="Pulp domain for hosted content API (e.g. 'lightwell').",
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -88,6 +95,7 @@ def publish(
     pulp_password: str | None,
     pulp_client_cert: Path | None,
     pulp_client_key: Path | None,
+    pulp_domain: str | None,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -146,6 +154,7 @@ def publish(
             base_url=pulp_url,
             verify_ssl=not insecure,
             ca_cert=ca_cert,
+            domain=pulp_domain,
             auth_type=pulp_auth_type,
             username=pulp_username,
             password=pulp_password,
@@ -155,6 +164,8 @@ def publish(
 
         uploaded = 0
         skipped = 0
+        repository_version = None
+        content_unit_hrefs: list[str] = []
 
         with PulpMavenClient(config, pulp_repository) as client:
             for artifact in build.artifacts:
@@ -186,6 +197,8 @@ def publish(
             artifacts_skipped=skipped,
             coordinates=tuple(build.coordinates),
             published_at=datetime.now(timezone.utc).isoformat(),
+            repository_version=repository_version,
+            content_unit_hrefs=tuple(content_unit_hrefs),
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)

@@ -723,3 +723,286 @@ def test_publish_dry_run_shows_auth_type(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Auth type: cert" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_with_domain(mock_client_cls: Mock, tmp_path: Path) -> None:
+    """With --pulp-domain, PulpConfig.domain is set and deploy is used."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+        status_code=201,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert mock_client.upload_artifact.call_count == 2
+
+    config = mock_client_cls.call_args[0][0]
+    assert config.domain == "lightwell"
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_without_domain(mock_client_cls: Mock, tmp_path: Path) -> None:
+    """Without --pulp-domain, PulpConfig.domain is None."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+        status_code=200,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert mock_client.upload_artifact.call_count == 2
+
+    config = mock_client_cls.call_args[0][0]
+    assert config.domain is None
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_verbose_with_domain(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With --verbose and --pulp-domain, shows upload progress."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+        status_code=201,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--verbose",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Uploading:" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+@patch("slan_cuan.publish.BuildOutput.from_extract_result")
+def test_publish_skips_missing_with_domain(
+    mock_from_extract: Mock,
+    mock_client_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """With --pulp-domain, one artifact missing on disk is skipped."""
+    from slan_cuan.models import BuildOutput, MavenArtifact
+
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    missing = tmp_path / "nonexistent.jar"
+    existing_pom = (
+        artifact_dir
+        / "TEST-build-output"
+        / "repository"
+        / "org"
+        / "example"
+        / "artifact"
+        / "1.0.0"
+        / "artifact-1.0.0.pom"
+    )
+
+    mock_from_extract.return_value = BuildOutput(
+        build_id="TEST",
+        deliverable_dir=artifact_dir / "TEST-build-output",
+        artifacts=(
+            MavenArtifact(
+                relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+                file_path=missing,
+                group_id="org.example",
+                artifact_id="artifact",
+                version="1.0.0",
+                classifier=None,
+                extension="jar",
+                md5=None,
+                sha1=None,
+                sha256=None,
+            ),
+            MavenArtifact(
+                relative_path="org/example/artifact/1.0.0/artifact-1.0.0.pom",
+                file_path=existing_pom,
+                group_id="org.example",
+                artifact_id="artifact",
+                version="1.0.0",
+                classifier=None,
+                extension="pom",
+                md5=None,
+                sha1=None,
+                sha256=None,
+            ),
+        ),
+        sbom_path=None,
+        provenance_path=None,
+        source_archive_path=None,
+    )
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_artifact.return_value = UploadResult(
+        relative_path="org/example/artifact/1.0.0/artifact-1.0.0.pom",
+        status_code=201,
+        pulp_href="/api/v3/content/maven/artifact/abc/",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "skipping missing file" in result.output
+    assert mock_client.upload_artifact.call_count == 1
+    assert "1 artifact(s) uploaded, 1 skipped" in result.output
+
+
+def test_publish_dry_run_with_domain(tmp_path: Path) -> None:
+    """With --dry-run and --pulp-domain, no crash."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Distribution: test-repo" in result.output
+    assert "Pulp URL: https://pulp.example.com" in result.output
+
+
+def test_publish_help_shows_pulp_domain() -> None:
+    """Verify --pulp-domain appears in help output."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+
+    assert result.exit_code == 0
+    assert "--pulp-domain" in result.output
+
+
+def test_publish_env_var_pulp_domain(tmp_path: Path) -> None:
+    """Set SLAN_CUAN_PUBLISH_PULP_DOMAIN env var, verify it propagates."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    runner = CliRunner()
+    with patch("slan_cuan.publish.PulpMavenClient") as mock_client_cls:
+        mock_client = _make_ctx_mock()
+        mock_client_cls.return_value = mock_client
+        mock_client.upload_artifact.return_value = UploadResult(
+            relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+            status_code=201,
+            pulp_href="/api/v3/content/maven/artifact/abc/",
+        )
+
+        result = runner.invoke(
+            main,
+            [
+                "publish",
+                "--pulp-url",
+                "https://pulp.example.com",
+                "--pulp-repository",
+                "test-repo",
+                "--artifact-dir",
+                str(artifact_dir),
+                "--pulp-username",
+                "testuser",
+                "--pulp-password",
+                "testpass",
+            ],
+            env={"SLAN_CUAN_PUBLISH_PULP_DOMAIN": "testdomain"},
+        )
+
+    assert result.exit_code == 0
+
+    config = mock_client_cls.call_args[0][0]
+    assert config.domain == "testdomain"

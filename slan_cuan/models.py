@@ -469,11 +469,14 @@ class PublishResult:
     artifacts_skipped: int
     coordinates: tuple[MavenCoordinate, ...]
     published_at: str
+    repository_version: str | None = None
+    content_unit_hrefs: tuple[str, ...] = ()
 
     def to_json(self) -> str:
         """Serialize to JSON string."""
         data = asdict(self)
         data["coordinates"] = [asdict(c) for c in self.coordinates]
+        data["content_unit_hrefs"] = list(self.content_unit_hrefs)
         return json.dumps(data, indent=2)
 
     def save(self, path: Path) -> None:
@@ -496,6 +499,13 @@ class PublishResult:
             for c in data["coordinates"]
         )
 
+        # Handle optional new fields for backward compatibility
+        repository_version = data.get("repository_version")
+        content_unit_hrefs_raw = data.get("content_unit_hrefs", [])
+        content_unit_hrefs = (
+            tuple(content_unit_hrefs_raw) if content_unit_hrefs_raw else ()
+        )
+
         return cls(
             pulp_url=data["pulp_url"],
             distribution=data["distribution"],
@@ -503,6 +513,8 @@ class PublishResult:
             artifacts_skipped=data["artifacts_skipped"],
             coordinates=coordinates,
             published_at=data["published_at"],
+            repository_version=repository_version,
+            content_unit_hrefs=content_unit_hrefs,
         )
 
 

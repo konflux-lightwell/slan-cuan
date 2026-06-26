@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
 import tempfile
-import hashlib
 from pathlib import Path
 from typing import IO
 
@@ -224,7 +224,7 @@ def sign(
         click.echo("Signing the repository in RADAS...")
         click.echo(f"  - registry_auth_file: {registry_auth_file}")
         if registry_auth_file is not None:
-            with open(registry_auth_file, 'rb') as f:
+            with open(registry_auth_file, "rb") as f:
                 file_hash = hashlib.file_digest(f, "sha256")
             click.echo(f"  - sha256 creds: {file_hash.hexdigest()}")
         click.echo(f"  - repo_url: {repo_url}")
