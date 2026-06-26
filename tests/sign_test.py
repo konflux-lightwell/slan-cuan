@@ -225,7 +225,7 @@ def test_sign_successful_signing(
     assert result.exit_code == 0
     assert "Sign command completed successfully" in result.output
 
-    mock_set_logging.assert_called_once()
+    assert mock_set_logging.call_count == 2
     mock_sign_radas.assert_called_once()
     mock_sign_individual.assert_called_once()
 
@@ -413,9 +413,15 @@ def test_sign_verbose_sets_debug_logging(
     result = runner.invoke(main, ["--verbose"] + _base_sign_args(output_path))
 
     assert result.exit_code == 0
-    mock_set_logging.assert_called_once_with(
-        "sign", "slan-cuan", logging.DEBUG, use_log_file=False
-    )
+    assert mock_set_logging.call_count == 2
+    # Verify both loggers are configured with DEBUG level
+    calls = mock_set_logging.call_args_list
+    assert calls[0] == ((
+        "sign", "slan-cuan", logging.DEBUG
+    ), {"use_log_file": False})
+    assert calls[1] == ((
+        "sign", "novabucks", logging.DEBUG
+    ), {"use_log_file": False})
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
@@ -442,9 +448,15 @@ def test_sign_default_logging_level(
     result = runner.invoke(main, _base_sign_args(output_path))
 
     assert result.exit_code == 0
-    mock_set_logging.assert_called_once_with(
-        "sign", "slan-cuan", logging.INFO, use_log_file=False
-    )
+    assert mock_set_logging.call_count == 2
+    # Verify both loggers are configured with INFO level
+    calls = mock_set_logging.call_args_list
+    assert calls[0] == ((
+        "sign", "slan-cuan", logging.INFO
+    ), {"use_log_file": False})
+    assert calls[1] == ((
+        "sign", "novabucks", logging.INFO
+    ), {"use_log_file": False})
 
 
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
