@@ -142,6 +142,7 @@ spec:
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
       args:
+        - --verbose
         - publish
       env:
         - name: SLAN_CUAN_CA_CERT
