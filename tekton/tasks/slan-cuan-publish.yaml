@@ -159,13 +159,13 @@ spec:
         - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
           valueFrom:
             secretKeyRef:
-              name: $(params.PULP_AUTH_SECRET)
+              name: $(params.PULP_USERNAME)
               key: username
               optional: true
         - name: SLAN_CUAN_PUBLISH_PULP_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: $(params.PULP_AUTH_SECRET)
+              name: $(params.PULP_PASSWORD)
               key: password
               optional: true
         - name: SLAN_CUAN_PUBLISH_PULP_CLIENT_CERT
@@ -184,6 +184,7 @@ spec:
     - name: client-cert
       secret:
         secretName: $(params.PULP_CERT_SECRET)
+        optional: true
     - name: trusted-ca
       configMap:
         name: $(params.caTrustConfigMapName)
