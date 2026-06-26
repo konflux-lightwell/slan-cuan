@@ -49,6 +49,14 @@ spec:
         entitlement cert auth (keys: tls.crt, tls.key).
       type: string
       default: ""
+    - name: PULP_USERNAME
+      description: Username for pulp auth
+      type: string
+      default: ""
+    - name: PULP_PASSWORD
+      description: Password for pulp auth
+      type: string
+      default: ""
     - name: PULP_CLIENT_CERT_PATH
       description: Path to the client certificate file inside the mounted secret.
       type: string
@@ -138,6 +146,10 @@ spec:
       env:
         - name: SLAN_CUAN_CA_CERT
           value: $(params.CA_CERT_PATH)
+        - name: SLAN_CUAN_PULP_USERNAME
+          value: $(params.PULP_USERNAME)
+        - name: SLAN_CUAN_PULP_PASSWORD
+          value: $(params.PULP_PASSWORD)
         - name: SLAN_CUAN_PUBLISH_PULP_URL
           value: $(params.PULP_URL)
         - name: SLAN_CUAN_PUBLISH_PULP_REPOSITORY
