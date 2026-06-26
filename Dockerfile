@@ -37,7 +37,9 @@ USER 0
 ARG RH_IT_CERT
 
 # Install dependencies
-RUN microdnf install -y \
+RUN echo "${RH_IT_CERT}" | base64 -d > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
+    && update-ca-trust \
+    && microdnf install -y \
         python3.12-pip \
     # for CVEs in base image
     && microdnf update -y \
@@ -46,8 +48,8 @@ RUN microdnf install -y \
     && rm -rf /wheels
 
 # Set the internal certificates
-ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/cert.pem
-ENV SSL_CERT_FILE=/etc/pki/tls/cert.pem
+ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
+ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 
 # Hack: We need to install python-qpid-proton==0.38.0 to avoid SLL Errors on AMPQ
 RUN microdnf install -y gcc gcc-c++ make cmake python3-devel openssl-devel cyrus-sasl-devel \
