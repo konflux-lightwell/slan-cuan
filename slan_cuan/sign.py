@@ -22,6 +22,7 @@ from novabucks.workflows import (
 from slan_cuan.context import GlobalContext
 from slan_cuan.models import EXTRACT_RESULT_FILENAME
 
+
 def _split_ignore_patterns(
     ctx: click.Context,
     param: click.Parameter,
@@ -222,7 +223,7 @@ def sign(
             radas_receiver_timeout=radas_receiver_timeout,
         )
         repo_url = repo_url.removeprefix("https://").removeprefix("http://")
-        sign_artifact_dir = os.path.join(output_path, "signed")
+        sign_artifact_dir = os.path.join(output_path, "signed", "repository")
 
         click.echo("Signing the repository in RADAS...")
         click.echo(f"  - registry_auth_file: {registry_auth_file}")
@@ -281,7 +282,7 @@ def sign(
         # 4 - Copy the whole content of the original directory to the output path
         original_dir = os.path.dirname(repo_path)
         shutil.copytree(original_dir, output_path, dirs_exist_ok=True)
-        
+
         # 5. Adjust the EXTRACT_RESULT_FILENAME to point to the signed directory
         extract_result_path = os.path.join(output_path, EXTRACT_RESULT_FILENAME)
         with open(extract_result_path, "r") as f:
