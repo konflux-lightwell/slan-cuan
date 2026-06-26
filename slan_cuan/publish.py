@@ -105,7 +105,9 @@ def publish(
 
         extract_result = ExtractResult.from_file(result_path)
         if ctx.verbose:
-            click.echo(f"Loaded extract result: {extract_result.deliverable_dir}")
+            click.echo(f"Extract result file: {result_path}")
+            click.echo(f"Artifact directory: {artifact_dir.resolve()}")
+            click.echo(f"Deliverable directory: {extract_result.deliverable_dir}")
 
         build = BuildOutput.from_extract_result(extract_result, artifact_dir)
         if ctx.verbose:
@@ -115,6 +117,19 @@ def publish(
                 f"{len(build.coordinates)} "
                 f"coordinate(s)"
             )
+            click.echo(f"Repository root: {build.deliverable_dir}")
+            for artifact in build.artifacts:
+                size = (
+                    artifact.file_path.stat().st_size
+                    if artifact.file_path.exists()
+                    else -1
+                )
+                click.echo(f"  {artifact.relative_path} ({size} bytes)")
+            coords = [
+                f"{c.group_id}:{c.artifact_id}:{c.version}"
+                for c in build.coordinates
+            ]
+            click.echo(f"Coordinates: {', '.join(coords)}")
 
         if ctx.dry_run:
             click.echo(f"Distribution: {pulp_repository}")
@@ -162,6 +177,20 @@ def publish(
             client_key=pulp_client_key,
         )
 
+        if ctx.verbose:
+            click.echo(f"Pulp URL: {pulp_url}")
+            click.echo(f"Distribution: {pulp_repository}")
+            click.echo(f"Auth type: {pulp_auth_type}")
+            click.echo(f"TLS verification: {not insecure}")
+            if ca_cert:
+                click.echo(f"CA certificate: {ca_cert}")
+            if pulp_domain:
+                click.echo(f"Pulp domain: {pulp_domain}")
+            if pulp_client_cert:
+                click.echo(f"Client certificate: {pulp_client_cert}")
+            if pulp_client_key:
+                click.echo(f"Client key: {pulp_client_key}")
+
         uploaded = 0
         skipped = 0
         repository_version = None
@@ -202,6 +231,8 @@ def publish(
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
+        if ctx.verbose:
+            click.echo(f"Publish result saved: {publish_result_path}")
 
         # Write Tekton results
         write_tekton_result(
