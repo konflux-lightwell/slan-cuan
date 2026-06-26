@@ -6,8 +6,8 @@ import hashlib
 import io
 import json
 import logging
-import shutil
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import IO

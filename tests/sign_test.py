@@ -30,14 +30,26 @@ _RADAS_ARGS = [
 ]
 
 
-def _base_sign_args(output_path: Path) -> list[str]:
+def _setup_repo_dir(tmp_path: Path) -> str:
+    """Create a repo directory with extract-result.json, return repo_path."""
+    repos_dir = tmp_path / "repos"
+    repos_dir.mkdir(exist_ok=True)
+    (repos_dir / "extract-result.json").write_text(
+        json.dumps({"deliverable_dir": "original"})
+    )
+    return str(repos_dir / "maven-repo.zip")
+
+
+def _base_sign_args(
+    output_path: Path, repo_path: str = "/repos/maven-repo.zip"
+) -> list[str]:
     """Return the minimum required args for the sign subcommand."""
     return [
         "sign",
         "--repo-url",
         "quay.io/someorg/maven:latest",
         "--repo-path",
-        "/repos/maven-repo.zip",
+        repo_path,
         "--signing-key",
         "/keys/signing.key",
         "--output-path",
@@ -211,6 +223,7 @@ def test_sign_successful_signing(
     """Successful signing calls both workflows and reports success."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         result_dir = Path(kwargs["result_path"]) / "results"
@@ -220,7 +233,7 @@ def test_sign_successful_signing(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(output_path))
+    result = runner.invoke(main, _base_sign_args(output_path, repo_path))
 
     assert result.exit_code == 0
     assert "Sign command completed successfully" in result.output
@@ -236,7 +249,7 @@ def test_sign_successful_signing(
     assert radas_config["umb_host"] == "umb.example.com"
 
     individual_kwargs = mock_sign_individual.call_args.kwargs
-    assert individual_kwargs["repos"] == ["/repos/maven-repo.zip"]
+    assert individual_kwargs["repos"] == [repo_path]
     assert individual_kwargs["product_key"] == "slan-cuan"
     assert individual_kwargs["root_path"] == "repository"
 
@@ -318,6 +331,7 @@ def test_sign_custom_options(
     """Custom requester-id, zip-root-path, and product-key are forwarded."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -327,7 +341,7 @@ def test_sign_custom_options(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(output_path)
+        _base_sign_args(output_path, repo_path)
         + [
             "--requester-id",
             "custom@redhat.com",
@@ -360,6 +374,7 @@ def test_sign_ignore_patterns(
     """Multiple --ignore-patterns are forwarded to both workflows."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -369,7 +384,7 @@ def test_sign_ignore_patterns(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(output_path)
+        _base_sign_args(output_path, repo_path)
         + [
             "--ignore-patterns",
             ".*-sources\\.jar$",
@@ -403,6 +418,7 @@ def test_sign_verbose_sets_debug_logging(
 
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -410,7 +426,9 @@ def test_sign_verbose_sets_debug_logging(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--verbose"] + _base_sign_args(output_path))
+    result = runner.invoke(
+        main, ["--verbose"] + _base_sign_args(output_path, repo_path)
+    )
 
     assert result.exit_code == 0
     assert mock_set_logging.call_count == 2
@@ -440,6 +458,7 @@ def test_sign_default_logging_level(
 
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -447,7 +466,7 @@ def test_sign_default_logging_level(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(output_path))
+    result = runner.invoke(main, _base_sign_args(output_path, repo_path))
 
     assert result.exit_code == 0
     assert mock_set_logging.call_count == 2
@@ -475,6 +494,7 @@ def test_sign_radas_options_from_env_vars(
     """RADAS env vars set the corresponding --radas-* options."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -489,7 +509,7 @@ def test_sign_radas_options_from_env_vars(
             "--repo-url",
             "quay.io/someorg/maven:latest",
             "--repo-path",
-            "/repos/maven-repo.zip",
+            repo_path,
             "--signing-key",
             "/keys/signing.key",
             "--output-path",
@@ -522,6 +542,7 @@ def test_sign_temp_dir_cleaned_up(
     """Temporary directory is cleaned up after signing completes."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     captured_tmp_dir = []
 
@@ -536,7 +557,7 @@ def test_sign_temp_dir_cleaned_up(
     mock_sign_individual.side_effect = individual_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(output_path))
+    result = runner.invoke(main, _base_sign_args(output_path, repo_path))
 
     assert result.exit_code == 0
     assert len(captured_tmp_dir) == 1
@@ -555,6 +576,7 @@ def test_sign_ignore_patterns_from_env_var_comma_separated(
     """Comma-separated SLAN_CUAN_SIGN_IGNORE_PATTERNS produces patterns."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -564,7 +586,7 @@ def test_sign_ignore_patterns_from_env_var_comma_separated(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(output_path),
+        _base_sign_args(output_path, repo_path),
         env={
             "SLAN_CUAN_SIGN_IGNORE_PATTERNS": (
                 ".*-sources\\.jar$,.*-javadoc\\.jar$"
@@ -595,6 +617,7 @@ def test_sign_ignore_patterns_single_from_env_var(
     """Single pattern from SLAN_CUAN_SIGN_IGNORE_PATTERNS works correctly."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -604,7 +627,7 @@ def test_sign_ignore_patterns_single_from_env_var(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        _base_sign_args(output_path),
+        _base_sign_args(output_path, repo_path),
         env={"SLAN_CUAN_SIGN_IGNORE_PATTERNS": ".*-sources\\.jar$"},
     )
 
@@ -655,6 +678,7 @@ def test_sign_radas_config_passed_as_file_like(
     """RADAS config is passed as a file-like JSON object."""
     output_path = tmp_path / "output"
     output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
 
     def radas_side_effect(**kwargs):
         (Path(kwargs["result_path"]) / "result.json").write_text("{}")
@@ -662,7 +686,7 @@ def test_sign_radas_config_passed_as_file_like(
     mock_sign_radas.side_effect = radas_side_effect
 
     runner = CliRunner()
-    result = runner.invoke(main, _base_sign_args(output_path))
+    result = runner.invoke(main, _base_sign_args(output_path, repo_path))
 
     assert result.exit_code == 0
     radas_kwargs = mock_sign_radas.call_args.kwargs
