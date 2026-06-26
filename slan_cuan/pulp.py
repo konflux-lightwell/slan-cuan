@@ -131,6 +131,10 @@ class PulpMavenClient:
         self._distribution = distribution
         _validate_auth(config)
 
+        base_url = config.base_url
+        if not base_url.startswith(("http://", "https://")):
+            base_url = f"https://{base_url}"
+
         verify: ssl.SSLContext | bool = config.verify_ssl
         if verify and config.ca_cert is not None:
             try:
@@ -169,7 +173,7 @@ class PulpMavenClient:
             auth = (config.username, config.password)
 
         self._client = httpx.Client(
-            base_url=config.base_url,
+            base_url=base_url,
             verify=verify,
             timeout=DEFAULT_TIMEOUT_SECONDS,
             auth=auth,

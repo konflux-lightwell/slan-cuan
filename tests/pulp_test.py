@@ -346,6 +346,42 @@ class TestPulpConfig:
         result = client.upload_artifact(artifact_file, "org/example/test.jar")
         assert result.status_code == 200
 
+    def test_base_url_without_scheme_gets_https(self) -> None:
+        """A base_url without a scheme gets https:// prepended."""
+        config = PulpConfig(
+            base_url="packages.redhat.com",
+            verify_ssl=False,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        assert str(client._client._base_url) == "https://packages.redhat.com"
+        client.close()
+
+    def test_base_url_with_https_unchanged(self) -> None:
+        """A base_url with https:// is not modified."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=False,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        assert str(client._client._base_url) == "https://pulp.example.com"
+        client.close()
+
+    def test_base_url_with_http_unchanged(self) -> None:
+        """A base_url with http:// is not modified."""
+        config = PulpConfig(
+            base_url="http://pulp.example.com",
+            verify_ssl=False,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        assert str(client._client._base_url) == "http://pulp.example.com"
+        client.close()
+
 
 class TestValidateAuth:
     """Tests for _validate_auth authentication validation."""
