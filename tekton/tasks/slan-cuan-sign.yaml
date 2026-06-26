@@ -73,6 +73,10 @@ spec:
       description: The revision in the catalogGitUrl repo to be used.
       type: string
       default: lightwell-pipeline
+  results:
+    - name: sourceDataArtifact
+      description: Trusted Artifact URI of the extracted artifact directory.
+      type: string
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir
