@@ -220,14 +220,13 @@ def sign(
             radas_receiver_timeout=radas_receiver_timeout,
         )
         repo_url = repo_url.removeprefix("https://").removeprefix("http://")
-        with open(registry_auth_file, 'rb') as f:
-            file_hash = hashlib.file_digest(f, "sha256")
-
-
 
         click.echo("Signing the repository in RADAS...")
         click.echo(f"  - registry_auth_file: {registry_auth_file}")
-        click.echo(f"  - sha256 creds: {file_hash.hexdigest()}")
+        if registry_auth_file is not None:
+            with open(registry_auth_file, 'rb') as f:
+                file_hash = hashlib.file_digest(f, "sha256")
+            click.echo(f"  - sha256 creds: {file_hash.hexdigest()}")
         click.echo(f"  - repo_url: {repo_url}")
         click.echo(f"  - requester: {requester_id}")
         click.echo(f"  - sign_key: {signing_key}")
