@@ -161,6 +161,27 @@ spec:
         - name: registry-auth
           mountPath: /auth
           readOnly: true
+    - name: create-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: /var/workdir/signed
+        - name: sourceDataArtifact
+          value: $(results.sourceDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
   volumes:
     - name: workdir
       emptyDir: {}
