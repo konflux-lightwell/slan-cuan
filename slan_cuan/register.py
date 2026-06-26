@@ -91,7 +91,7 @@ def register(
         if ctx.verbose:
             click.echo(f"Loaded extract result: {extract_result.deliverable_dir}")
 
-        build = BuildOutput.from_extract_result(extract_result, artifact_dir)
+        build = BuildOutput.from_extract_result(extract_result, artifact_dir, verbose=ctx.verbose)
 
         if build.sbom_path is None:
             raise click.ClickException(

@@ -107,7 +107,7 @@ def publish(
         if ctx.verbose:
             click.echo(f"Loaded extract result: {extract_result.deliverable_dir}")
 
-        build = BuildOutput.from_extract_result(extract_result, artifact_dir)
+        build = BuildOutput.from_extract_result(extract_result, artifact_dir, verbose=ctx.verbose)
         if ctx.verbose:
             click.echo(
                 f"Discovered {len(build.artifacts)} "
