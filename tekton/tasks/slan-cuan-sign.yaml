@@ -28,19 +28,19 @@ spec:
       description: Timeout for the RADAS receiver.
       type: string
       default: "3600"
-    - name: SIGN_REQUESTER_ID
+    - name: REQUESTER_ID
       description: Requester identity for signing operations.
       type: string
       default: "slan-cuan@redhat.com"
-    - name: SIGN_ZIP_ROOT_PATH
+    - name: ZIP_ROOT_PATH
       description: Root of Maven repo tree inside ZIP.
       type: string
       default: "repository"
-    - name: SIGN_PRODUCT_KEY
+    - name: PRODUCT_KEY
       description: Product key for metadata.
       type: string
       default: "slan-cuan"
-    - name: SIGN_IGNORE_PATTERNS
+    - name: IGNORE_PATTERNS
       description: Comma-separated regex patterns to ignore during signing.
       type: string
       default: ""
@@ -146,13 +146,13 @@ spec:
         - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
           value: $(params.RADAS_RECEIVER_TIMEOUT)
         - name: SLAN_CUAN_SIGN_REQUESTER_ID
-          value: $(params.SIGN_REQUESTER_ID)
+          value: $(params.REQUESTER_ID)
         - name: SLAN_CUAN_SIGN_ZIP_ROOT_PATH
-          value: $(params.SIGN_ZIP_ROOT_PATH)
+          value: $(params.ZIP_ROOT_PATH)
         - name: SLAN_CUAN_SIGN_PRODUCT_KEY
-          value: $(params.SIGN_PRODUCT_KEY)
+          value: $(params.PRODUCT_KEY)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
-          value: $(params.SIGN_IGNORE_PATTERNS)
+          value: $(params.IGNORE_PATTERNS)
         - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE
           value: /auth/.dockerconfigjson
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
