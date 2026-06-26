@@ -254,6 +254,12 @@ def sign(
 
         # 3 - Sign the individual artifacts in RADAS
         click.echo("Signing the individual artifacts in RADAS...")
+        click.echo(f"  - repos: [{repo_path}]")
+        click.echo(f"  - prod key: [{product_key}]")
+        click.echo(f"  - root path: [{zip_root_path}]")
+        click.echo(f"  - signed file: [{signed_json_file}]")
+        click.echo(f"  - output dir: [{output_path}]")
+        click.echo(f"  - tmp dir: [{tmp_dir}]")
         with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-") as tmp_dir:
             sign_individual_artifacts_workflow(
                 repos=[repo_path],
