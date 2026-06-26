@@ -233,43 +233,45 @@ def sign(
         click.echo(f"  - result_path: {output_path}")
         click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
         click.echo(f"  - radas_config: {radas_config}")
-        sign_in_radas_workflow(
-            repo_url=repo_url,
-            requester=requester_id,
-            sign_key=signing_key,
-            result_path=output_path,
-            ignore_patterns=list(ignore_patterns),
-            # upstream annotates as RadasConfig but calls json.load() on it
-            radas_config=radas_config,  # type: ignore[arg-type]
-            registry_auth_config_path=registry_auth_file,
-        )
-        # 2 - Find the signed JSON files in the output path
-        click.echo("Finding the signed JSON files in the output path...")
-        signed_json_files = list(Path(output_path).rglob("*.json"))
-        if not signed_json_files:
-            raise click.ClickException(
-                "No signed JSON file found in the output path"
-            )
-        signed_json_file = signed_json_files[0]
-
-        # 3 - Sign the individual artifacts in RADAS
-        click.echo("Signing the individual artifacts in RADAS...")
-        click.echo(f"  - repos: [{repo_path}]")
-        click.echo(f"  - prod key: [{product_key}]")
-        click.echo(f"  - root path: [{zip_root_path}]")
-        click.echo(f"  - signed file: [{signed_json_file}]")
-        click.echo(f"  - output dir: [{output_path}]")
-        with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-") as tmp_dir:
-            click.echo(f"  - tmp dir: [{tmp_dir}]")
-            sign_individual_artifacts_workflow(
-                repos=[repo_path],
-                product_key=product_key,
-                root_path=zip_root_path,
-                sign_result_file=str(signed_json_file),
-                destination_dir=output_path,
-                temp_dir=tmp_dir,
+        
+        with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-url-") as tmp_dir_sign_url:
+            sign_in_radas_workflow(
+                repo_url=repo_url,
+                requester=requester_id,
+                sign_key=signing_key,
+                result_path=tmp_dir_sign_url,
                 ignore_patterns=list(ignore_patterns),
+                # upstream annotates as RadasConfig but calls json.load() on it
+                radas_config=radas_config,  # type: ignore[arg-type]
+                registry_auth_config_path=registry_auth_file,
             )
+            # 2 - Find the signed JSON files in the output path
+            click.echo("Finding the signed JSON files in the output path...")
+            signed_json_files = list(Path(tmp_dir_sign_url).rglob("*.json"))
+            if not signed_json_files:
+                raise click.ClickException(
+                    "No signed JSON file found in the output path"
+                )
+            signed_json_file = signed_json_files[0]
+
+            # 3 - Sign the individual artifacts in RADAS
+            click.echo("Signing the individual artifacts in RADAS...")
+            click.echo(f"  - repos: [{repo_path}]")
+            click.echo(f"  - prod key: [{product_key}]")
+            click.echo(f"  - root path: [{zip_root_path}]")
+            click.echo(f"  - signed file: [{signed_json_file}]")
+            click.echo(f"  - output dir: [{output_path}]")
+            with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-") as tmp_dir:
+                click.echo(f"  - tmp dir: [{tmp_dir}]")
+                sign_individual_artifacts_workflow(
+                    repos=[repo_path],
+                    product_key=product_key,
+                    root_path=zip_root_path,
+                    sign_result_file=str(signed_json_file),
+                    destination_dir=output_path,
+                    temp_dir=tmp_dir,
+                    ignore_patterns=list(ignore_patterns),
+                )
     except Exception as e:
         raise click.ClickException(f"Error signing artifacts: {e}") from e
     click.echo("Sign command completed successfully.")
