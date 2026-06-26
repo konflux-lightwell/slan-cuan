@@ -222,7 +222,7 @@ def sign(
             radas_receiver_timeout=radas_receiver_timeout,
         )
         repo_url = repo_url.removeprefix("https://").removeprefix("http://")
-        output_path = os.path.join(output_path, "signed")
+        sign_artifact_dir = os.path.join(output_path, "signed")
 
         click.echo("Signing the repository in RADAS...")
         click.echo(f"  - registry_auth_file: {registry_auth_file}")
@@ -233,7 +233,7 @@ def sign(
         click.echo(f"  - repo_url: {repo_url}")
         click.echo(f"  - requester: {requester_id}")
         click.echo(f"  - sign_key: {signing_key}")
-        click.echo(f"  - result_path: {output_path}")
+        click.echo(f"  - result_path: {sign_artifact_dir}")
         click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
         click.echo(f"  - radas_config: {radas_config}")
 
@@ -265,7 +265,7 @@ def sign(
             click.echo(f"  - prod key: [{product_key}]")
             click.echo(f"  - root path: [{zip_root_path}]")
             click.echo(f"  - signed file: [{signed_json_file}]")
-            click.echo(f"  - output dir: [{output_path}]")
+            click.echo(f"  - output dir: [{sign_artifact_dir}]")
             with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-") as tmp_dir:
                 click.echo(f"  - tmp dir: [{tmp_dir}]")
                 sign_individual_artifacts_workflow(
@@ -273,7 +273,7 @@ def sign(
                     product_key=product_key,
                     root_path=zip_root_path,
                     sign_result_file=str(signed_json_file),
-                    destination_dir=output_path,
+                    destination_dir=sign_artifact_dir,
                     temp_dir=tmp_dir,
                     ignore_patterns=list(ignore_patterns),
                 )
