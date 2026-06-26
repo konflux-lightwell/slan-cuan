@@ -109,7 +109,7 @@ def publish(
             click.echo(f"Artifact directory: {artifact_dir.resolve()}")
             click.echo(f"Deliverable directory: {extract_result.deliverable_dir}")
 
-        build = BuildOutput.from_extract_result(extract_result, artifact_dir)
+        build = BuildOutput.from_extract_result(extract_result, artifact_dir, verbose=ctx.verbose)
         if ctx.verbose:
             click.echo(
                 f"Discovered {len(build.artifacts)} "

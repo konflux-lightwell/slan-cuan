@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import click
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -289,6 +290,7 @@ class BuildOutput:
         cls,
         result: ExtractResult,
         output_dir: Path,
+        verbose: bool = False,
     ) -> BuildOutput:
         """Parse deliverable directory using ExtractResult metadata.
 
@@ -306,6 +308,17 @@ class BuildOutput:
 
         artifacts: list[MavenArtifact] = []
 
+        if verbose:
+            click.echo(
+                f"deliverable_path={deliverable_path} "
+                f"exists={deliverable_path.exists()} "
+                f"is_dir={deliverable_path.is_dir()}"
+            )
+            click.echo(
+                f"repo_dir={repo_dir} "
+                f"exists={repo_dir.exists()} "
+                f"is_dir={repo_dir.is_dir()}"
+            )
         if repo_dir.is_dir():
             for file_path in sorted(repo_dir.rglob("*")):
                 if not file_path.is_file():
