@@ -172,6 +172,11 @@ def _build_radas_config_from_env(
     callback=_split_ignore_patterns,
     help="Regex patterns to filter out files from signing.",
 )
+@click.option(
+    "--registry-auth-file",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to container registry authentication file.",
+)
 @click.pass_obj
 def sign(
     ctx: GlobalContext,
@@ -191,6 +196,7 @@ def sign(
     zip_root_path: str,
     product_key: str,
     ignore_patterns: tuple[str, ...],
+    registry_auth_file: Path | None,
 ) -> None:
     """Sign Maven artifacts on RADAS."""
     radas_config = None
@@ -219,6 +225,7 @@ def sign(
             ignore_patterns=list(ignore_patterns),
             # upstream annotates as RadasConfig but calls json.load() on it
             radas_config=radas_config,  # type: ignore[arg-type]
+            registry_auth_config_path=registry_auth_file,
         )
         # 2 - Find the signed JSON files in the output path
         click.echo("Finding the signed JSON files in the output path...")
