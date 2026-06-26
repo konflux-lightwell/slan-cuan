@@ -259,8 +259,8 @@ def sign(
         click.echo(f"  - root path: [{zip_root_path}]")
         click.echo(f"  - signed file: [{signed_json_file}]")
         click.echo(f"  - output dir: [{output_path}]")
-        click.echo(f"  - tmp dir: [{tmp_dir}]")
         with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-") as tmp_dir:
+            click.echo(f"  - tmp dir: [{tmp_dir}]")
             sign_individual_artifacts_workflow(
                 repos=[repo_path],
                 product_key=product_key,
