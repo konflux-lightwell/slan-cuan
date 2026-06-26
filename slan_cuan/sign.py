@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -18,6 +19,7 @@ from novabucks.workflows import (
 )
 
 from slan_cuan.context import GlobalContext
+from slan_cuan.models import EXTRACT_RESULT_FILENAME
 
 
 def _split_ignore_patterns(
@@ -272,6 +274,11 @@ def sign(
                     temp_dir=tmp_dir,
                     ignore_patterns=list(ignore_patterns),
                 )
+        # Copy extract-result.json to output dir so downstream tasks can find it
+        extract_result_src = Path(repo_path).parent / EXTRACT_RESULT_FILENAME
+        if extract_result_src.exists():
+            dest = Path(output_path) / EXTRACT_RESULT_FILENAME
+            shutil.copy2(extract_result_src, dest)
     except Exception as e:
         raise click.ClickException(f"Error signing artifacts: {e}") from e
     click.echo("Sign command completed successfully.")

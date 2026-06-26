@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from click.testing import CliRunner
 
 from slan_cuan.cli import main
+from slan_cuan.models import EXTRACT_RESULT_FILENAME
 from slan_cuan.sign import _build_radas_config_from_env
 
 # Common RADAS CLI args used across multiple tests
@@ -669,3 +670,54 @@ def test_sign_radas_config_passed_as_file_like(
     config = json.load(radas_kwargs["radas_config"])
     assert config["umb_host"] == "umb.example.com"
     assert config["request_channel"] == "test-channel"
+
+
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_copies_extract_result_to_output(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_sign_individual: Mock,
+    tmp_path: Path,
+) -> None:
+    """Sign copies extract-result.json from input dir to output dir."""
+    # Set up input directory with extract-result.json alongside the repo zip
+    input_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    extract_result_content = '{"deliverable_dir": "build-output"}'
+    (input_dir / EXTRACT_RESULT_FILENAME).write_text(extract_result_content)
+    repo_path = input_dir / "build-output.zip"
+    repo_path.write_text("fake zip")
+
+    output_path = tmp_path / "signed"
+    output_path.mkdir()
+
+    def radas_side_effect(**kwargs):
+        result_dir = Path(kwargs["result_path"]) / "results"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "sign-result.json").write_text('{"signed": true}')
+
+    mock_sign_radas.side_effect = radas_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "sign",
+            "--repo-url",
+            "quay.io/someorg/maven:latest",
+            "--repo-path",
+            str(repo_path),
+            "--signing-key",
+            "/keys/signing.key",
+            "--output-path",
+            str(output_path),
+            *_RADAS_ARGS,
+        ],
+    )
+
+    assert result.exit_code == 0
+    copied = output_path / EXTRACT_RESULT_FILENAME
+    assert copied.exists(), f"Expected {copied} to exist in output dir"
+    assert copied.read_text() == extract_result_content
