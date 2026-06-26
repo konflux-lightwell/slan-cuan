@@ -118,7 +118,7 @@ spec:
         - name: SLAN_CUAN_SIGN_REPO_URL
           value: $(params.SIGN_REPO_URL)
         - name: SLAN_CUAN_SIGN_REPO_PATH
-          value: /var/workdir/extracted
+          value: /var/workdir/extracted/build-output.zip
         - name: SLAN_CUAN_SIGN_SIGNING_KEY
           value: $(params.SIGNING_KEY)
         - name: SLAN_CUAN_SIGN_OUTPUT_PATH
