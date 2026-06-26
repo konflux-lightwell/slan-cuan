@@ -44,6 +44,8 @@ spec:
       description: Comma-separated regex patterns to ignore during signing.
       type: string
       default: ""
+    - name: REGISTRY_AUTH_SECRET
+      description: K8s Secret name for registry auth (.dockerconfigjson format).
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -151,14 +153,23 @@ spec:
           value: $(params.SIGN_PRODUCT_KEY)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
           value: $(params.SIGN_IGNORE_PATTERNS)
+        - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE
+          value: /auth/.dockerconfigjson
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
+      volumeMounts:
+        - name: registry-auth
+          mountPath: /auth
+          readOnly: true
   volumes:
     - name: workdir
       emptyDir: {}
     - name: radas-certificates
       secret:
         secretName: lightwell-radas-certificates
+    - name: registry-auth
+      secret:
+        secretName: $(params.REGISTRY_AUTH_SECRET)
     - name: trusted-ca
       configMap:
         name: $(params.caTrustConfigMapName)
