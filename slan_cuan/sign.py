@@ -221,6 +221,13 @@ def sign(
         repo_url = repo_url.removeprefix("https://").removeprefix("http://")
 
         click.echo("Signing the repository in RADAS...")
+        click.echo(f"  - registry_auth_file: {registry_auth_file}")
+        click.echo(f"  - repo_url: {repo_url}")
+        click.echo(f"  - requester: {requester_id}")
+        click.echo(f"  - sign_key: {signing_key}")
+        click.echo(f"  - result_path: {output_path}")
+        click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
+        click.echo(f"  - radas_config: {radas_config}")
         sign_in_radas_workflow(
             repo_url=repo_url,
             requester=requester_id,
