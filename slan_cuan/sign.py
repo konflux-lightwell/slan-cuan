@@ -6,6 +6,8 @@ import hashlib
 import io
 import json
 import logging
+import shutil
+import os
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -233,8 +235,10 @@ def sign(
         click.echo(f"  - result_path: {output_path}")
         click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
         click.echo(f"  - radas_config: {radas_config}")
-        
-        with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-url-") as tmp_dir_sign_url:
+
+        with tempfile.TemporaryDirectory(
+            prefix="slan-cuan-sign-url-"
+        ) as tmp_dir_sign_url:
             sign_in_radas_workflow(
                 repo_url=repo_url,
                 requester=requester_id,
@@ -272,6 +276,10 @@ def sign(
                     temp_dir=tmp_dir,
                     ignore_patterns=list(ignore_patterns),
                 )
+
+        # 4 - Copy the whole content of the original directory to the output path
+        original_dir = os.path.dirname(repo_path)
+        shutil.copytree(original_dir, output_path, dirs_exist_ok=True)
     except Exception as e:
         raise click.ClickException(f"Error signing artifacts: {e}") from e
     click.echo("Sign command completed successfully.")
