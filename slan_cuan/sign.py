@@ -218,6 +218,8 @@ def sign(
             radas_root_ca=radas_root_ca,
             radas_receiver_timeout=radas_receiver_timeout,
         )
+        repo_url = repo_url.removeprefix("https://").removeprefix("http://")
+
         click.echo("Signing the repository in RADAS...")
         sign_in_radas_workflow(
             repo_url=repo_url,
