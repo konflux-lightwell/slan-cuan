@@ -100,6 +100,8 @@ def publish(
     """Publish Maven artifacts to Pulp."""
     try:
         result_path = artifact_dir / EXTRACT_RESULT_FILENAME
+        if ctx.verbose:
+            click.echo(f"Inspecting result path: {result_path}")
         if not result_path.exists():
             raise click.ClickException(f"Extract result not found: {result_path}")
 
