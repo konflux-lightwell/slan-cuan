@@ -976,6 +976,138 @@ def test_publish_help_shows_pulp_domain() -> None:
     assert "--pulp-domain" in result.output
 
 
+def test_publish_verbose_diagnoses_missing_deliverable(tmp_path: Path) -> None:
+    """Verbose mode warns when deliverable_dir does not exist."""
+    artifact_dir = tmp_path / "output"
+    artifact_dir.mkdir()
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "MISSING-build-output",
+        "files": [],
+        "extracted_at": "2026-06-22T12:00:00Z",
+    }
+    (artifact_dir / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--verbose",
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "deliverable path does not exist" in result.output
+    assert "Contents of" in result.output
+
+
+def test_publish_verbose_diagnoses_file_deliverable(tmp_path: Path) -> None:
+    """Verbose mode warns when deliverable_dir is a file, not a directory."""
+    artifact_dir = tmp_path / "output"
+    artifact_dir.mkdir()
+    (artifact_dir / "build-output.zip").write_text("not a directory")
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "build-output.zip",
+        "files": [],
+        "extracted_at": "2026-06-22T12:00:00Z",
+    }
+    (artifact_dir / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--verbose",
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "deliverable path is a file, not a directory" in result.output
+
+
+def test_publish_verbose_diagnoses_missing_repo_dir(tmp_path: Path) -> None:
+    """Verbose mode warns when repository/ subdir is missing."""
+    artifact_dir = tmp_path / "output"
+    artifact_dir.mkdir()
+    deliverable = artifact_dir / "TEST-build-output"
+    deliverable.mkdir()
+    (deliverable / "cyclonedx.json").write_text("{}")
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-06-22T12:00:00Z",
+    }
+    (artifact_dir / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--verbose",
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "repository/ subdirectory not found" in result.output
+    assert "cyclonedx.json" in result.output
+
+
 def test_publish_env_var_pulp_domain(tmp_path: Path) -> None:
     """Set SLAN_CUAN_PUBLISH_PULP_DOMAIN env var, verify it propagates."""
     artifact_dir = create_test_artifact_dir(tmp_path)

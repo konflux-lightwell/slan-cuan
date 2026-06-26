@@ -18,6 +18,65 @@ from slan_cuan.models import (
 )
 from slan_cuan.pulp import PulpConfig, PulpError, PulpMavenClient
 
+_DIAG_MAX_ENTRIES = 50
+
+
+def _list_entries(path: Path, recursive: bool = False) -> None:
+    """List directory contents for diagnostics, capped at _DIAG_MAX_ENTRIES."""
+    try:
+        if recursive:
+            entries = sorted(
+                e for e in path.rglob("*") if e.is_file()
+            )
+            for entry in entries[:_DIAG_MAX_ENTRIES]:
+                click.echo(f"    {entry.relative_to(path)}")
+        else:
+            entries = sorted(path.iterdir())
+            for entry in entries[:_DIAG_MAX_ENTRIES]:
+                kind = "dir" if entry.is_dir() else "file"
+                click.echo(f"    {entry.name} ({kind})")
+        if len(entries) > _DIAG_MAX_ENTRIES:
+            click.echo(
+                f"    ... and {len(entries) - _DIAG_MAX_ENTRIES} more"
+            )
+    except (PermissionError, OSError) as e:
+        click.echo(f"    (error reading directory: {e})")
+
+
+def _diagnose_empty_build(artifact_dir: Path, deliverable_dir: str) -> None:
+    """Print diagnostics when no artifacts are discovered."""
+    deliverable_path = artifact_dir / deliverable_dir
+    repo_dir = deliverable_path / "repository"
+
+    if not deliverable_path.exists():
+        click.echo(
+            f"  WARNING: deliverable path does not exist: "
+            f"{deliverable_path}"
+        )
+        click.echo(f"  Contents of {artifact_dir}:")
+        _list_entries(artifact_dir)
+        return
+
+    if deliverable_path.is_file():
+        click.echo(
+            f"  WARNING: deliverable path is a file, not a directory: "
+            f"{deliverable_path}"
+        )
+        return
+
+    if not repo_dir.exists():
+        click.echo(
+            f"  WARNING: repository/ subdirectory not found in: "
+            f"{deliverable_path}"
+        )
+        click.echo(f"  Contents of {deliverable_path}:")
+        _list_entries(deliverable_path)
+        return
+
+    click.echo("  WARNING: repository/ exists but contains no Maven artifacts")
+    click.echo(f"  Contents of {repo_dir}:")
+    _list_entries(repo_dir, recursive=True)
+
 
 @click.command()
 @click.option(
@@ -118,6 +177,10 @@ def publish(
                 f"coordinate(s)"
             )
             click.echo(f"Repository root: {build.deliverable_dir}")
+            if not build.artifacts:
+                _diagnose_empty_build(
+                    artifact_dir, extract_result.deliverable_dir
+                )
             for artifact in build.artifacts:
                 size = (
                     artifact.file_path.stat().st_size
