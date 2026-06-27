@@ -1212,15 +1212,15 @@ def test_publish_passes_labels_to_upload(
     for call in mock_client.upload_content.call_args_list:
         labels = call.kwargs.get("labels")
         assert labels is not None
-        assert labels["build_id"] == "TEST"
-        assert labels["source_image_digest"] == "sha256:abc123"
+        assert "build_id" not in labels
+        assert labels["source_image"] == "quay.io/test/image@sha256:abc123"
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
 def test_publish_labels_with_none_digest(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
-    """Extract result with None digest uses empty string fallback."""
+    """Extract result with None digest uses tag-only image reference."""
     deliverable_dir = tmp_path / "TEST-build-output"
     repo_dir = (
         deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
@@ -1273,12 +1273,11 @@ def test_publish_labels_with_none_digest(
 
     assert result.exit_code == 0
 
-    # Verify labels have empty string for source_image_digest
     for call in mock_client.upload_content.call_args_list:
         labels = call.kwargs.get("labels")
         assert labels is not None
-        assert labels["build_id"] == "TEST"
-        assert labels["source_image_digest"] == ""
+        assert "build_id" not in labels
+        assert labels["source_image"] == "quay.io/test/image:latest"
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -1322,15 +1321,18 @@ def test_publish_labels_in_publish_result(
         publish_result = json.load(f)
 
     assert "pulp_labels" in publish_result
-    assert publish_result["pulp_labels"]["build_id"] == "TEST"
-    assert publish_result["pulp_labels"]["source_image_digest"] == "sha256:abc123"
+    assert "build_id" not in publish_result["pulp_labels"]
+    assert (
+        publish_result["pulp_labels"]["source_image"]
+        == "quay.io/test/image@sha256:abc123"
+    )
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
-def test_publish_verbose_shows_labels(
+def test_publish_shows_labels_in_output(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
-    """With --verbose, verify labels appear in output."""
+    """Labels appear in regular (non-verbose) output."""
     artifact_dir = create_test_artifact_dir(tmp_path)
 
     mock_client = _make_ctx_mock()
@@ -1341,7 +1343,6 @@ def test_publish_verbose_shows_labels(
     result = runner.invoke(
         main,
         [
-            "--verbose",
             "publish",
             "--pulp-url",
             "https://pulp.example.com",
@@ -1360,8 +1361,8 @@ def test_publish_verbose_shows_labels(
 
     assert result.exit_code == 0
     assert "Pulp labels:" in result.output
-    assert "TEST" in result.output
-    assert "sha256:abc123" in result.output
+    assert "source_image" in result.output
+    assert "quay.io/test/image@sha256:abc123" in result.output
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -1406,8 +1407,8 @@ def test_publish_writes_pulp_labels_tekton_result(
 
     # Verify content is valid JSON
     labels_data = json.loads(labels_file.read_text())
-    assert labels_data["build_id"] == "TEST"
-    assert labels_data["source_image_digest"] == "sha256:abc123"
+    assert "build_id" not in labels_data
+    assert labels_data["source_image"] == "quay.io/test/image@sha256:abc123"
 
 
 def test_publish_env_var_pulp_domain(tmp_path: Path) -> None:
