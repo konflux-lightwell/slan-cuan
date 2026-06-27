@@ -114,6 +114,7 @@ class TestPulpMavenClient:
 
         assert exc_info.value.status_code == 500
         assert "Upload failed (500)" in exc_info.value.message
+        assert "pulp.example.com" in exc_info.value.message
 
     def test_upload_connection_error(self, tmp_path: Path) -> None:
         """Transport raises httpx.ConnectError, verify PulpError."""
