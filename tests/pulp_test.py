@@ -676,6 +676,195 @@ class TestUploadContent:
         assert "Request timed out" in exc_info.value.message
 
 
+class TestUploadMetadata:
+    """Tests for upload_metadata() method."""
+
+    def test_upload_metadata_success(self, tmp_path: Path) -> None:
+        """Single POST returns ContentUnit for metadata."""
+        metadata_file = tmp_path / "maven-metadata.xml"
+        metadata_file.write_text("<metadata/>")
+
+        metadata_response = {
+            "pulp_href": "/api/v3/content/maven/metadata/abc123/",
+            "relative_path": "com/example/artifact/maven-metadata.xml",
+            "group_id": "com.example",
+            "artifact_id": "artifact",
+            "version": "",
+            "filename": "maven-metadata.xml",
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=metadata_response)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        result = client.upload_metadata(
+            metadata_file,
+            "com/example/artifact/maven-metadata.xml",
+            group_id="com.example",
+            artifact_id="artifact",
+            filename="maven-metadata.xml",
+        )
+
+        assert result.pulp_href == "/api/v3/content/maven/metadata/abc123/"
+        assert result.group_id == "com.example"
+        assert result.artifact_id == "artifact"
+
+    def test_upload_metadata_url_construction(self, tmp_path: Path) -> None:
+        """Verify POST URL uses metadata template."""
+        metadata_file = tmp_path / "maven-metadata.xml"
+        metadata_file.write_text("<metadata/>")
+
+        captured_url = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_url
+            captured_url = str(request.url)
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/maven/metadata/abc/",
+                    "relative_path": "com/example/artifact/maven-metadata.xml",
+                    "group_id": "com.example",
+                    "artifact_id": "artifact",
+                    "version": "",
+                    "filename": "maven-metadata.xml",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="lightwell",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_metadata(
+            metadata_file,
+            "com/example/artifact/maven-metadata.xml",
+        )
+
+        assert captured_url is not None
+        metadata_url = "/api/pulp/lightwell/api/v3/content/maven/metadata/"
+        assert metadata_url in captured_url
+
+    def test_upload_metadata_sends_sha256(self, tmp_path: Path) -> None:
+        """Verify sha256 is included in form data."""
+        metadata_file = tmp_path / "maven-metadata.xml"
+        metadata_file.write_text("<metadata/>")
+
+        captured_body = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            captured_body = request.content.decode("utf-8", errors="replace")
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/maven/metadata/abc/",
+                    "relative_path": "com/example/artifact/maven-metadata.xml",
+                    "group_id": "com.example",
+                    "artifact_id": "artifact",
+                    "version": "",
+                    "filename": "maven-metadata.xml",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_metadata(
+            metadata_file,
+            "com/example/artifact/maven-metadata.xml",
+        )
+
+        assert captured_body is not None
+        assert 'name="sha256"' in captured_body
+
+    def test_upload_metadata_error(self, tmp_path: Path) -> None:
+        """Server returns 500, raises PulpError."""
+        metadata_file = tmp_path / "maven-metadata.xml"
+        metadata_file.write_text("<metadata/>")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="Internal Server Error")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_metadata(
+                metadata_file,
+                "com/example/artifact/maven-metadata.xml",
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "Metadata upload failed" in exc_info.value.message
+
+    def test_upload_metadata_requires_domain(self, tmp_path: Path) -> None:
+        """Config with domain=None, verify PulpError."""
+        metadata_file = tmp_path / "maven-metadata.xml"
+        metadata_file.write_text("<metadata/>")
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain=None,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+
+        with pytest.raises(PulpError) as exc_info:
+            client.upload_metadata(
+                metadata_file,
+                "com/example/artifact/maven-metadata.xml",
+            )
+
+        assert "Domain is required" in exc_info.value.message
+
+
 class TestPollTask:
     """Tests for poll_task() method."""
 
