@@ -133,8 +133,8 @@ def _diagnose_empty_build(artifact_dir: Path, deliverable_dir: str) -> None:
 @click.option(
     "--pulp-domain",
     envvar="SLAN_CUAN_PUBLISH_PULP_DOMAIN",
+    required=True,
     type=str,
-    default=None,
     help="Pulp domain for hosted content API (e.g. 'lightwell').",
 )
 @click.pass_obj
@@ -149,7 +149,7 @@ def publish(
     pulp_password: str | None,
     pulp_client_cert: Path | None,
     pulp_client_key: Path | None,
-    pulp_domain: str | None,
+    pulp_domain: str,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -267,15 +267,42 @@ def publish(
                 if ctx.verbose:
                     click.echo(f"Uploading: {artifact.relative_path}")
 
-                upload = client.upload_artifact(
-                    artifact.file_path,
-                    artifact.relative_path,
+                content_unit = client.upload_content(
+                    file_path=artifact.file_path,
+                    relative_path=artifact.relative_path,
+                    group_id=artifact.group_id,
+                    artifact_id=artifact.artifact_id,
+                    version=artifact.version,
+                    filename=artifact.file_path.name,
                 )
 
                 if ctx.verbose:
-                    click.echo(f"  -> {upload.status_code} {upload.pulp_href}")
+                    click.echo(f"  -> {content_unit.pulp_href}")
 
+                content_unit_hrefs.append(content_unit.pulp_href)
                 uploaded += 1
+
+            if content_unit_hrefs:
+                if ctx.verbose:
+                    click.echo(
+                        f"Resolving repository: {pulp_repository}"
+                    )
+                repo_href = client.resolve_repository(pulp_repository)
+
+                if ctx.verbose:
+                    click.echo(
+                        f"Adding {len(content_unit_hrefs)} content unit(s) "
+                        f"to repository"
+                    )
+                modify_result = client.modify_repository(
+                    repo_href, content_unit_hrefs
+                )
+                repository_version = modify_result.repository_version
+
+                if ctx.verbose:
+                    click.echo(
+                        f"  -> repository version: {repository_version}"
+                    )
 
         publish_result = PublishResult(
             pulp_url=pulp_url,

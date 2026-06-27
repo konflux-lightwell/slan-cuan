@@ -10,8 +10,6 @@ from types import TracebackType
 
 import httpx
 
-MAVEN_DEPLOY_PATH = "/pulp/maven/"
-
 # Content API URL path templates
 CONTENT_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/content/maven/artifact/"
 REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/maven/maven/"
@@ -73,15 +71,6 @@ def _validate_auth(config: PulpConfig) -> None:
                 status_code=0,
                 response_body="",
             )
-
-
-@dataclass(frozen=True)
-class UploadResult:
-    """Result of a single artifact upload to Pulp."""
-
-    relative_path: str
-    status_code: int
-    pulp_href: str
 
 
 @dataclass(frozen=True)
@@ -191,87 +180,6 @@ class PulpMavenClient:
     ) -> None:
         """Exit context manager and close client."""
         self.close()
-
-    def upload_artifact(
-        self,
-        file_path: Path,
-        relative_path: str,
-    ) -> UploadResult:
-        """Upload a single artifact via PUT.
-
-        Args:
-            file_path: Local path to the artifact file.
-            relative_path: Maven repository-layout path.
-
-        Returns:
-            UploadResult with status and Pulp HREF.
-
-        Raises:
-            PulpError: If the upload fails.
-
-        """
-        if self._config.domain:
-            url = (
-                f"{MAVEN_DEPLOY_PATH}"
-                f"{self._config.domain}/"
-                f"{self._distribution}/"
-                f"{relative_path}"
-            )
-        else:
-            url = f"{MAVEN_DEPLOY_PATH}{self._distribution}/{relative_path}"
-
-        full_url = str(self._client.base_url) + url
-
-        try:
-            with file_path.open("rb") as f:
-                response = self._client.put(url, content=f)
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed to '{full_url}': {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out for '{full_url}': {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            if response.status_code == 404:
-                raise PulpError(
-                    f"Distribution "
-                    f"'{self._distribution}' "
-                    f"not found (404) at '{full_url}'. "
-                    f"Check --pulp-repository.",
-                    status_code=response.status_code,
-                    response_body=body,
-                )
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Upload failed ({response.status_code}) "
-                f"for '{full_url}': {summary}",
-                status_code=response.status_code,
-                response_body=body,
-            )
-
-        pulp_href = ""
-        try:
-            data = response.json()
-            if isinstance(data, dict):
-                pulp_href = str(data.get("pulp_href", ""))
-        except (ValueError, KeyError):
-            pass
-
-        return UploadResult(
-            relative_path=relative_path,
-            status_code=response.status_code,
-            pulp_href=pulp_href,
-        )
 
     def upload_content(
         self,
