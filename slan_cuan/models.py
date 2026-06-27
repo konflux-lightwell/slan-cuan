@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -258,6 +259,14 @@ class MavenArtifact:
         )
 
     @property
+    def is_metadata(self) -> bool:
+        """True for Maven metadata XML files."""
+        return (
+            self.extension == "xml"
+            and self.file_path.name == "maven-metadata.xml"
+        )
+
+    @property
     def is_signable(self) -> bool:
         """True for JARs and POMs (sign stage filter)."""
         return self.extension in ("jar", "pom")
@@ -317,14 +326,38 @@ class BuildOutput:
                 rel_to_repo = file_path.relative_to(repo_dir)
                 parts_list = list(rel_to_repo.parts)
 
-                # Need at least: group/artifact_id/version/filename (4 parts)
-                if len(parts_list) < 4:
-                    continue
-
                 filename = parts_list[-1]
-                version = parts_list[-2]
-                artifact_id = parts_list[-3]
-                group_id = ".".join(parts_list[:-3])
+
+                if filename == "maven-metadata.xml":
+                    # Maven metadata can appear at two levels:
+                    #   Artifact: group/.../artifact_id/maven-metadata.xml
+                    #   Version:  group/.../artifact_id/version/maven-metadata.xml
+                    # PNC produces releases (not SNAPSHOTs), so artifact-level
+                    # is expected. Use Pulp's heuristic: if second-to-last
+                    # segment looks like a version, treat as version-level.
+                    _VERSION_RE = re.compile(
+                        r"\d+(\.\d+)?(\.\d+)?([.-][a-zA-Z0-9]+)*$"
+                    )
+                    candidate = parts_list[-2] if len(parts_list) >= 4 else ""
+                    if candidate and _VERSION_RE.match(candidate):
+                        # Version-level metadata (SNAPSHOT case)
+                        version = candidate
+                        artifact_id = parts_list[-3]
+                        group_id = ".".join(parts_list[:-3])
+                    elif len(parts_list) >= 3:
+                        # Artifact-level metadata (expected case)
+                        version = ""
+                        artifact_id = parts_list[-2]
+                        group_id = ".".join(parts_list[:-2])
+                    else:
+                        continue
+                else:
+                    # Versioned artifacts: group/.../artifact_id/version/filename
+                    if len(parts_list) < 4:
+                        continue
+                    version = parts_list[-2]
+                    artifact_id = parts_list[-3]
+                    group_id = ".".join(parts_list[:-3])
 
                 if not group_id:
                     continue

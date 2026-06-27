@@ -45,7 +45,9 @@ def _setup_client_mock(mock_client: Mock) -> None:
     mock_client.modify_repository.return_value = _MODIFY_RESULT
 
 
-def create_test_artifact_dir(base_dir: Path) -> Path:
+def create_test_artifact_dir(
+    base_dir: Path, *, include_metadata: bool = False
+) -> Path:
     """Create a directory that mimics the extract stage output."""
     deliverable_dir = base_dir / "TEST-build-output"
     repo_dir = (
@@ -54,6 +56,12 @@ def create_test_artifact_dir(base_dir: Path) -> Path:
     repo_dir.mkdir(parents=True)
     (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
     (repo_dir / "artifact-1.0.0.pom").write_text("<project/>")
+
+    if include_metadata:
+        metadata_dir = (
+            deliverable_dir / "repository" / "org" / "example" / "artifact"
+        )
+        (metadata_dir / "maven-metadata.xml").write_text("<metadata/>")
 
     # Create extract-result.json
     extract_result = {
@@ -238,7 +246,7 @@ def test_publish_missing_extract_result(tmp_path: Path) -> None:
 
 @patch("slan_cuan.publish.PulpMavenClient")
 def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> None:
-    """Mock PulpMavenClient, verify upload_content and modify_repository called."""
+    """Mock client, verify upload_content and modify_repository."""
     artifact_dir = create_test_artifact_dir(tmp_path)
 
     mock_client = _make_ctx_mock()
@@ -298,6 +306,51 @@ def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> Non
         "/api/v3/repositories/maven/maven/abc/versions/1/"
     )
     assert len(publish_result["content_unit_hrefs"]) == 2
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_routes_metadata_to_upload_metadata(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """maven-metadata.xml routed to upload_metadata, others to upload_content."""
+    artifact_dir = create_test_artifact_dir(tmp_path, include_metadata=True)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+    mock_client.upload_metadata = Mock(return_value=_CONTENT_UNIT)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # jar + pom go to upload_content
+    assert mock_client.upload_content.call_count == 2
+
+    # maven-metadata.xml goes to upload_metadata
+    assert mock_client.upload_metadata.call_count == 1
+    metadata_call = mock_client.upload_metadata.call_args
+    assert metadata_call.kwargs["filename"] == "maven-metadata.xml"
+
+    assert "Published: 3 artifact(s) uploaded" in result.output
 
 
 def test_publish_env_var_precedence(tmp_path: Path) -> None:

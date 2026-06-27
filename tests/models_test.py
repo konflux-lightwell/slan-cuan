@@ -354,7 +354,7 @@ class TestOCIManifest:
 
     def test_direct_construction(self) -> None:
         """Construct OCIManifest directly with all fields."""
-        raw_data = {"test": "data"}
+        raw_data: dict[str, object] = {"test": "data"}
         layer = LayerInfo(
             digest="sha256:abc123",
             media_type="application/vnd.oci.image.layer.v1.tar",
@@ -699,6 +699,124 @@ class TestBuildOutput:
         # Find primary jar
         primary_jar = next(a for a in build.artifacts if a.classifier is None)
         assert primary_jar.extension == "jar"
+
+    def test_metadata_xml_parsing(self, tmp_path: Path) -> None:
+        """maven-metadata.xml parsed with correct GAV (no version dir)."""
+        deliverable_dir = tmp_path / "TEST-build-output"
+        repo_dir = (
+            deliverable_dir
+            / "repository"
+            / "com"
+            / "fasterxml"
+            / "jackson"
+            / "module"
+        )
+
+        # Versioned artifact
+        version_dir = repo_dir / "jackson-module-parameter-names" / "2.8.11"
+        version_dir.mkdir(parents=True)
+        (version_dir / "jackson-module-parameter-names-2.8.11.jar").write_text(
+            "jar"
+        )
+
+        # Metadata XML (sits at artifact_id level, no version dir)
+        metadata_dir = repo_dir / "jackson-module-parameter-names"
+        (metadata_dir / "maven-metadata.xml").write_text("<metadata/>")
+
+        result = ExtractResult(
+            image=ImageReference(
+                registry="quay.io",
+                repository="test/image",
+                tag=None,
+                digest="sha256:abc123",
+            ),
+            manifest_digest="sha256:manifest123",
+            layers=[],
+            annotations={},
+            deliverable_dir="TEST-build-output",
+            files=[],
+            extracted_at="2026-06-27T12:00:00Z",
+        )
+
+        build = BuildOutput.from_extract_result(result, tmp_path)
+
+        metadata = [a for a in build.artifacts if a.is_metadata]
+        assert len(metadata) == 1
+        m = metadata[0]
+        assert m.group_id == "com.fasterxml.jackson.module"
+        assert m.artifact_id == "jackson-module-parameter-names"
+        assert m.version == ""
+        assert m.extension == "xml"
+
+        jars = [a for a in build.artifacts if a.extension == "jar"]
+        assert len(jars) == 1
+        assert jars[0].group_id == "com.fasterxml.jackson.module"
+        assert jars[0].artifact_id == "jackson-module-parameter-names"
+        assert jars[0].version == "2.8.11"
+
+    def test_metadata_xml_version_level(self, tmp_path: Path) -> None:
+        """Version-level maven-metadata.xml parsed with correct GAV."""
+        deliverable_dir = tmp_path / "TEST-build-output"
+        repo_dir = deliverable_dir / "repository" / "com" / "example"
+
+        # Version-level metadata (SNAPSHOT case)
+        snapshot_dir = repo_dir / "artifact" / "1.0.0-SNAPSHOT"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "maven-metadata.xml").write_text("<metadata/>")
+
+        result = ExtractResult(
+            image=ImageReference(
+                registry="quay.io",
+                repository="test/image",
+                tag=None,
+                digest="sha256:abc123",
+            ),
+            manifest_digest="sha256:manifest123",
+            layers=[],
+            annotations={},
+            deliverable_dir="TEST-build-output",
+            files=[],
+            extracted_at="2026-06-27T12:00:00Z",
+        )
+
+        build = BuildOutput.from_extract_result(result, tmp_path)
+
+        metadata = [a for a in build.artifacts if a.is_metadata]
+        assert len(metadata) == 1
+        m = metadata[0]
+        assert m.group_id == "com.example"
+        assert m.artifact_id == "artifact"
+        assert m.version == "1.0.0-SNAPSHOT"
+
+    def test_is_metadata_property(self, tmp_path: Path) -> None:
+        """is_metadata returns True for XML, False for others."""
+        xml_artifact = MavenArtifact(
+            relative_path="com/example/artifact/maven-metadata.xml",
+            file_path=tmp_path / "maven-metadata.xml",
+            group_id="com.example",
+            artifact_id="artifact",
+            version="",
+            classifier=None,
+            extension="xml",
+            md5=None,
+            sha1=None,
+            sha256=None,
+        )
+        jar_artifact = MavenArtifact(
+            relative_path="com/example/artifact/1.0.0/artifact-1.0.0.jar",
+            file_path=tmp_path / "artifact-1.0.0.jar",
+            group_id="com.example",
+            artifact_id="artifact",
+            version="1.0.0",
+            classifier=None,
+            extension="jar",
+            md5=None,
+            sha1=None,
+            sha256=None,
+        )
+
+        assert xml_artifact.is_metadata is True
+        assert jar_artifact.is_metadata is False
 
 
 class TestPublishResult:

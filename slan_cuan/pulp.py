@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ssl
 import time
 from dataclasses import dataclass
@@ -11,7 +12,12 @@ from types import TracebackType
 import httpx
 
 # Content API URL path templates
-CONTENT_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/content/maven/artifact/upload/"
+CONTENT_API_PATH_TEMPLATE = (
+    "/api/pulp/{domain}/api/v3/content/maven/artifact/upload/"
+)
+METADATA_API_PATH_TEMPLATE = (
+    "/api/pulp/{domain}/api/v3/content/maven/metadata/upload/"
+)
 REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/maven/maven/"
 
 # Task polling configuration
@@ -297,6 +303,123 @@ class PulpMavenClient:
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse content unit response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+    def upload_metadata(
+        self,
+        file_path: Path,
+        relative_path: str,
+        group_id: str = "",
+        artifact_id: str = "",
+        version: str = "",
+        filename: str = "",
+    ) -> ContentUnit:
+        """Upload a Maven metadata XML file as a MavenMetadata content unit.
+
+        Posts the file to the metadata content API endpoint, which
+        expects a sha256 digest computed from the file contents.
+
+        Args:
+            file_path: Local path to the metadata file.
+            relative_path: Maven repository-layout path.
+            group_id: Maven group ID.
+            artifact_id: Maven artifact ID.
+            version: Maven version (optional for metadata).
+            filename: Filename of the metadata file.
+
+        Returns:
+            ContentUnit with pulp_href and parsed coordinates.
+
+        Raises:
+            PulpError: If the upload fails or domain is not set.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for content API uploads. Set --pulp-domain.",
+                status_code=0,
+                response_body="",
+            )
+
+        url = METADATA_API_PATH_TEMPLATE.format(domain=self._config.domain)
+
+        file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+
+        data: dict[str, str] = {
+            "relative_path": relative_path,
+            "sha256": file_hash,
+        }
+        if group_id:
+            data["group_id"] = group_id
+        if artifact_id:
+            data["artifact_id"] = artifact_id
+        if version:
+            data["version"] = version
+        if filename:
+            data["filename"] = filename
+
+        try:
+            with file_path.open("rb") as f:
+                files = {
+                    "file": (
+                        file_path.name,
+                        f,
+                        "application/octet-stream",
+                    ),
+                }
+                response = self._client.post(
+                    url,
+                    data=data,
+                    files=files,
+                )
+        except httpx.ConnectError as e:
+            raise PulpError(
+                f"Connection failed: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+        except httpx.TimeoutException as e:
+            raise PulpError(
+                f"Request timed out: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+
+        if response.status_code >= 400:
+            body = response.text
+            summary = body[:ERROR_BODY_MAX_LENGTH]
+            if len(body) > ERROR_BODY_MAX_LENGTH:
+                summary += "... (truncated)"
+            raise PulpError(
+                f"Metadata upload failed ({response.status_code}): {summary}",
+                status_code=response.status_code,
+                response_body=body,
+            )
+
+        try:
+            response_data = response.json()
+            if not isinstance(response_data, dict):
+                raise PulpError(
+                    "Metadata API returned non-dict response",
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+            return ContentUnit(
+                pulp_href=str(response_data["pulp_href"]),
+                relative_path=str(
+                    response_data.get("relative_path", relative_path)
+                ),
+                group_id=str(response_data.get("group_id") or group_id),
+                artifact_id=str(response_data.get("artifact_id") or artifact_id),
+                version=str(response_data.get("version") or version),
+                filename=str(response_data.get("filename") or filename),
+            )
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse metadata response: {e}",
                 status_code=response.status_code,
                 response_body=response.text,
             ) from e

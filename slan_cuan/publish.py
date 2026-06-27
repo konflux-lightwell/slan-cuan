@@ -267,7 +267,12 @@ def publish(
                 if ctx.verbose:
                     click.echo(f"Uploading: {artifact.relative_path}")
 
-                content_unit = client.upload_content(
+                upload = (
+                    client.upload_metadata
+                    if artifact.is_metadata
+                    else client.upload_content
+                )
+                content_unit = upload(
                     file_path=artifact.file_path,
                     relative_path=artifact.relative_path,
                     group_id=artifact.group_id,
@@ -284,9 +289,7 @@ def publish(
 
             if content_unit_hrefs:
                 if ctx.verbose:
-                    click.echo(
-                        f"Resolving repository: {pulp_repository}"
-                    )
+                    click.echo(f"Resolving repository: {pulp_repository}")
                 repo_href = client.resolve_repository(pulp_repository)
 
                 if ctx.verbose:
@@ -300,9 +303,7 @@ def publish(
                 repository_version = modify_result.repository_version
 
                 if ctx.verbose:
-                    click.echo(
-                        f"  -> repository version: {repository_version}"
-                    )
+                    click.echo(f"  -> repository version: {repository_version}")
 
         publish_result = PublishResult(
             pulp_url=pulp_url,
