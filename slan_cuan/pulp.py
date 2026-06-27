@@ -220,18 +220,20 @@ class PulpMavenClient:
         else:
             url = f"{MAVEN_DEPLOY_PATH}{self._distribution}/{relative_path}"
 
+        full_url = str(self._client.base_url) + url
+
         try:
             with file_path.open("rb") as f:
                 response = self._client.put(url, content=f)
         except httpx.ConnectError as e:
             raise PulpError(
-                f"Connection failed: {e}",
+                f"Connection failed to '{full_url}': {e}",
                 status_code=0,
                 response_body="",
             ) from e
         except httpx.TimeoutException as e:
             raise PulpError(
-                f"Request timed out: {e}",
+                f"Request timed out for '{full_url}': {e}",
                 status_code=0,
                 response_body="",
             ) from e
@@ -242,7 +244,7 @@ class PulpMavenClient:
                 raise PulpError(
                     f"Distribution "
                     f"'{self._distribution}' "
-                    f"not found (404). "
+                    f"not found (404) at '{full_url}'. "
                     f"Check --pulp-repository.",
                     status_code=response.status_code,
                     response_body=body,
@@ -251,7 +253,8 @@ class PulpMavenClient:
             if len(body) > ERROR_BODY_MAX_LENGTH:
                 summary += "... (truncated)"
             raise PulpError(
-                f"Upload failed ({response.status_code}): {summary}",
+                f"Upload failed ({response.status_code}) "
+                f"for '{full_url}': {summary}",
                 status_code=response.status_code,
                 response_body=body,
             )
