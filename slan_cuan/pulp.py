@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import ssl
 import time
 from dataclasses import dataclass
@@ -196,6 +197,7 @@ class PulpMavenClient:
         version: str = "",
         filename: str = "",
         repository_href: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> ContentUnit:
         """Upload a file and create a Maven content unit in one step.
 
@@ -211,6 +213,7 @@ class PulpMavenClient:
             filename: Filename of the artifact.
             repository_href: Optional repository href to associate
                 the content unit with during creation.
+            labels: Optional dict of labels to attach to the content unit.
 
         Returns:
             ContentUnit with pulp_href and parsed GAV coordinates.
@@ -242,6 +245,8 @@ class PulpMavenClient:
         if repository_href:
             data["repository"] = repository_href
             data["overwrite"] = "true"
+        if labels:
+            data["pulp_labels"] = json.dumps(labels)
 
         try:
             with file_path.open("rb") as f:
@@ -315,6 +320,7 @@ class PulpMavenClient:
         artifact_id: str = "",
         version: str = "",
         filename: str = "",
+        labels: dict[str, str] | None = None,
     ) -> ContentUnit:
         """Upload a Maven metadata XML file as a MavenMetadata content unit.
 
@@ -328,6 +334,7 @@ class PulpMavenClient:
             artifact_id: Maven artifact ID.
             version: Maven version (optional for metadata).
             filename: Filename of the metadata file.
+            labels: Optional dict of labels to attach to the content unit.
 
         Returns:
             ContentUnit with pulp_href and parsed coordinates.
@@ -359,6 +366,8 @@ class PulpMavenClient:
             data["version"] = version
         if filename:
             data["filename"] = filename
+        if labels:
+            data["pulp_labels"] = json.dumps(labels)
 
         try:
             with file_path.open("rb") as f:

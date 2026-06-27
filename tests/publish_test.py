@@ -1174,6 +1174,242 @@ def test_publish_verbose_diagnoses_missing_repo_dir(tmp_path: Path) -> None:
     assert "cyclonedx.json" in result.output
 
 
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_passes_labels_to_upload(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Mock client, verify upload_content receives labels kwarg."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify upload_content was called with labels
+    assert mock_client.upload_content.call_count == 2
+    for call in mock_client.upload_content.call_args_list:
+        labels = call.kwargs.get("labels")
+        assert labels is not None
+        assert labels["build_id"] == "TEST"
+        assert labels["source_image_digest"] == "sha256:abc123"
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_labels_with_none_digest(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Extract result with None digest uses empty string fallback."""
+    deliverable_dir = tmp_path / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
+
+    # Create extract-result.json with digest=None
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": "latest",
+            "digest": None,
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-06-22T12:00:00Z",
+    }
+    (tmp_path / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(tmp_path),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify labels have empty string for source_image_digest
+    for call in mock_client.upload_content.call_args_list:
+        labels = call.kwargs.get("labels")
+        assert labels is not None
+        assert labels["build_id"] == "TEST"
+        assert labels["source_image_digest"] == ""
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_labels_in_publish_result(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """After publish, publish-result.json contains pulp_labels."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Read publish-result.json
+    publish_result_path = artifact_dir / "publish-result.json"
+    assert publish_result_path.exists()
+
+    with publish_result_path.open() as f:
+        publish_result = json.load(f)
+
+    assert "pulp_labels" in publish_result
+    assert publish_result["pulp_labels"]["build_id"] == "TEST"
+    assert publish_result["pulp_labels"]["source_image_digest"] == "sha256:abc123"
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_verbose_shows_labels(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With --verbose, verify labels appear in output."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--verbose",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Pulp labels:" in result.output
+    assert "TEST" in result.output
+    assert "sha256:abc123" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_writes_pulp_labels_tekton_result(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With --tekton-results-dir, verify PULP_LABELS file is created."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    results_dir = tmp_path / "results"
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify PULP_LABELS file was created
+    labels_file = results_dir / "PULP_LABELS"
+    assert labels_file.exists()
+
+    # Verify content is valid JSON
+    labels_data = json.loads(labels_file.read_text())
+    assert labels_data["build_id"] == "TEST"
+    assert labels_data["source_image_digest"] == "sha256:abc123"
+
+
 def test_publish_env_var_pulp_domain(tmp_path: Path) -> None:
     """Set SLAN_CUAN_PUBLISH_PULP_DOMAIN env var, verify it propagates."""
     artifact_dir = create_test_artifact_dir(tmp_path)

@@ -105,6 +105,10 @@ spec:
       properties:
         uri: {}
         digest: {}
+    - name: PULP_LABELS
+      description: >-
+        JSON object with build_id and source_image_digest labels
+        attached to each Pulp content unit.
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir

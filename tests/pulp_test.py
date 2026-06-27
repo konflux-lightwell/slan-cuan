@@ -675,6 +675,105 @@ class TestUploadContent:
         assert exc_info.value.status_code == 0
         assert "Request timed out" in exc_info.value.message
 
+    def test_upload_content_with_labels(self, tmp_path: Path) -> None:
+        """Call upload_content with labels, verify pulp_labels field in body."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        captured_body = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            captured_body = request.content.decode("utf-8", errors="replace")
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/abc/",
+                    "relative_path": "org/example/test.jar",
+                    "group_id": "org.example",
+                    "artifact_id": "test",
+                    "version": "1.0.0",
+                    "filename": "test.jar",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_content(
+            artifact_file,
+            "org/example/test.jar",
+            labels={"build_id": "ABC", "source_image_digest": "sha256:def"},
+        )
+
+        assert captured_body is not None
+        assert 'name="pulp_labels"' in captured_body
+
+        # Extract JSON value from multipart body
+        import re
+
+        pattern = r'name="pulp_labels".*?\r\n\r\n(.*?)\r\n--'
+        match = re.search(pattern, captured_body, re.DOTALL)
+        assert match is not None
+        labels_json = match.group(1)
+        decoded_labels = json.loads(labels_json)
+        assert decoded_labels == {
+            "build_id": "ABC",
+            "source_image_digest": "sha256:def",
+        }
+
+    def test_upload_content_without_labels(self, tmp_path: Path) -> None:
+        """Call upload_content without labels, verify no pulp_labels field."""
+        artifact_file = tmp_path / "test.jar"
+        artifact_file.write_text("jar content")
+
+        captured_body = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            captured_body = request.content.decode("utf-8", errors="replace")
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/abc/",
+                    "relative_path": "org/example/test.jar",
+                    "group_id": "org.example",
+                    "artifact_id": "test",
+                    "version": "1.0.0",
+                    "filename": "test.jar",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_content(artifact_file, "org/example/test.jar")
+
+        assert captured_body is not None
+        assert 'name="pulp_labels"' not in captured_body
+
 
 class TestUploadMetadata:
     """Tests for upload_metadata() method."""
@@ -863,6 +962,64 @@ class TestUploadMetadata:
             )
 
         assert "Domain is required" in exc_info.value.message
+
+    def test_upload_metadata_with_labels(self, tmp_path: Path) -> None:
+        """Call upload_metadata with labels, verify pulp_labels field in body."""
+        metadata_file = tmp_path / "maven-metadata.xml"
+        metadata_file.write_text("<metadata/>")
+
+        captured_body = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            captured_body = request.content.decode("utf-8", errors="replace")
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/content/maven/metadata/abc/",
+                    "relative_path": "com/example/artifact/maven-metadata.xml",
+                    "group_id": "com.example",
+                    "artifact_id": "artifact",
+                    "version": "",
+                    "filename": "maven-metadata.xml",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        client.upload_metadata(
+            metadata_file,
+            "com/example/artifact/maven-metadata.xml",
+            labels={"build_id": "ABC", "source_image_digest": "sha256:def"},
+        )
+
+        assert captured_body is not None
+        assert 'name="pulp_labels"' in captured_body
+
+        # Extract JSON value from multipart body
+        import re
+
+        pattern = r'name="pulp_labels".*?\r\n\r\n(.*?)\r\n--'
+        match = re.search(pattern, captured_body, re.DOTALL)
+        assert match is not None
+        labels_json = match.group(1)
+        decoded_labels = json.loads(labels_json)
+        assert decoded_labels == {
+            "build_id": "ABC",
+            "source_image_digest": "sha256:def",
+        }
 
 
 class TestPollTask:
