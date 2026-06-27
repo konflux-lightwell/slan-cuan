@@ -66,6 +66,7 @@ ban-relative-imports = "all"
 testpaths = ["slan_cuan", "tests"]
 python_files = ["*_test.py"]
 addopts = ["--import-mode=importlib"]
+markers = ["functional: runs against a real Pulp instance (requires env vars)"]
 
 #
 # Poe the Poet — task runner

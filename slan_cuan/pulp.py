@@ -11,7 +11,7 @@ from types import TracebackType
 import httpx
 
 # Content API URL path templates
-CONTENT_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/content/maven/artifact/"
+CONTENT_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/content/maven/artifact/upload/"
 REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/maven/maven/"
 
 # Task polling configuration
