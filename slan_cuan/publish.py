@@ -255,11 +255,9 @@ def publish(
         content_unit_hrefs: list[str] = []
 
         pulp_labels: dict[str, str] = {
-            "build_id": build.build_id,
-            "source_image_digest": extract_result.image.digest or "",
+            "source_image": str(extract_result.image),
         }
-        if ctx.verbose:
-            click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
+        click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
 
         with PulpMavenClient(config, pulp_repository) as client:
             for artifact in build.artifacts:

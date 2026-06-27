@@ -107,8 +107,8 @@ spec:
         digest: {}
     - name: PULP_LABELS
       description: >-
-        JSON object with build_id and source_image_digest labels
-        attached to each Pulp content unit.
+        JSON object with source_image label (fully qualified
+        OCI reference) attached to each Pulp content unit.
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir

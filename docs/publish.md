@@ -15,6 +15,20 @@ When `--pulp-domain` is set, the deploy URL includes the domain segment (`/pulp/
 
 The artifact directory must be the output of the `extract` stage, containing a valid `extract-result.json`.
 
+## Pulp Labels
+
+Every content unit uploaded to Pulp is tagged with a `pulp_labels` metadata field containing the fully qualified OCI image reference of the source container:
+
+```json
+{"source_image": "quay.io/light-castle/example@sha256:abc123..."}
+```
+
+Labels are always attached — no flag is needed. The value is the `str()` representation of the `ImageReference` parsed during the extract stage, which includes registry, repository, and digest (or tag when digest is unavailable).
+
+Labels are also:
+- Persisted in `publish-result.json` under the `pulp_labels` key
+- Exposed as a `PULP_LABELS` Tekton result for downstream pipeline tasks
+
 ## Options
 
 | Flag | Type | Required | Default | Description |

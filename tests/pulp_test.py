@@ -714,7 +714,9 @@ class TestUploadContent:
         client.upload_content(
             artifact_file,
             "org/example/test.jar",
-            labels={"build_id": "ABC", "source_image_digest": "sha256:def"},
+            labels={
+                "source_image": "quay.io/test/image@sha256:def",
+            },
         )
 
         assert captured_body is not None
@@ -729,8 +731,7 @@ class TestUploadContent:
         labels_json = match.group(1)
         decoded_labels = json.loads(labels_json)
         assert decoded_labels == {
-            "build_id": "ABC",
-            "source_image_digest": "sha256:def",
+            "source_image": "quay.io/test/image@sha256:def",
         }
 
     def test_upload_content_without_labels(self, tmp_path: Path) -> None:
@@ -1002,7 +1003,9 @@ class TestUploadMetadata:
         client.upload_metadata(
             metadata_file,
             "com/example/artifact/maven-metadata.xml",
-            labels={"build_id": "ABC", "source_image_digest": "sha256:def"},
+            labels={
+                "source_image": "quay.io/test/image@sha256:def",
+            },
         )
 
         assert captured_body is not None
@@ -1017,8 +1020,7 @@ class TestUploadMetadata:
         labels_json = match.group(1)
         decoded_labels = json.loads(labels_json)
         assert decoded_labels == {
-            "build_id": "ABC",
-            "source_image_digest": "sha256:def",
+            "source_image": "quay.io/test/image@sha256:def",
         }
 
 
