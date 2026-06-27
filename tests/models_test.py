@@ -890,3 +890,35 @@ class TestPublishResult:
         assert loaded.coordinates[0].artifact_id == "artifact1"
         assert loaded.coordinates[1].artifact_id == "artifact2"
         assert loaded.published_at == original.published_at
+
+    def test_from_file_without_pulp_labels(self, tmp_path: Path) -> None:
+        """from_file() handles old JSON without pulp_labels field."""
+        from slan_cuan.models import PublishResult
+
+        old_json = {
+            "pulp_url": "https://pulp.example.com",
+            "distribution": "test-repo",
+            "artifacts_uploaded": 5,
+            "artifacts_skipped": 0,
+            "coordinates": [
+                {
+                    "group_id": "org.example",
+                    "artifact_id": "test",
+                    "version": "1.0.0",
+                }
+            ],
+            "published_at": "2026-06-22T12:00:00Z",
+            "repository_version": (
+                "/api/v3/repositories/maven/maven/abc/versions/1/"
+            ),
+            "content_unit_hrefs": ["/api/v3/content/abc/"],
+        }
+
+        file_path = tmp_path / "old-publish-result.json"
+        file_path.write_text(json.dumps(old_json))
+
+        loaded = PublishResult.from_file(file_path)
+
+        assert loaded.pulp_labels is None
+        assert loaded.pulp_url == "https://pulp.example.com"
+        assert loaded.artifacts_uploaded == 5

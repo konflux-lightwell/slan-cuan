@@ -504,6 +504,7 @@ class PublishResult:
     published_at: str
     repository_version: str | None = None
     content_unit_hrefs: tuple[str, ...] = ()
+    pulp_labels: dict[str, str] | None = None
 
     def to_json(self) -> str:
         """Serialize to JSON string."""
@@ -538,6 +539,7 @@ class PublishResult:
         content_unit_hrefs = (
             tuple(content_unit_hrefs_raw) if content_unit_hrefs_raw else ()
         )
+        pulp_labels = data.get("pulp_labels")
 
         return cls(
             pulp_url=data["pulp_url"],
@@ -548,6 +550,7 @@ class PublishResult:
             published_at=data["published_at"],
             repository_version=repository_version,
             content_unit_hrefs=content_unit_hrefs,
+            pulp_labels=pulp_labels,
         )
 
 

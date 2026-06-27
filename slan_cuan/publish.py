@@ -254,6 +254,13 @@ def publish(
         repository_version = None
         content_unit_hrefs: list[str] = []
 
+        pulp_labels: dict[str, str] = {
+            "build_id": build.build_id,
+            "source_image_digest": extract_result.image.digest or "",
+        }
+        if ctx.verbose:
+            click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
+
         with PulpMavenClient(config, pulp_repository) as client:
             for artifact in build.artifacts:
                 if not artifact.file_path.exists():
@@ -279,6 +286,7 @@ def publish(
                     artifact_id=artifact.artifact_id,
                     version=artifact.version,
                     filename=artifact.file_path.name,
+                    labels=pulp_labels,
                 )
 
                 if ctx.verbose:
@@ -314,6 +322,7 @@ def publish(
             published_at=datetime.now(timezone.utc).isoformat(),
             repository_version=repository_version,
             content_unit_hrefs=tuple(content_unit_hrefs),
+            pulp_labels=pulp_labels,
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
@@ -335,6 +344,11 @@ def publish(
             ctx.tekton_results_dir,
             "PUBLISHED_ARTIFACT_OUTPUTS",
             json.dumps(artifact_outputs),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "PULP_LABELS",
+            json.dumps(pulp_labels),
         )
 
         click.echo(
