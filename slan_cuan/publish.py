@@ -22,7 +22,7 @@ _DIAG_MAX_ENTRIES = 50
 
 
 def _list_entries(path: Path, recursive: bool = False) -> None:
-    """List directory contents for diagnostics, capped at _DIAG_MAX_ENTRIES."""
+    """List directory contents for diagnostics, capped."""
     try:
         if recursive:
             entries = sorted(e for e in path.rglob("*") if e.is_file())

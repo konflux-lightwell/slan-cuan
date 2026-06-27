@@ -90,6 +90,16 @@ This project uses **progressive disclosure** with three layers:
 
 **This file (`CLAUDE.md`) follows the same rule.** Once `CONTRIBUTING.md` and `docs/` exist, move detailed content there and replace it here with links to the specific headers (e.g., `[CLI Structure](CONTRIBUTING.md#cli-structure)`, `[Konflux Integration](docs/tekton.md#konflux-integration)`). The `CLAUDE.md` should contain only what Claude Code needs beyond what those files already provide.
 
+## Code Formatting
+
+**Before every commit**, run `ruff check --fix . && ruff format .` (or the
+equivalent `poe fmt && poe format-fix`) to fix lint and formatting issues.
+Always verify with `ruff check . && ruff format --check .` afterwards. Never
+commit code that fails these checks.
+
+If a virtual environment exists at `.venv/`, use `.venv/bin/ruff`; otherwise
+fall back to `uvx ruff`.
+
 ## Naming Convention
 
 The Lightwell project uses an Irish mythology naming convention:
