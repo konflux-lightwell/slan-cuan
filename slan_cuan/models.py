@@ -261,9 +261,9 @@ class MavenArtifact:
     @property
     def is_metadata(self) -> bool:
         """True for Maven metadata XML files."""
-        return (
-            self.extension == "xml"
-            and self.file_path.name == "maven-metadata.xml"
+        name = self.file_path.name
+        return name == "maven-metadata.xml" or name.startswith(
+            "maven-metadata.xml."
         )
 
     @property
@@ -319,16 +319,15 @@ class BuildOutput:
             for file_path in sorted(repo_dir.rglob("*")):
                 if not file_path.is_file():
                     continue
-                # Skip checksum sidecar files
-                if file_path.suffix in (".md5", ".sha1", ".sha256"):
-                    continue
 
                 rel_to_repo = file_path.relative_to(repo_dir)
                 parts_list = list(rel_to_repo.parts)
 
                 filename = parts_list[-1]
 
-                if filename == "maven-metadata.xml":
+                if filename == "maven-metadata.xml" or filename.startswith(
+                    "maven-metadata.xml."
+                ):
                     # Maven metadata can appear at two levels:
                     #   Artifact: group/.../artifact_id/maven-metadata.xml
                     #   Version:  group/.../artifact_id/version/maven-metadata.xml
