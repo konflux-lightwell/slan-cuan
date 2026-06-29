@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,11 +15,13 @@ from slan_cuan.models import (
     PUBLISH_RESULT_FILENAME,
     BuildOutput,
     ExtractResult,
+    MavenArtifact,
     PublishResult,
 )
-from slan_cuan.pulp import PulpConfig, PulpError, PulpMavenClient
+from slan_cuan.pulp import ContentUnit, PulpConfig, PulpError, PulpMavenClient
 
 _DIAG_MAX_ENTRIES = 50
+DEFAULT_UPLOAD_WORKERS = 4
 
 
 def _list_entries(path: Path, recursive: bool = False) -> None:
@@ -71,6 +74,32 @@ def _diagnose_empty_build(artifact_dir: Path, deliverable_dir: str) -> None:
     click.echo("  WARNING: repository/ exists but contains no Maven artifacts")
     click.echo(f"  Contents of {repo_dir}:")
     _list_entries(repo_dir, recursive=True)
+
+
+def _upload_one(
+    client: PulpMavenClient,
+    artifact: MavenArtifact,
+    labels: dict[str, str],
+    verbose: bool,
+) -> ContentUnit:
+    """Upload a single artifact. Runs in a worker thread."""
+    if verbose:
+        click.echo(f"Uploading: {artifact.relative_path}")
+    upload = (
+        client.upload_metadata if artifact.is_metadata else client.upload_content
+    )
+    content_unit = upload(
+        file_path=artifact.file_path,
+        relative_path=artifact.relative_path,
+        group_id=artifact.group_id,
+        artifact_id=artifact.artifact_id,
+        version=artifact.version,
+        filename=artifact.file_path.name,
+        labels=labels,
+    )
+    if verbose:
+        click.echo(f"  -> {content_unit.pulp_href}")
+    return content_unit
 
 
 @click.command()
@@ -137,6 +166,13 @@ def _diagnose_empty_build(artifact_dir: Path, deliverable_dir: str) -> None:
     type=str,
     help="Pulp domain for hosted content API (e.g. 'lightwell').",
 )
+@click.option(
+    "--upload-workers",
+    type=click.IntRange(min=1),
+    default=DEFAULT_UPLOAD_WORKERS,
+    show_default=True,
+    help="Number of concurrent upload threads.",
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -150,6 +186,7 @@ def publish(
     pulp_client_cert: Path | None,
     pulp_client_key: Path | None,
     pulp_domain: str,
+    upload_workers: int,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -195,6 +232,7 @@ def publish(
             click.echo(f"Auth type: {pulp_auth_type}")
             click.echo(f"Artifacts: {len(build.artifacts)}")
             click.echo(f"Coordinates: {len(build.coordinates)}")
+            click.echo(f"Upload workers: {upload_workers}")
             for artifact in build.artifacts:
                 click.echo(f"  {artifact.relative_path}")
             click.echo(
@@ -248,6 +286,7 @@ def publish(
                 click.echo(f"Client certificate: {pulp_client_cert}")
             if pulp_client_key:
                 click.echo(f"Client key: {pulp_client_key}")
+            click.echo(f"Upload workers: {upload_workers}")
 
         uploaded = 0
         skipped = 0
@@ -260,6 +299,7 @@ def publish(
         click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
 
         with PulpMavenClient(config, pulp_repository) as client:
+            uploadable: list[MavenArtifact] = []
             for artifact in build.artifacts:
                 if not artifact.file_path.exists():
                     click.echo(
@@ -267,31 +307,21 @@ def publish(
                         f"{artifact.relative_path}"
                     )
                     skipped += 1
-                    continue
+                else:
+                    uploadable.append(artifact)
 
-                if ctx.verbose:
-                    click.echo(f"Uploading: {artifact.relative_path}")
+            with ThreadPoolExecutor(max_workers=upload_workers) as executor:
+                future_to_artifact: dict[Future[ContentUnit], MavenArtifact] = {
+                    executor.submit(
+                        _upload_one, client, artifact, pulp_labels, ctx.verbose
+                    ): artifact
+                    for artifact in uploadable
+                }
 
-                upload = (
-                    client.upload_metadata
-                    if artifact.is_metadata
-                    else client.upload_content
-                )
-                content_unit = upload(
-                    file_path=artifact.file_path,
-                    relative_path=artifact.relative_path,
-                    group_id=artifact.group_id,
-                    artifact_id=artifact.artifact_id,
-                    version=artifact.version,
-                    filename=artifact.file_path.name,
-                    labels=pulp_labels,
-                )
-
-                if ctx.verbose:
-                    click.echo(f"  -> {content_unit.pulp_href}")
-
-                content_unit_hrefs.append(content_unit.pulp_href)
-                uploaded += 1
+                for future in as_completed(future_to_artifact):
+                    content_unit = future.result()
+                    content_unit_hrefs.append(content_unit.pulp_href)
+                    uploaded += 1
 
             if content_unit_hrefs:
                 if ctx.verbose:

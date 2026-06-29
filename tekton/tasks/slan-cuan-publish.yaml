@@ -65,6 +65,10 @@ spec:
       description: Path to the client key file inside the mounted secret.
       type: string
       default: ""
+    - name: UPLOAD_WORKERS
+      description: Number of concurrent upload threads.
+      type: string
+      default: "4"
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -183,6 +187,8 @@ spec:
           value: $(params.PULP_CLIENT_CERT_PATH)
         - name: SLAN_CUAN_PUBLISH_PULP_CLIENT_KEY
           value: $(params.PULP_CLIENT_KEY_PATH)
+        - name: SLAN_CUAN_PUBLISH_UPLOAD_WORKERS
+          value: $(params.UPLOAD_WORKERS)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
       volumeMounts:

@@ -43,6 +43,7 @@ Labels are also:
 | `--pulp-password` | string | When `tbr` | -- | Password for TBR basic auth |
 | `--pulp-client-cert` | path | When `cert` | -- | Client certificate for entitlement cert auth |
 | `--pulp-client-key` | path | When `cert` | -- | Client key for entitlement cert auth |
+| `--upload-workers` | integer | No | `4` | Number of concurrent upload threads |
 
 The `--insecure` flag is intended for development only. In production, use the global `--ca-cert` option for custom certificate authorities.
 
@@ -62,6 +63,7 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 | `--pulp-password` | `SLAN_CUAN_PUBLISH_PULP_PASSWORD` |
 | `--pulp-client-cert` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_CERT` |
 | `--pulp-client-key` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_KEY` |
+| `--upload-workers` | `SLAN_CUAN_PUBLISH_UPLOAD_WORKERS` |
 
 ## Authentication
 
@@ -117,6 +119,10 @@ Example with a custom CA:
 slan-cuan --ca-cert /etc/ssl/certs/lan-ca.crt \
     publish --pulp-url https://rachael.home.lan ...
 ```
+
+## Concurrent Uploads
+
+Artifact uploads run concurrently using a thread pool sized by `--upload-workers` (default: 4). The repository modification (`modify_repository`) remains a single sequential call after all uploads complete. Set `--upload-workers 1` for sequential behavior.
 
 ## Dry-Run Behavior
 
