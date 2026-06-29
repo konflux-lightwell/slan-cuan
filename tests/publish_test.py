@@ -1533,6 +1533,314 @@ def test_publish_env_var_pulp_domain(tmp_path: Path) -> None:
     assert config.domain == "testdomain"
 
 
+def test_publish_upload_workers_in_help() -> None:
+    """Verify --upload-workers appears in --help output."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+    assert result.exit_code == 0
+    assert "--upload-workers" in result.output
+
+
+def test_publish_upload_workers_default() -> None:
+    """Verify default value (4) appears in help."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+    assert result.exit_code == 0
+    assert "4" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_upload_workers_env_var(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Verify SLAN_CUAN_PUBLISH_UPLOAD_WORKERS env var is recognized."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+        env={"SLAN_CUAN_PUBLISH_UPLOAD_WORKERS": "2"},
+    )
+    assert result.exit_code == 0
+    assert mock_client.upload_content.call_count == 2
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_upload_workers_one_sequential(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With --upload-workers 1, verify single-threaded behavior."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--upload-workers",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Published: 2 artifact(s) uploaded" in result.output
+    assert mock_client.upload_content.call_count == 2
+    mock_client.resolve_repository.assert_called_once()
+    mock_client.modify_repository.assert_called_once()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_concurrent_upload_collects_all_hrefs(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Verify all content_unit_hrefs collected regardless of order."""
+    artifact_dir = create_test_artifact_dir(tmp_path, include_metadata=True)
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+
+    # Return distinct hrefs for each upload
+    hrefs = [
+        "/api/v3/content/maven/artifact/001/",
+        "/api/v3/content/maven/artifact/002/",
+        "/api/v3/content/maven/artifact/003/",
+    ]
+    call_count = 0
+
+    def _side_effect(**kwargs: object) -> ContentUnit:
+        nonlocal call_count
+        href = hrefs[call_count % len(hrefs)]
+        call_count += 1
+        return ContentUnit(
+            pulp_href=href,
+            relative_path=str(kwargs.get("relative_path", "")),
+            group_id=str(kwargs.get("group_id", "")),
+            artifact_id=str(kwargs.get("artifact_id", "")),
+            version=str(kwargs.get("version", "")),
+            filename=str(kwargs.get("filename", "")),
+        )
+
+    mock_client.upload_content.side_effect = _side_effect
+    mock_client.upload_metadata.side_effect = _side_effect
+    mock_client.resolve_repository.return_value = _REPO_HREF
+    mock_client.modify_repository.return_value = _MODIFY_RESULT
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--upload-workers",
+            "2",
+        ],
+    )
+    assert result.exit_code == 0
+
+    publish_result_path = artifact_dir / "publish-result.json"
+    with publish_result_path.open() as f:
+        publish_result = json.load(f)
+
+    assert len(publish_result["content_unit_hrefs"]) == 3
+    assert "Published: 3 artifact(s) uploaded" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_concurrent_upload_error_fails_fast(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """When upload fails, command fails and modify_repository not called."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+
+    mock_client.upload_content.side_effect = PulpError(
+        message="Upload failed: server error",
+        status_code=500,
+        response_body="",
+    )
+    mock_client.resolve_repository.return_value = _REPO_HREF
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--upload-workers",
+            "2",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Pulp error:" in result.output
+    mock_client.modify_repository.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+@patch("slan_cuan.publish.BuildOutput.from_extract_result")
+def test_publish_concurrent_skips_missing_before_pool(
+    mock_from_extract: Mock,
+    mock_client_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Missing files are filtered before the thread pool, not inside it."""
+    from slan_cuan.models import BuildOutput, MavenArtifact
+
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    missing = tmp_path / "nonexistent.jar"
+    existing_pom = (
+        artifact_dir
+        / "TEST-build-output"
+        / "repository"
+        / "org"
+        / "example"
+        / "artifact"
+        / "1.0.0"
+        / "artifact-1.0.0.pom"
+    )
+    mock_from_extract.return_value = BuildOutput(
+        build_id="TEST",
+        deliverable_dir=artifact_dir / "TEST-build-output",
+        artifacts=(
+            MavenArtifact(
+                relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar",
+                file_path=missing,
+                group_id="org.example",
+                artifact_id="artifact",
+                version="1.0.0",
+                classifier=None,
+                extension="jar",
+                md5=None,
+                sha1=None,
+                sha256=None,
+            ),
+            MavenArtifact(
+                relative_path="org/example/artifact/1.0.0/artifact-1.0.0.pom",
+                file_path=existing_pom,
+                group_id="org.example",
+                artifact_id="artifact",
+                version="1.0.0",
+                classifier=None,
+                extension="pom",
+                md5=None,
+                sha1=None,
+                sha256=None,
+            ),
+        ),
+        sbom_path=None,
+        provenance_path=None,
+        source_archive_path=None,
+    )
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--upload-workers",
+            "4",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping missing file" in result.output
+    assert mock_client.upload_content.call_count == 1
+    assert "1 artifact(s) uploaded, 1 skipped" in result.output
+
+
+def test_publish_dry_run_shows_upload_workers(tmp_path: Path) -> None:
+    """Verify dry-run output includes worker count."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--upload-workers",
+            "8",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Upload workers: 8" in result.output
+
+
 @patch("slan_cuan.publish.PulpMavenClient")
 def test_publish_modify_repository_error(
     mock_client_cls: Mock, tmp_path: Path
