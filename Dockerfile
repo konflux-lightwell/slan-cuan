@@ -5,6 +5,7 @@ RUN dnf -y install \
     --setopt=install_weak_deps=false \
     --setopt=tsflags=nodocs \
     --setopt=deltarpm=0 \
+    --allowerasing \
     python3.12-pip \
     python3.12-devel \
     git \
