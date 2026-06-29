@@ -146,7 +146,7 @@ spec:
         - name: SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE
           value: /var/run/secrets/radas/mrrc-signing-key.password
         - name: SLAN_CUAN_RADAS_ROOT_CA
-          value: /etc/pki/tls/cert.pem
+          value: /etc/pki/tls/certs/ca-bundle.crt
         - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
           value: $(params.RADAS_RECEIVER_TIMEOUT)
         - name: SLAN_CUAN_SIGN_REQUESTER_ID
