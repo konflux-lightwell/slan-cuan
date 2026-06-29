@@ -82,7 +82,7 @@ spec:
       - mountPath: /var/workdir
         name: workdir
       - mountPath: /var/run/secrets/radas
-        name: radas-certificates
+        name: mrrc-signing-ca-prod
       - name: trusted-ca
         mountPath: /mnt/trusted-ca
         readOnly: true
@@ -140,11 +140,11 @@ spec:
               name: lightwell-radas-certificates
               key: request_channel
         - name: SLAN_CUAN_RADAS_CLIENT_CA
-          value: /var/run/secrets/radas/nonprod.crt
+          value: /var/run/secrets/radas/mrrc-signing.crt
         - name: SLAN_CUAN_RADAS_CLIENT_KEY
-          value: /var/run/secrets/radas/nonprod.pem
+          value: /var/run/secrets/radas/mrrc-signing-key.pem
         - name: SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE
-          value: /var/run/secrets/radas/nonprod.pw
+          value: /var/run/secrets/radas/mrrc-signing-key.password
         - name: SLAN_CUAN_RADAS_ROOT_CA
           value: /etc/pki/tls/cert.pem
         - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
@@ -192,6 +192,9 @@ spec:
     - name: radas-certificates
       secret:
         secretName: lightwell-radas-certificates
+    - name: mrrc-signing-ca-prod
+      secret:
+        secretName: mrrc-signing-ca-prod
     - name: registry-auth
       secret:
         secretName: $(params.REGISTRY_AUTH_SECRET)
