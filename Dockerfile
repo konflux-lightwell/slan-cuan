@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi10/ubi:latest AS builder
+FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716 AS builder
 
 # Install the builder dependencies
 RUN dnf -y install \
