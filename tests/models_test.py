@@ -486,6 +486,41 @@ class TestMavenArtifact:
 
         assert artifact.is_signable is False
 
+    def test_is_metadata_checksum_sidecars(self, tmp_path: Path) -> None:
+        """Metadata checksum sidecars are classified as metadata."""
+        for suffix in (".md5", ".sha1", ".sha256"):
+            artifact = MavenArtifact(
+                relative_path=f"com/example/artifact/maven-metadata.xml{suffix}",
+                file_path=tmp_path / f"maven-metadata.xml{suffix}",
+                group_id="com.example",
+                artifact_id="artifact",
+                version="",
+                classifier=None,
+                extension=suffix.lstrip("."),
+                md5=None,
+                sha1=None,
+                sha256=None,
+            )
+            assert artifact.is_metadata is True, (
+                f"maven-metadata.xml{suffix} should be metadata"
+            )
+
+    def test_artifact_checksum_not_metadata(self, tmp_path: Path) -> None:
+        """Artifact checksum sidecars are NOT metadata."""
+        artifact = MavenArtifact(
+            relative_path="org/example/artifact/1.0.0/artifact-1.0.0.jar.md5",
+            file_path=tmp_path / "artifact-1.0.0.jar.md5",
+            group_id="org.example",
+            artifact_id="artifact",
+            version="1.0.0",
+            classifier=None,
+            extension="md5",
+            md5=None,
+            sha1=None,
+            sha256=None,
+        )
+        assert artifact.is_metadata is False
+
 
 class TestBuildOutput:
     """Tests for BuildOutput parsing and properties."""
@@ -533,10 +568,10 @@ class TestBuildOutput:
         # Verify build_id extraction
         assert build.build_id == "TEST"
 
-        # Verify artifacts count (jar, pom, sources.jar — no checksums)
-        assert len(build.artifacts) == 3
+        # Verify artifacts count: 3 primary + 3 checksums = 6 total
+        assert len(build.artifacts) == 6
 
-        # Verify at least one artifact has correct GAV
+        # Verify primary jar artifact has correct GAV
         jar_artifact = next(
             a
             for a in build.artifacts
@@ -556,6 +591,37 @@ class TestBuildOutput:
             a for a in build.artifacts if a.classifier == "sources"
         )
         assert sources_artifact.extension == "jar"
+
+        # Verify checksum sidecar artifacts
+        checksum_artifacts = [
+            a for a in build.artifacts if a.extension in ("md5", "sha1", "sha256")
+        ]
+        assert len(checksum_artifacts) == 3
+
+        # Verify MD5 checksum artifact properties
+        md5_artifact = next(a for a in checksum_artifacts if a.extension == "md5")
+        assert md5_artifact.group_id == "org.example"
+        assert md5_artifact.artifact_id == "artifact"
+        assert md5_artifact.version == "1.0.0"
+        assert md5_artifact.classifier is None
+        assert md5_artifact.is_metadata is False
+        assert md5_artifact.is_signable is False
+
+        # Verify SHA1 checksum artifact properties
+        sha1_artifact = next(
+            a for a in checksum_artifacts if a.extension == "sha1"
+        )
+        assert sha1_artifact.extension == "sha1"
+        assert sha1_artifact.is_metadata is False
+        assert sha1_artifact.is_signable is False
+
+        # Verify SHA256 checksum artifact properties
+        sha256_artifact = next(
+            a for a in checksum_artifacts if a.extension == "sha256"
+        )
+        assert sha256_artifact.extension == "sha256"
+        assert sha256_artifact.is_metadata is False
+        assert sha256_artifact.is_signable is False
 
         # Verify well-known files
         assert build.sbom_path is not None
@@ -817,6 +883,63 @@ class TestBuildOutput:
 
         assert xml_artifact.is_metadata is True
         assert jar_artifact.is_metadata is False
+
+    def test_metadata_checksum_sidecars_parsing(self, tmp_path: Path) -> None:
+        """Parse metadata checksum sidecars with is_metadata == True."""
+        deliverable_dir = tmp_path / "TEST-build-output"
+        metadata_dir = (
+            deliverable_dir / "repository" / "org" / "example" / "artifact"
+        )
+        metadata_dir.mkdir(parents=True)
+
+        # Create maven-metadata.xml and its checksum sidecars
+        (metadata_dir / "maven-metadata.xml").write_text("<metadata/>")
+        (metadata_dir / "maven-metadata.xml.md5").write_text("md5checksum")
+        (metadata_dir / "maven-metadata.xml.sha1").write_text("sha1checksum")
+
+        result = ExtractResult(
+            image=ImageReference(
+                registry="quay.io",
+                repository="test/image",
+                tag=None,
+                digest="sha256:abc123",
+            ),
+            manifest_digest="sha256:manifest123",
+            layers=[],
+            annotations={},
+            deliverable_dir="TEST-build-output",
+            files=[],
+            extracted_at="2026-06-29T12:00:00Z",
+        )
+
+        build = BuildOutput.from_extract_result(result, tmp_path)
+
+        # Verify all metadata artifacts
+        metadata = [a for a in build.artifacts if a.is_metadata]
+        assert len(metadata) == 3  # xml + md5 + sha1
+
+        # Verify XML metadata
+        xml_metadata = next(a for a in metadata if a.extension == "xml")
+        assert xml_metadata.group_id == "org.example"
+        assert xml_metadata.artifact_id == "artifact"
+        assert xml_metadata.version == ""
+        assert xml_metadata.file_path.name == "maven-metadata.xml"
+
+        # Verify MD5 checksum metadata
+        md5_metadata = next(a for a in metadata if a.extension == "md5")
+        assert md5_metadata.group_id == "org.example"
+        assert md5_metadata.artifact_id == "artifact"
+        assert md5_metadata.version == ""
+        assert md5_metadata.file_path.name == "maven-metadata.xml.md5"
+        assert md5_metadata.is_metadata is True
+
+        # Verify SHA1 checksum metadata
+        sha1_metadata = next(a for a in metadata if a.extension == "sha1")
+        assert sha1_metadata.group_id == "org.example"
+        assert sha1_metadata.artifact_id == "artifact"
+        assert sha1_metadata.version == ""
+        assert sha1_metadata.file_path.name == "maven-metadata.xml.sha1"
+        assert sha1_metadata.is_metadata is True
 
 
 class TestPublishResult:

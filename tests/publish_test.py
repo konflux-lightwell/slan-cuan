@@ -353,6 +353,94 @@ def test_publish_routes_metadata_to_upload_metadata(
     assert "Published: 3 artifact(s) uploaded" in result.output
 
 
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_routes_metadata_checksums(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Route metadata checksums to upload_metadata, artifact to upload_content."""
+    deliverable_dir = tmp_path / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+
+    # Create primary artifact
+    (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
+    (repo_dir / "artifact-1.0.0.pom").write_text("<project/>")
+
+    # Create artifact checksum
+    (repo_dir / "artifact-1.0.0.jar.md5").write_text("jarmd5")
+
+    # Create maven-metadata.xml and its checksums at artifact level
+    metadata_dir = deliverable_dir / "repository" / "org" / "example" / "artifact"
+    (metadata_dir / "maven-metadata.xml").write_text("<metadata/>")
+    (metadata_dir / "maven-metadata.xml.md5").write_text("metamd5")
+    (metadata_dir / "maven-metadata.xml.sha1").write_text("metasha1")
+
+    # Create extract-result.json
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-06-29T12:00:00Z",
+    }
+    (tmp_path / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+    mock_client.upload_metadata = Mock(return_value=_CONTENT_UNIT)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(tmp_path),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify upload_content: jar + pom + jar.md5 = 3
+    assert mock_client.upload_content.call_count == 3
+
+    # Verify upload_metadata: maven-metadata.xml + .md5 + .sha1 = 3
+    assert mock_client.upload_metadata.call_count == 3
+
+    # Verify metadata checksum files went to upload_metadata
+    metadata_calls = mock_client.upload_metadata.call_args_list
+    metadata_filenames = {call.kwargs["filename"] for call in metadata_calls}
+    assert metadata_filenames == {
+        "maven-metadata.xml",
+        "maven-metadata.xml.md5",
+        "maven-metadata.xml.sha1",
+    }
+
+    assert "Published: 6 artifact(s) uploaded" in result.output
+
+
 def test_publish_env_var_precedence(tmp_path: Path) -> None:
     """SLAN_CUAN_PUBLISH_PULP_URL sets --pulp-url."""
     artifact_dir = create_test_artifact_dir(tmp_path)
