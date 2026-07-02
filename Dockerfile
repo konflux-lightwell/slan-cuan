@@ -43,7 +43,7 @@ RUN echo "${RH_IT_CERT}" | base64 -d > /etc/pki/ca-trust/source/anchors/Current-
     && microdnf install -y \
         python3.12-pip \
     # for CVEs in base image
-    # && microdnf update -y \
+    && microdnf update -y \
     && microdnf clean all \
     && pip3.12 install --no-cache-dir --no-deps /wheels/*.whl \
     && rm -rf /wheels
