@@ -99,66 +99,71 @@ def register(
                 f"SBOM not found in deliverable: {build.deliverable_dir}"
             )
 
-        sbom_path = sbom_artifacts[0].file_path
+        for sbom in sbom_artifacts:
+            sbom_path = sbom.file_path
+            if not sbom_path.exists():
+                raise click.ClickException(
+                    f"SBOM file not found: {sbom.file_path}"
+                )
 
-        if not sbom_path.exists():
-            raise click.ClickException(f"SBOM file not found: {sbom_path}")
+            sbom_size = sbom.file_path.stat().st_size
 
-        sbom_size = sbom_path.stat().st_size
-
-        if ctx.dry_run:
-            click.echo(f"Trustify API URL: {trustify_api_url}")
-            click.echo(f"SSO Token URL: {sso_token_url}")
-            click.echo(f"SBOM file: {sbom_path}")
-            click.echo(f"SBOM size: {sbom_size} bytes")
-            click.echo(f"\ndry-run: would upload SBOM to {trustify_api_url}")
-            return
-
-        if ctx.verbose:
-            click.echo(f"Acquiring OIDC token from {sso_token_url}")
-
-        config = TrustifyConfig(
-            api_url=trustify_api_url,
-            sso_token_url=sso_token_url,
-            sso_client_id=sso_client_id,
-            sso_client_secret=sso_client_secret,
-            verify_ssl=not insecure,
-            ca_cert=ca_cert,
-            retries=retries,
-        )
-
-        with TrustifyClient(config) as client:
             if ctx.verbose:
                 click.echo(f"Uploading SBOM: {sbom_path}")
 
-            upload_result = client.upload_sbom(sbom_path)
+            if ctx.dry_run:
+                click.echo(f"Trustify API URL: {trustify_api_url}")
+                click.echo(f"SSO Token URL: {sso_token_url}")
+                click.echo(f"SBOM file: {sbom_path}")
+                click.echo(f"SBOM size: {sbom_size} bytes")
+                click.echo(f"\ndry-run: would upload SBOM to {trustify_api_url}")
+                return
 
             if ctx.verbose:
-                click.echo(f"  -> URN: {upload_result.sbom_urn}")
+                click.echo(f"Acquiring OIDC token from {sso_token_url}")
 
-        register_result = RegisterResult(
-            trustify_api_url=trustify_api_url,
-            sbom_urn=upload_result.sbom_urn,
-            sbom_file=str(sbom_path),
-            sbom_size=upload_result.file_size,
-            registered_at=datetime.now(timezone.utc).isoformat(),
-        )
-        register_result_path = Path(
-            os.path.join(artifact_dir, REGISTER_RESULT_FILENAME)
-        )
-        register_result.save(register_result_path)
-
-        # Write Tekton results
-        write_tekton_result(
-            ctx.tekton_results_dir, "SBOM_URN", upload_result.sbom_urn
-        )
-
-        click.echo(
-            (
-                f"Registered: SBOM uploaded to Trustify "
-                f"(URN: {upload_result.sbom_urn})"
+            config = TrustifyConfig(
+                api_url=trustify_api_url,
+                sso_token_url=sso_token_url,
+                sso_client_id=sso_client_id,
+                sso_client_secret=sso_client_secret,
+                verify_ssl=not insecure,
+                ca_cert=ca_cert,
+                retries=retries,
             )
-        )
+
+            with TrustifyClient(config) as client:
+                if ctx.verbose:
+                    click.echo(f"Uploading SBOM: {sbom_path}")
+
+                upload_result = client.upload_sbom(sbom_path)
+
+                if ctx.verbose:
+                    click.echo(f"  -> URN: {upload_result.sbom_urn}")
+
+            register_result = RegisterResult(
+                trustify_api_url=trustify_api_url,
+                sbom_urn=upload_result.sbom_urn,
+                sbom_file=str(sbom_path),
+                sbom_size=upload_result.file_size,
+                registered_at=datetime.now(timezone.utc).isoformat(),
+            )
+            register_result_path = Path(
+                os.path.join(artifact_dir, REGISTER_RESULT_FILENAME)
+            )
+            register_result.save(register_result_path)
+
+            # Write Tekton results
+            write_tekton_result(
+                ctx.tekton_results_dir, "SBOM_URN", upload_result.sbom_urn
+            )
+
+            click.echo(
+                (
+                    f"Registered: SBOM uploaded to Trustify "
+                    f"(URN: {upload_result.sbom_urn})"
+                )
+            )
 
     except TrustifyError as e:
         raise click.ClickException(f"Trustify error: {e.message}") from e

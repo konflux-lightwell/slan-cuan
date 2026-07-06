@@ -20,26 +20,8 @@ def _make_ctx_mock() -> Mock:
     return m
 
 
-def create_test_artifact_dir_with_sbom(base_dir: Path) -> Path:
-    """Create artifact dir with extract-result.json and SBOM in repo tree."""
-    deliverable_dir = base_dir / "TEST-build-output"
-    repo_dir = (
-        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
-    )
-    repo_dir.mkdir(parents=True)
-
-    # Create a CycloneDX SBOM in the Maven repository tree
-    (repo_dir / "artifact-1.0.0.cyclonedx.json").write_text(
-        json.dumps(
-            {
-                "bomFormat": "CycloneDX",
-                "specVersion": "1.6",
-                "components": [],
-            }
-        )
-    )
-
-    # Create extract-result.json (same as publish_test.py)
+def _write_extract_result(base_dir: Path) -> None:
+    """Write a minimal extract-result.json."""
     extract_result = {
         "image": {
             "registry": "quay.io",
@@ -57,6 +39,52 @@ def create_test_artifact_dir_with_sbom(base_dir: Path) -> Path:
     (base_dir / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
+
+
+def create_test_artifact_dir_with_sbom(base_dir: Path) -> Path:
+    """Create artifact dir with extract-result.json and SBOM in repo tree."""
+    deliverable_dir = base_dir / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+
+    (repo_dir / "artifact-1.0.0.cyclonedx.json").write_text(
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "components": [],
+            }
+        )
+    )
+
+    _write_extract_result(base_dir)
+    return base_dir
+
+
+def create_test_artifact_dir_with_multiple_sboms(base_dir: Path) -> Path:
+    """Create artifact dir with multiple SBOM types in the repo tree."""
+    deliverable_dir = base_dir / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+
+    (repo_dir / "artifact-1.0.0.cyclonedx.json").write_text(
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "components": [],
+            }
+        )
+    )
+    (repo_dir / "artifact-1.0.0.spdx.json").write_text(
+        json.dumps({"spdxVersion": "SPDX-2.3", "packages": []})
+    )
+
+    _write_extract_result(base_dir)
     return base_dir
 
 
@@ -567,3 +595,148 @@ def test_register_writes_tekton_results(
     sbom_urn_file = results_dir / "SBOM_URN"
     assert sbom_urn_file.exists()
     assert sbom_urn_file.read_text() == "urn:uuid:test-tekton-results"
+
+
+@patch("slan_cuan.register.TrustifyClient")
+def test_register_uploads_all_sboms(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """When multiple SBOMs exist, each is uploaded to Trustify."""
+    artifact_dir = create_test_artifact_dir_with_multiple_sboms(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+
+    call_count = 0
+
+    def _upload_side_effect(sbom_path):
+        nonlocal call_count
+        call_count += 1
+        return SBOMUploadResult(
+            file_path=str(sbom_path),
+            file_size=100 + call_count,
+            sbom_urn=f"urn:uuid:sbom-{call_count}",
+        )
+
+    mock_client.upload_sbom.side_effect = _upload_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "register",
+            "--trustify-api-url",
+            "https://trustify.example.com",
+            "--sso-token-url",
+            "https://sso.example.com/token",
+            "--sso-client-id",
+            "client-id",
+            "--sso-client-secret",
+            "client-secret",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    assert mock_client.upload_sbom.call_count == 2
+
+    uploaded_paths = [
+        str(call.args[0]) for call in mock_client.upload_sbom.call_args_list
+    ]
+    assert any("cyclonedx.json" in p for p in uploaded_paths)
+    assert any("spdx.json" in p for p in uploaded_paths)
+
+    assert result.output.count("Registered: SBOM uploaded to Trustify") == 2
+
+    register_result_path = artifact_dir / "register-result.json"
+    assert register_result_path.exists()
+    with register_result_path.open() as f:
+        register_result = json.load(f)
+    assert register_result["sbom_urn"] == "urn:uuid:sbom-2"
+
+
+@patch("slan_cuan.register.TrustifyClient")
+def test_register_multiple_sboms_verbose(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """Verbose output shows each SBOM being uploaded."""
+    artifact_dir = create_test_artifact_dir_with_multiple_sboms(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+
+    call_count = 0
+
+    def _upload_side_effect(sbom_path):
+        nonlocal call_count
+        call_count += 1
+        return SBOMUploadResult(
+            file_path=str(sbom_path),
+            file_size=100 + call_count,
+            sbom_urn=f"urn:uuid:verbose-multi-{call_count}",
+        )
+
+    mock_client.upload_sbom.side_effect = _upload_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--verbose",
+            "register",
+            "--trustify-api-url",
+            "https://trustify.example.com",
+            "--sso-token-url",
+            "https://sso.example.com/token",
+            "--sso-client-id",
+            "client-id",
+            "--sso-client-secret",
+            "client-secret",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.output.count("Uploading SBOM:") >= 2
+    assert "urn:uuid:verbose-multi-1" in result.output
+    assert "urn:uuid:verbose-multi-2" in result.output
+
+
+@patch("slan_cuan.register.TrustifyClient")
+def test_register_multiple_sboms_error_stops_on_first_failure(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """If one SBOM upload fails, the command exits with an error."""
+    artifact_dir = create_test_artifact_dir_with_multiple_sboms(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_sbom.side_effect = TrustifyError(
+        message="upload rejected (413)",
+        status_code=413,
+        response_body="Payload Too Large",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "register",
+            "--trustify-api-url",
+            "https://trustify.example.com",
+            "--sso-token-url",
+            "https://sso.example.com/token",
+            "--sso-client-id",
+            "client-id",
+            "--sso-client-secret",
+            "client-secret",
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Trustify error:" in result.output
