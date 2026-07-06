@@ -21,12 +21,15 @@ def _make_ctx_mock() -> Mock:
 
 
 def create_test_artifact_dir_with_sbom(base_dir: Path) -> Path:
-    """Create artifact dir with extract-result.json and cyclonedx.json."""
+    """Create artifact dir with extract-result.json and SBOM in repo tree."""
     deliverable_dir = base_dir / "TEST-build-output"
-    deliverable_dir.mkdir(parents=True)
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
 
-    # Create a minimal cyclonedx.json
-    (deliverable_dir / "cyclonedx.json").write_text(
+    # Create a CycloneDX SBOM in the Maven repository tree
+    (repo_dir / "artifact-1.0.0.cyclonedx.json").write_text(
         json.dumps(
             {
                 "bomFormat": "CycloneDX",
