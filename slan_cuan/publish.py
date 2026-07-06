@@ -173,6 +173,13 @@ def _upload_one(
     show_default=True,
     help="Number of concurrent upload threads.",
 )
+@click.option(
+    "--require-sbom",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Require SBOMs to be present in the artifact directory.",
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -187,6 +194,7 @@ def publish(
     pulp_client_key: Path | None,
     pulp_domain: str,
     upload_workers: int,
+    require_sbom: bool,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -202,7 +210,9 @@ def publish(
             click.echo(f"Artifact directory: {artifact_dir.resolve()}")
             click.echo(f"Deliverable directory: {extract_result.deliverable_dir}")
 
-        build = BuildOutput.from_extract_result(extract_result, artifact_dir)
+        build = BuildOutput.from_extract_result(
+            extract_result, artifact_dir, require_sbom
+        )
         if ctx.verbose:
             click.echo(
                 f"Discovered {len(build.artifacts)} "
@@ -389,3 +399,5 @@ def publish(
 
     except PulpError as e:
         raise click.ClickException(f"Pulp error: {e.message}") from e
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e

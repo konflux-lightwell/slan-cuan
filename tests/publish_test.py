@@ -1922,3 +1922,196 @@ def test_publish_resolve_repository_error(
     assert result.exit_code != 0
     assert "Pulp error:" in result.output
     assert "not found" in result.output
+
+
+def test_publish_help_shows_require_sbom() -> None:
+    """Verify --require-sbom appears in help."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["publish", "--help"])
+
+    assert result.exit_code == 0
+    assert "--require-sbom" in result.output
+
+
+def test_publish_default_allows_missing_sbom(tmp_path: Path) -> None:
+    """Default --require-sbom=False allows publishing without SBOMs."""
+    deliverable_dir = tmp_path / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
+    (repo_dir / "artifact-1.0.0.pom").write_text("<project/>")
+
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-07-06T12:00:00Z",
+    }
+    (tmp_path / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(tmp_path),
+            "--pulp-domain",
+            "lightwell",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "dry-run: would upload" in result.output
+
+
+def test_publish_require_sbom_fails_without_sbom(tmp_path: Path) -> None:
+    """--require-sbom fails when SBOMs are missing."""
+    deliverable_dir = tmp_path / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
+    (repo_dir / "artifact-1.0.0.pom").write_text("<project/>")
+
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-07-06T12:00:00Z",
+    }
+    (tmp_path / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(tmp_path),
+            "--pulp-domain",
+            "lightwell",
+            "--require-sbom",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Missing SBOM artifacts for" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_require_sbom_passes_with_sbom(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """--require-sbom succeeds when SBOMs are present."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--require-sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Published: 6 artifact(s) uploaded" in result.output
+
+
+def test_publish_require_sbom_env_var(tmp_path: Path) -> None:
+    """SLAN_CUAN_PUBLISH_REQUIRE_SBOM env var enables check."""
+    deliverable_dir = tmp_path / "TEST-build-output"
+    repo_dir = (
+        deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
+    )
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
+
+    extract_result = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-07-06T12:00:00Z",
+    }
+    (tmp_path / "extract-result.json").write_text(
+        json.dumps(extract_result, indent=2)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(tmp_path),
+            "--pulp-domain",
+            "lightwell",
+        ],
+        env={"SLAN_CUAN_PUBLISH_REQUIRE_SBOM": "true"},
+    )
+
+    assert result.exit_code != 0
+    assert "Missing SBOM artifacts for" in result.output
