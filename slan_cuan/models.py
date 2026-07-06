@@ -11,6 +11,12 @@ EXTRACT_RESULT_FILENAME = "extract-result.json"
 PUBLISH_RESULT_FILENAME = "publish-result.json"
 REGISTER_RESULT_FILENAME = "register-result.json"
 
+PROVENANCE_FILE_SUFFIX = ".provenance.json"
+PROVENANCE_SIGSTORE_FILE_SUFFIX = ".provenance.sigstore.json"
+SPDX_FILE_SUFFIX = ".spdx.json"
+VSA_FILE_SUFFIX = ".vsa.json"
+CYCLONEDX_FILE_SUFFIX = ".cyclonedx.json"
+
 
 @dataclass(frozen=True)
 class ImageReference:
@@ -174,6 +180,16 @@ def _parse_extension(filename: str) -> str:
     """Extract the file extension for Maven artifact classification."""
     if filename.endswith(".tar.gz"):
         return "tar.gz"
+    elif filename.endswith(PROVENANCE_SIGSTORE_FILE_SUFFIX) or filename.endswith(
+        PROVENANCE_FILE_SUFFIX
+    ):
+        return "provenance"
+    elif filename.endswith(SPDX_FILE_SUFFIX):
+        return "spdx"
+    elif filename.endswith(VSA_FILE_SUFFIX):
+        return "vsa"
+    elif filename.endswith(CYCLONEDX_FILE_SUFFIX):
+        return "cyclonedx"
     return filename.rsplit(".", 1)[-1] if "." in filename else ""
 
 
@@ -271,6 +287,33 @@ class MavenArtifact:
         """True for JARs and POMs (sign stage filter)."""
         return self.extension in ("jar", "pom")
 
+    @property
+    def is_provenance(self) -> bool:
+        """True for provenance files."""
+        return self.extension == "provenance"
+
+    @property
+    def is_spdx(self) -> bool:
+        """True for SPDX files."""
+        return self.extension == "spdx"
+
+    @property
+    def is_vsa(self) -> bool:
+        """True for VSA files."""
+        return self.extension == "vsa"
+
+    @property
+    def is_cyclonedx(self) -> bool:
+        """True for CycloneDX files."""
+        return self.extension == "cyclonedx"
+
+    @property
+    def is_sbom(self) -> bool:
+        """True for SBOM files."""
+        return (
+            self.is_cyclonedx or self.is_spdx or self.is_vsa or self.is_provenance
+        )
+
 
 @dataclass(frozen=True)
 class BuildOutput:
@@ -279,8 +322,6 @@ class BuildOutput:
     build_id: str
     deliverable_dir: Path
     artifacts: tuple[MavenArtifact, ...]
-    sbom_path: Path | None
-    provenance_path: Path | None
     source_archive_path: Path | None
 
     @property
@@ -386,18 +427,12 @@ class BuildOutput:
                 )
 
         # Locate well-known files
-        sbom_path = deliverable_path / "cyclonedx.json"
-        provenance_path = deliverable_path / "provenance.json"
         sources_path = deliverable_path / "sources" / "sources.tar.gz"
 
         return cls(
             build_id=build_id,
             deliverable_dir=deliverable_path,
             artifacts=tuple(artifacts),
-            sbom_path=sbom_path if sbom_path.exists() else None,
-            provenance_path=(
-                provenance_path if provenance_path.exists() else None
-            ),
             source_archive_path=(sources_path if sources_path.exists() else None),
         )
 

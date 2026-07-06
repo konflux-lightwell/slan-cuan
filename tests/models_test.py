@@ -521,6 +521,78 @@ class TestMavenArtifact:
         )
         assert artifact.is_metadata is False
 
+    @pytest.mark.parametrize(
+        (
+            "extension",
+            "is_cyclonedx",
+            "is_provenance",
+            "is_spdx",
+            "is_vsa",
+            "is_sbom",
+        ),
+        [
+            ("cyclonedx", True, False, False, False, True),
+            ("provenance", False, True, False, False, True),
+            ("spdx", False, False, True, False, True),
+            ("vsa", False, False, False, True, True),
+            ("jar", False, False, False, False, False),
+            ("pom", False, False, False, False, False),
+            ("md5", False, False, False, False, False),
+        ],
+    )
+    def test_sbom_properties(
+        self,
+        tmp_path: Path,
+        extension: str,
+        is_cyclonedx: bool,
+        is_provenance: bool,
+        is_spdx: bool,
+        is_vsa: bool,
+        is_sbom: bool,
+    ) -> None:
+        """SBOM properties return correct values per extension."""
+        artifact = MavenArtifact(
+            relative_path=f"org/example/artifact/1.0.0/artifact-1.0.0.{extension}",
+            file_path=tmp_path / f"artifact-1.0.0.{extension}",
+            group_id="org.example",
+            artifact_id="artifact",
+            version="1.0.0",
+            classifier=None,
+            extension=extension,
+            md5=None,
+            sha1=None,
+            sha256=None,
+        )
+        assert artifact.is_cyclonedx is is_cyclonedx
+        assert artifact.is_provenance is is_provenance
+        assert artifact.is_spdx is is_spdx
+        assert artifact.is_vsa is is_vsa
+        assert artifact.is_sbom is is_sbom
+
+
+class TestParseExtension:
+    """Tests for _parse_extension with SBOM suffixes."""
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("artifact-1.0.0.jar", "jar"),
+            ("artifact-1.0.0.pom", "pom"),
+            ("artifact-1.0.0.jar.md5", "md5"),
+            ("artifact-1.0.0.tar.gz", "tar.gz"),
+            ("artifact-1.0.0.cyclonedx.json", "cyclonedx"),
+            ("artifact-1.0.0.spdx.json", "spdx"),
+            ("artifact-1.0.0.vsa.json", "vsa"),
+            ("artifact-1.0.0.provenance.json", "provenance"),
+            ("artifact-1.0.0.provenance.sigstore.json", "provenance"),
+        ],
+    )
+    def test_parse_extension(self, filename: str, expected: str) -> None:
+        """Extension is correctly extracted for various file types."""
+        from slan_cuan.models import _parse_extension
+
+        assert _parse_extension(filename) == expected
+
 
 class TestBuildOutput:
     """Tests for BuildOutput parsing and properties."""
@@ -543,9 +615,13 @@ class TestBuildOutput:
         (version_dir / "artifact-1.0.0.jar.sha1").write_text("def456")
         (version_dir / "artifact-1.0.0.jar.sha256").write_text("789ghi")
 
-        # Create well-known files
-        (deliverable_dir / "cyclonedx.json").write_text("{}")
-        (deliverable_dir / "provenance.json").write_text("{}")
+        # Create SBOM/provenance files alongside JARs
+        (version_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
+        (version_dir / "artifact-1.0.0.cyclonedx.json.md5").write_text("cdxmd5")
+        (version_dir / "artifact-1.0.0.provenance.sigstore.json").write_text("{}")
+        (version_dir / "artifact-1.0.0.provenance.sigstore.json.md5").write_text(
+            "provmd5"
+        )
 
         # Create ExtractResult
         result = ExtractResult(
@@ -568,8 +644,8 @@ class TestBuildOutput:
         # Verify build_id extraction
         assert build.build_id == "TEST"
 
-        # Verify artifacts count: 3 primary + 3 checksums = 6 total
-        assert len(build.artifacts) == 6
+        # 3 primary + 3 checksums + 2 SBOM + 2 SBOM checksums = 10 total
+        assert len(build.artifacts) == 10
 
         # Verify primary jar artifact has correct GAV
         jar_artifact = next(
@@ -592,11 +668,11 @@ class TestBuildOutput:
         )
         assert sources_artifact.extension == "jar"
 
-        # Verify checksum sidecar artifacts
+        # Verify checksum sidecar artifacts (3 for jar + 2 for SBOMs)
         checksum_artifacts = [
             a for a in build.artifacts if a.extension in ("md5", "sha1", "sha256")
         ]
-        assert len(checksum_artifacts) == 3
+        assert len(checksum_artifacts) == 5
 
         # Verify MD5 checksum artifact properties
         md5_artifact = next(a for a in checksum_artifacts if a.extension == "md5")
@@ -623,11 +699,19 @@ class TestBuildOutput:
         assert sha256_artifact.is_metadata is False
         assert sha256_artifact.is_signable is False
 
-        # Verify well-known files
-        assert build.sbom_path is not None
-        assert build.sbom_path.exists()
-        assert build.provenance_path is not None
-        assert build.provenance_path.exists()
+        # Verify SBOM artifacts
+        cyclonedx_artifact = next(a for a in build.artifacts if a.is_cyclonedx)
+        assert cyclonedx_artifact.extension == "cyclonedx"
+        assert cyclonedx_artifact.is_sbom is True
+        assert cyclonedx_artifact.is_signable is False
+        assert cyclonedx_artifact.md5 == "cdxmd5"
+
+        provenance_artifact = next(a for a in build.artifacts if a.is_provenance)
+        assert provenance_artifact.extension == "provenance"
+        assert provenance_artifact.is_sbom is True
+        assert provenance_artifact.is_signable is False
+        assert provenance_artifact.md5 == "provmd5"
+
         assert build.source_archive_path is None
 
     def test_coordinates_dedup(self, tmp_path: Path) -> None:
@@ -661,8 +745,6 @@ class TestBuildOutput:
             build_id="TEST",
             deliverable_dir=tmp_path,
             artifacts=(artifact1, artifact2),
-            sbom_path=None,
-            provenance_path=None,
             source_archive_path=None,
         )
 
@@ -716,8 +798,6 @@ class TestBuildOutput:
             build_id="TEST",
             deliverable_dir=tmp_path,
             artifacts=(jar_artifact, pom_artifact, md5_artifact),
-            sbom_path=None,
-            provenance_path=None,
             source_archive_path=None,
         )
 

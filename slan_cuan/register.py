@@ -93,20 +93,23 @@ def register(
 
         build = BuildOutput.from_extract_result(extract_result, artifact_dir)
 
-        if build.sbom_path is None:
+        sbom_artifacts = [a for a in build.artifacts if a.is_sbom]
+        if not sbom_artifacts:
             raise click.ClickException(
                 f"SBOM not found in deliverable: {build.deliverable_dir}"
             )
 
-        if not build.sbom_path.exists():
-            raise click.ClickException(f"SBOM file not found: {build.sbom_path}")
+        sbom_path = sbom_artifacts[0].file_path
 
-        sbom_size = build.sbom_path.stat().st_size
+        if not sbom_path.exists():
+            raise click.ClickException(f"SBOM file not found: {sbom_path}")
+
+        sbom_size = sbom_path.stat().st_size
 
         if ctx.dry_run:
             click.echo(f"Trustify API URL: {trustify_api_url}")
             click.echo(f"SSO Token URL: {sso_token_url}")
-            click.echo(f"SBOM file: {build.sbom_path}")
+            click.echo(f"SBOM file: {sbom_path}")
             click.echo(f"SBOM size: {sbom_size} bytes")
             click.echo(f"\ndry-run: would upload SBOM to {trustify_api_url}")
             return
@@ -126,9 +129,9 @@ def register(
 
         with TrustifyClient(config) as client:
             if ctx.verbose:
-                click.echo(f"Uploading SBOM: {build.sbom_path}")
+                click.echo(f"Uploading SBOM: {sbom_path}")
 
-            upload_result = client.upload_sbom(build.sbom_path)
+            upload_result = client.upload_sbom(sbom_path)
 
             if ctx.verbose:
                 click.echo(f"  -> URN: {upload_result.sbom_urn}")
@@ -136,7 +139,7 @@ def register(
         register_result = RegisterResult(
             trustify_api_url=trustify_api_url,
             sbom_urn=upload_result.sbom_urn,
-            sbom_file=str(build.sbom_path),
+            sbom_file=str(sbom_path),
             sbom_size=upload_result.file_size,
             registered_at=datetime.now(timezone.utc).isoformat(),
         )

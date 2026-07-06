@@ -56,6 +56,12 @@ def create_test_artifact_dir(
     repo_dir.mkdir(parents=True)
     (repo_dir / "artifact-1.0.0.jar").write_text("jar content")
     (repo_dir / "artifact-1.0.0.pom").write_text("<project/>")
+    (repo_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
+    (repo_dir / "artifact-1.0.0.cyclonedx.json.md5").write_text("cdxmd5")
+    (repo_dir / "artifact-1.0.0.provenance.sigstore.json").write_text("{}")
+    (repo_dir / "artifact-1.0.0.provenance.sigstore.json.md5").write_text(
+        "provmd5"
+    )
 
     if include_metadata:
         metadata_dir = (
@@ -278,8 +284,9 @@ def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> Non
     # Verify PulpMavenClient was created
     mock_client_cls.assert_called_once()
 
-    # Verify upload_content was called for each artifact (jar + pom)
-    assert mock_client.upload_content.call_count == 2
+    # Verify upload_content called for each artifact
+    # (jar + pom + cyclonedx + cyclonedx.md5 + provenance + provenance.md5)
+    assert mock_client.upload_content.call_count == 6
 
     # Verify resolve_repository and modify_repository were called
     mock_client.resolve_repository.assert_called_once_with("test-repo")
@@ -289,7 +296,7 @@ def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> Non
     mock_client.__exit__.assert_called_once()
 
     # Verify summary output
-    assert "Published: 2 artifact(s) uploaded" in result.output
+    assert "Published: 6 artifact(s) uploaded" in result.output
 
     # Verify publish-result.json was created
     publish_result_path = artifact_dir / "publish-result.json"
@@ -300,12 +307,12 @@ def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> Non
 
     assert publish_result["pulp_url"] == "https://pulp.example.com"
     assert publish_result["distribution"] == "test-repo"
-    assert publish_result["artifacts_uploaded"] == 2
+    assert publish_result["artifacts_uploaded"] == 6
     assert publish_result["artifacts_skipped"] == 0
     assert publish_result["repository_version"] == (
         "/api/v3/repositories/maven/maven/abc/versions/1/"
     )
-    assert len(publish_result["content_unit_hrefs"]) == 2
+    assert len(publish_result["content_unit_hrefs"]) == 6
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -342,15 +349,15 @@ def test_publish_routes_metadata_to_upload_metadata(
 
     assert result.exit_code == 0
 
-    # jar + pom go to upload_content
-    assert mock_client.upload_content.call_count == 2
+    # jar + pom + 4 SBOM files go to upload_content
+    assert mock_client.upload_content.call_count == 6
 
     # maven-metadata.xml goes to upload_metadata
     assert mock_client.upload_metadata.call_count == 1
     metadata_call = mock_client.upload_metadata.call_args
     assert metadata_call.kwargs["filename"] == "maven-metadata.xml"
 
-    assert "Published: 3 artifact(s) uploaded" in result.output
+    assert "Published: 7 artifact(s) uploaded" in result.output
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -688,8 +695,6 @@ def test_publish_skips_missing_files(
                 sha256=None,
             ),
         ),
-        sbom_path=None,
-        provenance_path=None,
         source_archive_path=None,
     )
 
@@ -770,7 +775,7 @@ def test_publish_writes_tekton_results(
     assert outputs_file.exists()
 
     # Verify content
-    assert uploaded_file.read_text() == "2"
+    assert uploaded_file.read_text() == "6"
     assert skipped_file.read_text() == "0"
 
     # Verify JSON format for artifact outputs
@@ -959,7 +964,7 @@ def test_publish_with_domain(mock_client_cls: Mock, tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert mock_client.upload_content.call_count == 2
+    assert mock_client.upload_content.call_count == 6
 
     config = mock_client_cls.call_args[0][0]
     assert config.domain == "lightwell"
@@ -1054,8 +1059,6 @@ def test_publish_skips_missing_with_domain(
                 sha256=None,
             ),
         ),
-        sbom_path=None,
-        provenance_path=None,
         source_archive_path=None,
     )
 
@@ -1296,7 +1299,7 @@ def test_publish_passes_labels_to_upload(
     assert result.exit_code == 0
 
     # Verify upload_content was called with labels
-    assert mock_client.upload_content.call_count == 2
+    assert mock_client.upload_content.call_count == 6
     for call in mock_client.upload_content.call_args_list:
         labels = call.kwargs.get("labels")
         assert labels is not None
@@ -1580,7 +1583,7 @@ def test_publish_upload_workers_env_var(
         env={"SLAN_CUAN_PUBLISH_UPLOAD_WORKERS": "2"},
     )
     assert result.exit_code == 0
-    assert mock_client.upload_content.call_count == 2
+    assert mock_client.upload_content.call_count == 6
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -1615,8 +1618,8 @@ def test_publish_upload_workers_one_sequential(
         ],
     )
     assert result.exit_code == 0
-    assert "Published: 2 artifact(s) uploaded" in result.output
-    assert mock_client.upload_content.call_count == 2
+    assert "Published: 6 artifact(s) uploaded" in result.output
+    assert mock_client.upload_content.call_count == 6
     mock_client.resolve_repository.assert_called_once()
     mock_client.modify_repository.assert_called_once()
 
@@ -1683,8 +1686,8 @@ def test_publish_concurrent_upload_collects_all_hrefs(
     with publish_result_path.open() as f:
         publish_result = json.load(f)
 
-    assert len(publish_result["content_unit_hrefs"]) == 3
-    assert "Published: 3 artifact(s) uploaded" in result.output
+    assert len(publish_result["content_unit_hrefs"]) == 7
+    assert "Published: 7 artifact(s) uploaded" in result.output
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -1780,8 +1783,6 @@ def test_publish_concurrent_skips_missing_before_pool(
                 sha256=None,
             ),
         ),
-        sbom_path=None,
-        provenance_path=None,
         source_archive_path=None,
     )
 
