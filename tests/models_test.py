@@ -583,7 +583,6 @@ class TestParseExtension:
             ("artifact-1.0.0.cyclonedx.json", "cyclonedx"),
             ("artifact-1.0.0.spdx.json", "spdx"),
             ("artifact-1.0.0.vsa.json", "vsa"),
-            ("artifact-1.0.0.provenance.json", "provenance"),
             ("artifact-1.0.0.provenance.sigstore.json", "provenance"),
         ],
     )

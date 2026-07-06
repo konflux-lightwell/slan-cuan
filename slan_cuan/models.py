@@ -11,7 +11,6 @@ EXTRACT_RESULT_FILENAME = "extract-result.json"
 PUBLISH_RESULT_FILENAME = "publish-result.json"
 REGISTER_RESULT_FILENAME = "register-result.json"
 
-PROVENANCE_FILE_SUFFIX = ".provenance.json"
 PROVENANCE_SIGSTORE_FILE_SUFFIX = ".provenance.sigstore.json"
 SPDX_FILE_SUFFIX = ".spdx.json"
 VSA_FILE_SUFFIX = ".vsa.json"
@@ -180,9 +179,7 @@ def _parse_extension(filename: str) -> str:
     """Extract the file extension for Maven artifact classification."""
     if filename.endswith(".tar.gz"):
         return "tar.gz"
-    elif filename.endswith(PROVENANCE_SIGSTORE_FILE_SUFFIX) or filename.endswith(
-        PROVENANCE_FILE_SUFFIX
-    ):
+    elif filename.endswith(PROVENANCE_SIGSTORE_FILE_SUFFIX):
         return "provenance"
     elif filename.endswith(SPDX_FILE_SUFFIX):
         return "spdx"
