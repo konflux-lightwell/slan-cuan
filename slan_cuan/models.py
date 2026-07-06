@@ -339,6 +339,7 @@ class BuildOutput:
         cls,
         result: ExtractResult,
         output_dir: Path,
+        require_sbom: bool = False,
     ) -> BuildOutput:
         """Parse deliverable directory using ExtractResult metadata.
 
@@ -425,6 +426,22 @@ class BuildOutput:
                         sha256=sha256_val,
                     )
                 )
+
+        if require_sbom:
+            signable_coords: set[tuple[str, str, str]] = set()
+            sbom_coords: set[tuple[str, str, str]] = set()
+            for a in artifacts:
+                coord = (a.group_id, a.artifact_id, a.version)
+                if a.extension in ("jar", "pom"):
+                    signable_coords.add(coord)
+                elif a.extension in ("cyclonedx", "spdx", "vsa", "provenance"):
+                    sbom_coords.add(coord)
+            missing = signable_coords - sbom_coords
+            if missing:
+                missing_str = ", ".join(
+                    f"{g}:{a}:{v}" for g, a, v in sorted(missing)
+                )
+                raise ValueError(f"Missing SBOM artifacts for: {missing_str}")
 
         # Locate well-known files
         sources_path = deliverable_path / "sources" / "sources.tar.gz"
