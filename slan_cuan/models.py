@@ -336,7 +336,7 @@ class BuildOutput:
         cls,
         result: ExtractResult,
         output_dir: Path,
-        require_sbom: bool = False,
+        require_supply_chain_metadata: bool = False,
     ) -> BuildOutput:
         """Parse deliverable directory using ExtractResult metadata.
 
@@ -424,7 +424,7 @@ class BuildOutput:
                     )
                 )
 
-        if require_sbom:
+        if require_supply_chain_metadata:
             signable_coords: set[tuple[str, str, str]] = set()
             sbom_coords: set[tuple[str, str, str]] = set()
             for a in artifacts:

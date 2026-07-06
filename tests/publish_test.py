@@ -1924,17 +1924,17 @@ def test_publish_resolve_repository_error(
     assert "not found" in result.output
 
 
-def test_publish_help_shows_require_sbom() -> None:
-    """Verify --require-sbom appears in help."""
+def test_publish_help_shows_require_supply_chain_metadata() -> None:
+    """Verify --require-supply-chain-metadata appears in help."""
     runner = CliRunner()
     result = runner.invoke(main, ["publish", "--help"])
 
     assert result.exit_code == 0
-    assert "--require-sbom" in result.output
+    assert "--require-supply-chain-metadata" in result.output
 
 
 def test_publish_default_allows_missing_sbom(tmp_path: Path) -> None:
-    """Default --require-sbom=False allows publishing without SBOMs."""
+    """Default allows publishing without SBOMs."""
     deliverable_dir = tmp_path / "TEST-build-output"
     repo_dir = (
         deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
@@ -1982,8 +1982,10 @@ def test_publish_default_allows_missing_sbom(tmp_path: Path) -> None:
     assert "dry-run: would upload" in result.output
 
 
-def test_publish_require_sbom_fails_without_sbom(tmp_path: Path) -> None:
-    """--require-sbom fails when SBOMs are missing."""
+def test_publish_require_supply_chain_metadata_fails_without_sbom(
+    tmp_path: Path,
+) -> None:
+    """--require-supply-chain-metadata fails when SBOMs are missing."""
     deliverable_dir = tmp_path / "TEST-build-output"
     repo_dir = (
         deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
@@ -2024,7 +2026,7 @@ def test_publish_require_sbom_fails_without_sbom(tmp_path: Path) -> None:
             str(tmp_path),
             "--pulp-domain",
             "lightwell",
-            "--require-sbom",
+            "--require-supply-chain-metadata",
         ],
     )
 
@@ -2033,10 +2035,10 @@ def test_publish_require_sbom_fails_without_sbom(tmp_path: Path) -> None:
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
-def test_publish_require_sbom_passes_with_sbom(
+def test_publish_require_supply_chain_metadata_passes_with_sbom(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
-    """--require-sbom succeeds when SBOMs are present."""
+    """--require-supply-chain-metadata succeeds when SBOMs are present."""
     artifact_dir = create_test_artifact_dir(tmp_path)
 
     mock_client = _make_ctx_mock()
@@ -2060,7 +2062,7 @@ def test_publish_require_sbom_passes_with_sbom(
             "testuser",
             "--pulp-password",
             "testpass",
-            "--require-sbom",
+            "--require-supply-chain-metadata",
         ],
     )
 
@@ -2068,8 +2070,8 @@ def test_publish_require_sbom_passes_with_sbom(
     assert "Published: 6 artifact(s) uploaded" in result.output
 
 
-def test_publish_require_sbom_env_var(tmp_path: Path) -> None:
-    """SLAN_CUAN_PUBLISH_REQUIRE_SBOM env var enables check."""
+def test_publish_require_supply_chain_metadata_env_var(tmp_path: Path) -> None:
+    """SLAN_CUAN_PUBLISH_REQUIRE_SUPPLY_CHAIN_METADATA env var enables check."""
     deliverable_dir = tmp_path / "TEST-build-output"
     repo_dir = (
         deliverable_dir / "repository" / "org" / "example" / "artifact" / "1.0.0"
@@ -2110,7 +2112,7 @@ def test_publish_require_sbom_env_var(tmp_path: Path) -> None:
             "--pulp-domain",
             "lightwell",
         ],
-        env={"SLAN_CUAN_PUBLISH_REQUIRE_SBOM": "true"},
+        env={"SLAN_CUAN_PUBLISH_REQUIRE_SUPPLY_CHAIN_METADATA": "true"},
     )
 
     assert result.exit_code != 0

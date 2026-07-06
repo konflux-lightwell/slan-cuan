@@ -174,11 +174,14 @@ def _upload_one(
     help="Number of concurrent upload threads.",
 )
 @click.option(
-    "--require-sbom",
+    "--require-supply-chain-metadata",
     is_flag=True,
     default=False,
     show_default=True,
-    help="Require SBOMs to be present in the artifact directory.",
+    help=(
+        "Require supply chain metadata (SBOMs) to be present "
+        "in the artifact directory."
+    ),
 )
 @click.pass_obj
 def publish(
@@ -194,7 +197,7 @@ def publish(
     pulp_client_key: Path | None,
     pulp_domain: str,
     upload_workers: int,
-    require_sbom: bool,
+    require_supply_chain_metadata: bool,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -211,7 +214,7 @@ def publish(
             click.echo(f"Deliverable directory: {extract_result.deliverable_dir}")
 
         build = BuildOutput.from_extract_result(
-            extract_result, artifact_dir, require_sbom
+            extract_result, artifact_dir, require_supply_chain_metadata
         )
         if ctx.verbose:
             click.echo(
