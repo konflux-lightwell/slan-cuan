@@ -1021,8 +1021,8 @@ class TestBuildOutput:
         assert sha1_metadata.is_metadata is True
 
 
-class TestRequireSbom:
-    """Tests for require_sbom validation in BuildOutput.from_extract_result."""
+class TestRequireSupplyChainMetadata:
+    """Tests for require_supply_chain_metadata validation."""
 
     @pytest.fixture
     def extract_result(self) -> ExtractResult:
@@ -1058,28 +1058,28 @@ class TestRequireSbom:
     def test_passes_when_sbom_present(
         self, tmp_path: Path, extract_result: ExtractResult
     ) -> None:
-        """require_sbom=True succeeds when SBOMs accompany JARs/POMs."""
+        """Succeeds when SBOMs accompany JARs/POMs."""
         version_dir = self._make_repo(tmp_path)
         (version_dir / "artifact-1.0.0.jar").write_text("jar")
         (version_dir / "artifact-1.0.0.pom").write_text("<project/>")
         (version_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
 
         build = BuildOutput.from_extract_result(
-            extract_result, tmp_path, require_sbom=True
+            extract_result, tmp_path, require_supply_chain_metadata=True
         )
         assert len(build.artifacts) == 3
 
     def test_raises_when_sbom_missing(
         self, tmp_path: Path, extract_result: ExtractResult
     ) -> None:
-        """require_sbom=True raises ValueError when no SBOMs exist."""
+        """Raises ValueError when no SBOMs exist."""
         version_dir = self._make_repo(tmp_path)
         (version_dir / "artifact-1.0.0.jar").write_text("jar")
         (version_dir / "artifact-1.0.0.pom").write_text("<project/>")
 
         with pytest.raises(ValueError, match="Missing SBOM artifacts for"):
             BuildOutput.from_extract_result(
-                extract_result, tmp_path, require_sbom=True
+                extract_result, tmp_path, require_supply_chain_metadata=True
             )
 
     def test_error_message_includes_gav(
@@ -1091,13 +1091,13 @@ class TestRequireSbom:
 
         with pytest.raises(ValueError, match="org.example:artifact:1.0.0"):
             BuildOutput.from_extract_result(
-                extract_result, tmp_path, require_sbom=True
+                extract_result, tmp_path, require_supply_chain_metadata=True
             )
 
     def test_default_false_allows_missing_sbom(
         self, tmp_path: Path, extract_result: ExtractResult
     ) -> None:
-        """Default require_sbom=False skips validation entirely."""
+        """Default False skips validation entirely."""
         version_dir = self._make_repo(tmp_path)
         (version_dir / "artifact-1.0.0.jar").write_text("jar")
         (version_dir / "artifact-1.0.0.pom").write_text("<project/>")
@@ -1126,7 +1126,7 @@ class TestRequireSbom:
 
         with pytest.raises(ValueError, match="artifact-b"):
             BuildOutput.from_extract_result(
-                extract_result, tmp_path, require_sbom=True
+                extract_result, tmp_path, require_supply_chain_metadata=True
             )
 
     def test_non_signable_files_ignored(
@@ -1139,7 +1139,7 @@ class TestRequireSbom:
         (version_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
 
         build = BuildOutput.from_extract_result(
-            extract_result, tmp_path, require_sbom=True
+            extract_result, tmp_path, require_supply_chain_metadata=True
         )
         assert any(a.extension == "jar" for a in build.artifacts)
 
@@ -1150,7 +1150,7 @@ class TestRequireSbom:
         (tmp_path / "TEST-build-output" / "repository").mkdir(parents=True)
 
         build = BuildOutput.from_extract_result(
-            extract_result, tmp_path, require_sbom=True
+            extract_result, tmp_path, require_supply_chain_metadata=True
         )
         assert len(build.artifacts) == 0
 
