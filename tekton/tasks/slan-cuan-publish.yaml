@@ -69,6 +69,10 @@ spec:
       description: Number of concurrent upload threads.
       type: string
       default: "4"
+    - name: REQUIRE_SUPPLY_CHAIN_METADATA
+      description: When active the pipeline will fail if the SBOM + Provenance is not present in the build artifact.
+      type: string
+      default: "false"
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -171,6 +175,8 @@ spec:
           value: $(params.INSECURE)
         - name: SLAN_CUAN_PUBLISH_PULP_AUTH_TYPE
           value: $(params.PULP_AUTH_TYPE)
+        - name: SLAN_CUAN_PUBLISH_REQUIRE_SUPPLY_CHAIN_METADATA
+          value: $(params.REQUIRE_SUPPLY_CHAIN_METADATA)
         - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
           valueFrom:
             secretKeyRef:
