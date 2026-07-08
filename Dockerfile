@@ -36,12 +36,21 @@ COPY --from=builder /export/ /
 USER 0
 
 ARG RH_IT_CERT
+ARG KUBECTL_VERSION=1.27.2
+ARG INTERNAL_REQUESTS_SCRIPT_URL=https://raw.githubusercontent.com/konflux-ci/release-service-utils/refs/heads/main/utils/internal-request
+ARG WAIT_INTERNAL_REQUEST_SCRIPT_URL=https://raw.githubusercontent.com/konflux-ci/release-service-utils/refs/heads/main/utils/wait-for-internal-request
 
 # Install dependencies
 RUN echo "${RH_IT_CERT}" | base64 -d > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem \
     && update-ca-trust \
     && microdnf install -y \
         python3.12-pip \
+        jq \
+    # For internal-requests on Konflux (required for direct signing)
+    && curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl -o /usr/bin/kubectl \
+    && curl -L ${INTERNAL_REQUESTS_SCRIPT_URL} -o /usr/bin/internal-request \
+    && curl -L ${WAIT_INTERNAL_REQUEST_SCRIPT_URL} -o /usr/bin/wait-for-internal-request \
+    && chmod +x /usr/bin/{kubectl,internal-request,wait-for-internal-request} \
     # for CVEs in base image
     && microdnf update -y \
     && microdnf clean all \
