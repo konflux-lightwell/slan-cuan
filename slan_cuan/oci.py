@@ -93,6 +93,74 @@ def pull(
             )
 
 
+def blob_fetch(
+    reference: str,
+    output_file: Path,
+    auth_file: Path | None = None,
+    verbose: bool = False,
+) -> None:
+    """Fetch a single blob from an OCI registry.
+
+    Runs ``oras blob fetch <reference> --output <output_file>``.
+
+    Args:
+        reference: Registry reference including digest
+                   (e.g. ``registry/repo@sha256:abc...``)
+        output_file: Local path to write the blob to
+        auth_file: Optional path to registry auth file
+        verbose: Whether to log the oras command
+
+    Raises:
+        OrasError: If oras command fails
+
+    """
+    cmd = ["oras", "blob", "fetch", reference, "--output", str(output_file)]
+    if auth_file:
+        cmd.extend(["--registry-config", str(auth_file)])
+
+    if verbose:
+        print(f"Running: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+
+        if "401 Unauthorized" in stderr or "authentication required" in stderr:
+            raise OrasError(
+                f"Authentication failed for {reference}",
+                stderr,
+                result.returncode,
+            )
+        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
+            raise OrasError(
+                f"Blob not found: {reference}",
+                stderr,
+                result.returncode,
+            )
+        elif (
+            "network" in stderr.lower()
+            or "connection" in stderr.lower()
+            or "timeout" in stderr.lower()
+        ):
+            raise OrasError(
+                f"Network error fetching blob {reference}",
+                stderr,
+                result.returncode,
+            )
+        else:
+            raise OrasError(
+                f"oras blob fetch failed: {stderr}",
+                stderr,
+                result.returncode,
+            )
+
+
 def manifest_fetch(
     image: ImageReference,
     auth_file: Path | None = None,
