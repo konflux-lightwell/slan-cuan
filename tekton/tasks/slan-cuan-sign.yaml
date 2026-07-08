@@ -46,6 +46,30 @@ spec:
       default: ""
     - name: REGISTRY_AUTH_SECRET
       description: K8s Secret name for registry auth (.dockerconfigjson format).
+    - name: DIRECT_SIGN
+      description: Whether to sign the repository directly via internal-request pipeline.
+      type: string
+      default: "false"
+    - name: DIRECT_SIGN_PIPELINE_NAME
+      description: The name of the internal-request pipeline to use for signing.
+      type: string
+      default: "middleware-signing"
+    - name: DIRECT_SIGN_TASK_GIT_URL
+      description: The url to the git repo where the internal-request task is stored.
+      type: string
+      default: "https://gitlab.cee.redhat.com/signing/signing.git"
+    - name: DIRECT_SIGN_TASK_GIT_REVISION
+      description: The branch name for the git repo where the internal-request task is stored.
+      type: string
+      default: main
+    - name: DIRECT_SIGN_TASK_TA_GIT_URL
+      description: The git repo where the trusted artifacts stepactions are stored.
+      type: string
+      default: "https://github.com/konflux-ci/release-service-catalog.git"
+    - name: DIRECT_SIGN_TASK_TA_GIT_REVISION
+      description: The branch name for the git repo where the trusted artifact stepactoins are stored.
+      type: string
+      default: production
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -68,11 +92,11 @@ spec:
     - name: catalogGitUrl
       description: The url to the git repo where the release-service-catalog stepactions are stored.
       type: string
-      default: https://github.com/arewm/release-service-catalog.git
+      default: https://github.com/konflux-ci/release-service-catalog.git
     - name: catalogGitRevision
       description: The revision in the catalogGitUrl repo to be used.
       type: string
-      default: lightwell-pipeline
+      default: production
   results:
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory.
@@ -155,6 +179,22 @@ spec:
           value: $(params.ZIP_ROOT_PATH)
         - name: SLAN_CUAN_SIGN_PRODUCT_KEY
           value: $(params.PRODUCT_KEY)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN
+          value: $(params.DIRECT_SIGN)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_PIPELINE_NAME
+          value: $(params.DIRECT_SIGN_PIPELINE_NAME)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_URL
+          value: $(params.DIRECT_SIGN_TASK_GIT_URL)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_REVISION
+          value: $(params.DIRECT_SIGN_TASK_GIT_REVISION)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_GIT_URL
+          value: $(params.DIRECT_SIGN_TASK_TA_GIT_URL)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_GIT_REVISION
+          value: $(params.DIRECT_SIGN_TASK_TA_GIT_REVISION)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_STORAGE
+          value: $(params.ociStorage)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT
+          value: $(params.sourceDataArtifact)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
           value: $(params.IGNORE_PATTERNS)
         - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE

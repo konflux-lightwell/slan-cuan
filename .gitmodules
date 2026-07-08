@@ -1,0 +1,3 @@
+[submodule "vendor/release-service-utils"]
+	path = vendor/release-service-utils
+	url = https://github.com/konflux-ci/release-service-utils.git

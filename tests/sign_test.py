@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from click.testing import CliRunner
 
@@ -80,6 +80,11 @@ def test_sign_help_output() -> None:
     assert "--zip-root-path" in result.output
     assert "--product-key" in result.output
     assert "--ignore-patterns" in result.output
+    assert "--direct-sign" in result.output
+    assert "--direct-sign-pipeline-name" in result.output
+    assert "--direct-sign-task-git-url" in result.output
+    assert "--direct-sign-task-git-revision" in result.output
+    assert "--intention" in result.output
 
 
 def test_sign_subcommand_is_reachable() -> None:
@@ -88,7 +93,10 @@ def test_sign_subcommand_is_reachable() -> None:
     result = runner.invoke(main, ["sign", "--help"])
 
     assert result.exit_code == 0
-    assert "Sign Maven artifacts on RADAS" in result.output
+    assert (
+        "Sign Maven artifacts on RADAS or directly via internal-request"
+        in result.output
+    )
 
 
 def test_sign_requires_repo_url(tmp_path: Path) -> None:
@@ -730,3 +738,305 @@ def test_sign_radas_config_passed_as_file_like(
     config = json.load(radas_kwargs["radas_config"])
     assert config["umb_host"] == "umb.example.com"
     assert config["request_channel"] == "test-channel"
+
+
+# ---------------------------------------------------------------------------
+# Direct signing tests
+# ---------------------------------------------------------------------------
+
+
+def _fake_tmpdir(path: Path) -> MagicMock:
+    """Mock TemporaryDirectory context manager yielding the given path."""
+    cm = MagicMock()
+    cm.__enter__ = Mock(return_value=str(path))
+    cm.__exit__ = Mock(return_value=False)
+    return cm
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_successful(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_create_ir: Mock,
+    mock_sign_individual: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """Direct signing calls internal_request.create and skips RADAS."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    mock_create_ir.return_value = "middleware-signing-abc123"
+    mock_fetch_results.return_value = {
+        "sourceDataArtifact": (
+            "oci:quay.io/konflux-ci/trusted-artifacts"
+            "@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        ),
+    }
+
+    def blob_fetch_side_effect(reference, output_file, **kwargs):
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = b'{"signed": true}'
+            info = tarfile.TarInfo(name="results.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        Path(output_file).write_bytes(buf.getvalue())
+
+    mock_blob_fetch.side_effect = blob_fetch_side_effect
+
+    sign_url_dir = tmp_path / "sign_url"
+    sign_url_dir.mkdir()
+
+    sign_work_dir = tmp_path / "sign_work"
+    sign_work_dir.mkdir()
+
+    with patch(
+        "slan_cuan.sign.tempfile.TemporaryDirectory",
+        side_effect=[_fake_tmpdir(sign_url_dir), _fake_tmpdir(sign_work_dir)],
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            _base_sign_args(output_path, repo_path) + ["--direct-sign"],
+        )
+
+    assert result.exit_code == 0
+    assert "Sign command completed successfully" in result.output
+
+    mock_sign_radas.assert_not_called()
+    mock_create_ir.assert_called_once()
+    mock_sign_individual.assert_called_once()
+
+    call_kwargs = mock_create_ir.call_args
+    assert call_kwargs.args[0] == "middleware-signing"
+    assert call_kwargs.kwargs["sync"] is True
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_create_error(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_create_ir: Mock,
+    mock_sign_individual: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """InternalRequest creation failure is wrapped in ClickException."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+
+    mock_create_ir.side_effect = RuntimeError("signing failed")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        _base_sign_args(output_path) + ["--direct-sign"],
+    )
+
+    assert result.exit_code != 0
+    assert "Error signing artifacts" in result.output
+    mock_sign_radas.assert_not_called()
+    mock_sign_individual.assert_not_called()
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_custom_pipeline_options(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_create_ir: Mock,
+    mock_sign_individual: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """Custom direct-sign pipeline options are forwarded to create()."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    mock_create_ir.return_value = "custom-pipeline-abc123"
+    mock_fetch_results.return_value = {
+        "sourceDataArtifact": (
+            "oci:quay.io/konflux-ci/trusted-artifacts"
+            "@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        ),
+    }
+
+    def blob_fetch_side_effect(reference, output_file, **kwargs):
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = b'{"signed": true}'
+            info = tarfile.TarInfo(name="results.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        Path(output_file).write_bytes(buf.getvalue())
+
+    mock_blob_fetch.side_effect = blob_fetch_side_effect
+
+    sign_url_dir = tmp_path / "sign_url"
+    sign_url_dir.mkdir()
+
+    sign_work_dir = tmp_path / "sign_work"
+    sign_work_dir.mkdir()
+
+    with patch(
+        "slan_cuan.sign.tempfile.TemporaryDirectory",
+        side_effect=[_fake_tmpdir(sign_url_dir), _fake_tmpdir(sign_work_dir)],
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            _base_sign_args(output_path, repo_path)
+            + [
+                "--direct-sign",
+                "--direct-sign-pipeline-name",
+                "custom-pipeline",
+                "--direct-sign-task-git-url",
+                "gitlab.example.com/signing.git",
+                "--direct-sign-task-git-revision",
+                "release-v2",
+                "--intention",
+                "staging",
+            ],
+        )
+
+    assert result.exit_code == 0
+
+    call_kwargs = mock_create_ir.call_args
+    assert call_kwargs.args[0] == "custom-pipeline"
+    params = call_kwargs.kwargs["params"]
+    assert params["taskGitUrl"] == "gitlab.example.com/signing.git"
+    assert params["taskGitRevision"] == "release-v2"
+    labels = call_kwargs.kwargs["labels"]
+    assert (
+        labels["internal-services.appstudio.openshift.io/intention"] == "staging"
+    )
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_default_options(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_create_ir: Mock,
+    mock_sign_individual: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """Default direct-sign pipeline options are used when not specified."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    mock_create_ir.return_value = "middleware-signing-abc123"
+    mock_fetch_results.return_value = {
+        "sourceDataArtifact": (
+            "oci:quay.io/konflux-ci/trusted-artifacts"
+            "@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        ),
+    }
+
+    def blob_fetch_side_effect(reference, output_file, **kwargs):
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = b'{"signed": true}'
+            info = tarfile.TarInfo(name="results.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        Path(output_file).write_bytes(buf.getvalue())
+
+    mock_blob_fetch.side_effect = blob_fetch_side_effect
+
+    sign_url_dir = tmp_path / "sign_url"
+    sign_url_dir.mkdir()
+
+    sign_work_dir = tmp_path / "sign_work"
+    sign_work_dir.mkdir()
+
+    with patch(
+        "slan_cuan.sign.tempfile.TemporaryDirectory",
+        side_effect=[_fake_tmpdir(sign_url_dir), _fake_tmpdir(sign_work_dir)],
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            _base_sign_args(output_path, repo_path) + ["--direct-sign"],
+        )
+
+    assert result.exit_code == 0
+
+    call_kwargs = mock_create_ir.call_args
+    assert call_kwargs.args[0] == "middleware-signing"
+    params = call_kwargs.kwargs["params"]
+    assert (
+        params["taskGitUrl"]
+        == "https://gitlab.cee.redhat.com/signing/signing.git"
+    )
+    assert params["taskGitRevision"] == "main"
+    labels = call_kwargs.kwargs["labels"]
+    assert (
+        labels["internal-services.appstudio.openshift.io/intention"]
+        == "production"
+    )
+
+
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_without_direct_sign_uses_radas(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_sign_individual: Mock,
+    mock_create_ir: Mock,
+    tmp_path: Path,
+) -> None:
+    """Without --direct-sign, the RADAS workflow is used."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    def radas_side_effect(**kwargs):
+        (Path(kwargs["result_path"]) / "result.json").write_text("{}")
+
+    mock_sign_radas.side_effect = radas_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(main, _base_sign_args(output_path, repo_path))
+
+    assert result.exit_code == 0
+    mock_sign_radas.assert_called_once()
+    mock_create_ir.assert_not_called()
