@@ -14,10 +14,122 @@ from slan_cuan.context import GlobalContext, write_tekton_result
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     ExtractResult,
+    ImageProperties,
     ImageReference,
     OCIManifest,
 )
 from slan_cuan.oci import OrasError, manifest_fetch, pull
+
+
+def pull_image_to_file(
+    image: str,
+    registry_auth_file: Path | None,
+    output_dir: Path,
+    force: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> ImageProperties | None:
+    """Pull an image to a file."""
+    # 1. Parse image reference
+    img_ref = ImageReference.parse(image)
+    if verbose:
+        click.echo(f"Parsed image reference: {img_ref}")
+
+    # Validate/create output directory
+    if output_dir.exists():
+        if not force:
+            raise click.ClickException(
+                f"Output directory {output_dir} already exists. "
+                "Use --force to overwrite."
+            )
+        if verbose:
+            click.echo(f"Removing existing directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
+    # Fetch manifest for metadata
+    if verbose:
+        click.echo(f"Fetching manifest for {img_ref}...")
+
+    raw_manifest = manifest_fetch(
+        img_ref,
+        auth_file=registry_auth_file,
+        verbose=verbose,
+    )
+
+    # Parse manifest using OCIManifest model
+    manifest = OCIManifest.from_dict(raw_manifest)
+    deliverable_name = manifest.deliverable_name
+    layers = list(manifest.layers)
+    annotations = manifest.annotations
+
+    # Extract manifest digest
+    # For digest-based refs, use the digest from the ref
+    # Otherwise, calculate from manifest JSON (canonical form)
+    if img_ref.digest:
+        manifest_digest = img_ref.digest
+    else:
+        # Calculate SHA256 digest of the manifest JSON
+        manifest_bytes = json.dumps(
+            raw_manifest, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        digest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+        manifest_digest = f"sha256:{digest_hash}"
+
+    total_size = sum(layer.size for layer in layers)
+
+    # Dry-run path: display metadata and exit
+    if dry_run:
+        click.echo(f"Image: {img_ref}")
+        click.echo(f"Manifest digest: {manifest_digest}")
+        click.echo(f"Layers: {len(layers)}")
+        click.echo(f"Total size: {total_size:,} bytes")
+        click.echo(f"Deliverable: {deliverable_name}")
+        if annotations:
+            click.echo("Annotations:")
+            for key, value in annotations.items():
+                click.echo(f"  {key}: {value}")
+        click.echo(
+            f"\ndry-run: would extract {len(layers)} layer(s) "
+            f"({total_size:,} bytes) to {output_dir}"
+        )
+        return None
+
+    # Normal path: extract the artifact
+    if verbose:
+        click.echo(f"Creating output directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create metadata directory
+    metadata_dir = output_dir / "metadata"
+    metadata_dir.mkdir(exist_ok=True)
+
+    # Save manifest
+    manifest_path = metadata_dir / "manifest.json"
+    if verbose:
+        click.echo(f"Saving manifest to {manifest_path}")
+    with manifest_path.open("w") as f:
+        json.dump(manifest.to_dict(), f, indent=2)
+
+    # Pull the artifact
+    if verbose:
+        click.echo(f"Pulling artifact to {output_dir}...")
+
+    pull(
+        img_ref,
+        output_dir,
+        auth_file=registry_auth_file,
+        verbose=verbose,
+    )
+
+    return ImageProperties(
+        img_ref=img_ref,
+        manifest=manifest,
+        deliverable_name=deliverable_name,
+        layers=layers,
+        annotations=annotations,
+        manifest_digest=manifest_digest,
+        total_size=total_size,
+    )
 
 
 @click.command()
@@ -54,98 +166,19 @@ def extract(
 ) -> None:
     """Extract artifacts from a PNC container image."""
     try:
-        # Parse image reference
-        img_ref = ImageReference.parse(image)
-        if ctx.verbose:
-            click.echo(f"Parsed image reference: {img_ref}")
-
-        # Validate/create output directory
-        if output_dir.exists():
-            if not force:
-                raise click.ClickException(
-                    f"Output directory {output_dir} already exists. "
-                    "Use --force to overwrite."
-                )
-            if ctx.verbose:
-                click.echo(f"Removing existing directory: {output_dir}")
-            shutil.rmtree(output_dir)
-
-        # Fetch manifest for metadata
-        if ctx.verbose:
-            click.echo(f"Fetching manifest for {img_ref}...")
-
-        raw_manifest = manifest_fetch(
-            img_ref,
-            auth_file=registry_auth_file,
-            verbose=ctx.verbose,
+        img_props = pull_image_to_file(
+            image,
+            registry_auth_file,
+            output_dir,
+            force,
+            ctx.dry_run,
+            ctx.verbose,
         )
-
-        # Parse manifest using OCIManifest model
-        manifest = OCIManifest.from_dict(raw_manifest)
-        deliverable_name = manifest.deliverable_name
-        layers = list(manifest.layers)
-        annotations = manifest.annotations
-
-        # Extract manifest digest
-        # For digest-based refs, use the digest from the ref
-        # Otherwise, calculate from manifest JSON (canonical form)
-        if img_ref.digest:
-            manifest_digest = img_ref.digest
-        else:
-            # Calculate SHA256 digest of the manifest JSON
-            manifest_bytes = json.dumps(
-                raw_manifest, separators=(",", ":"), sort_keys=True
-            ).encode("utf-8")
-            digest_hash = hashlib.sha256(manifest_bytes).hexdigest()
-            manifest_digest = f"sha256:{digest_hash}"
-
-        # Dry-run path: display metadata and exit
-        if ctx.dry_run:
-            total_size = sum(layer.size for layer in layers)
-            click.echo(f"Image: {img_ref}")
-            click.echo(f"Manifest digest: {manifest_digest}")
-            click.echo(f"Layers: {len(layers)}")
-            click.echo(f"Total size: {total_size:,} bytes")
-            click.echo(f"Deliverable: {deliverable_name}")
-            if annotations:
-                click.echo("Annotations:")
-                for key, value in annotations.items():
-                    click.echo(f"  {key}: {value}")
-            click.echo(
-                f"\ndry-run: would extract {len(layers)} layer(s) "
-                f"({total_size:,} bytes) to {output_dir}"
-            )
+        if img_props is None:
             return
 
-        # Normal path: extract the artifact
-        if ctx.verbose:
-            click.echo(f"Creating output directory: {output_dir}")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create metadata directory
-        metadata_dir = output_dir / "metadata"
-        metadata_dir.mkdir(exist_ok=True)
-
-        # Save manifest
-        manifest_path = metadata_dir / "manifest.json"
-        if ctx.verbose:
-            click.echo(f"Saving manifest to {manifest_path}")
-        with manifest_path.open("w") as f:
-            json.dump(manifest.to_dict(), f, indent=2)
-
-        # Pull the artifact
-        if ctx.verbose:
-            click.echo(f"Pulling artifact to {output_dir}...")
-
-        pull(
-            img_ref,
-            output_dir,
-            auth_file=registry_auth_file,
-            verbose=ctx.verbose,
-        )
-
         # Discover extracted files
-        deliverable_path = output_dir / deliverable_name
+        deliverable_path = output_dir / img_props.deliverable_name
         if not deliverable_path.exists():
             raise click.ClickException(
                 f"Deliverable directory not found: {deliverable_path}"
@@ -164,11 +197,11 @@ def extract(
 
         # Build and save ExtractResult
         result = ExtractResult(
-            image=img_ref,
-            manifest_digest=manifest_digest,
-            layers=layers,
-            annotations=annotations,
-            deliverable_dir=deliverable_name,
+            image=img_props.img_ref,
+            manifest_digest=img_props.manifest_digest,
+            layers=img_props.layers,
+            annotations=img_props.annotations,
+            deliverable_dir=img_props.deliverable_name,
             files=files,
             extracted_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -180,10 +213,10 @@ def extract(
 
         # Write Tekton results
         write_tekton_result(
-            ctx.tekton_results_dir, "MANIFEST_DIGEST", manifest_digest
+            ctx.tekton_results_dir, "MANIFEST_DIGEST", img_props.manifest_digest
         )
         write_tekton_result(
-            ctx.tekton_results_dir, "DELIVERABLE_DIR", deliverable_name
+            ctx.tekton_results_dir, "DELIVERABLE_DIR", img_props.deliverable_name
         )
 
         # Log summary

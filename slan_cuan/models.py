@@ -18,6 +18,19 @@ CYCLONEDX_FILE_SUFFIX = ".cyclonedx.json"
 
 
 @dataclass(frozen=True)
+class ImageProperties:
+    """Metadata returned after pulling an OCI image."""
+
+    img_ref: ImageReference
+    manifest: OCIManifest
+    deliverable_name: str
+    layers: list[LayerInfo]
+    annotations: dict[str, str]
+    manifest_digest: str
+    total_size: int
+
+
+@dataclass(frozen=True)
 class ImageReference:
     """Parsed OCI image reference."""
 

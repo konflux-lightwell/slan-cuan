@@ -4,6 +4,7 @@ from pathlib import Path
 
 import click
 
+from slan_cuan.attest import attest
 from slan_cuan.context import GlobalContext
 from slan_cuan.extract import extract
 from slan_cuan.publish import publish
@@ -53,6 +54,7 @@ def main(
     )
 
 
+main.add_command(attest)
 main.add_command(extract)
 main.add_command(publish)
 main.add_command(sign)

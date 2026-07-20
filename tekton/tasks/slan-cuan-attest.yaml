@@ -1,0 +1,145 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-attest
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Build
+    tekton.dev/displayName: "slan-cuan: Attest via OSV and VEX"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,maven,attest"
+spec:
+  description: >-
+    Attest a PNC container image via OSV and VEX.
+  params:
+    - name: BUILD_INDEX
+      description: Build index file path with metadata to generate the OSV and VEX.
+      type: string
+    - name: REGISTRY_AUTH_SECRET
+      description: K8s Secret name for registry auth (.dockerconfigjson format).
+      type: string
+      default: "registry-auth"
+    - name: OUTPUT_DIR
+      description: The directory to output the OSV and VEX documents to.
+      type: string
+      default: "/var/workdir/attested"
+    - name: sourceDataArtifact
+      description: Trusted Artifact URI of the build index.
+      type: string
+    - name: ociStorage
+      description: The OCI repository where the Trusted Artifact is stored.
+      type: string
+      default: "empty"
+    - name: ociArtifactExpiresAfter
+      description: Expiration date for the trusted artifact in the OCI repository.
+      type: string
+      default: "1d"
+    - name: orasOptions
+      description: oras options to pass to Trusted Artifacts calls.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: "trusted-ca"
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: "ca-bundle.crt"
+    - name: catalogGitUrl
+      description: The url to the git repo where the release-service-catalog stepactions are stored.
+      type: string
+      default: https://github.com/arewm/release-service-catalog.git
+    - name: catalogGitRevision
+      description: The revision in the catalogGitUrl repo to be used.
+      type: string
+      default: lightwell-pipeline
+  results:
+    - name: ATTESTATION_DIR
+      description: Name of the directory where the OSV and VEX documents are stored.
+    - name: sourceDataArtifact
+      description: Trusted Artifact URI of the data directory.
+      type: string
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+      - name: trusted-ca
+        mountPath: /mnt/trusted-ca
+        readOnly: true
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+  steps:
+    - name: use-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: /var/workdir/extracted
+        - name: sourceDataArtifact
+          value: $(params.sourceDataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
+      args:
+        - --verbose
+        - attest
+      env:
+        - name: SLAN_CUAN_ATTEST_BUILD_INDEX
+          value: $(params.BUILD_INDEX)
+        - name: SLAN_CUAN_ATTEST_OUTPUT_DIR
+          value: $(params.OUTPUT_DIR)
+        - name: SLAN_CUAN_ATTEST_REGISTRY_AUTH_FILE
+          value: /auth/.dockerconfigjson
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: $(step.results)
+      volumeMounts:
+        - name: registry-auth
+          mountPath: /auth
+          readOnly: true
+    - name: create-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: $(params.OUTPUT_DIR)
+        - name: sourceDataArtifact
+          value: $(results.sourceDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: registry-auth
+      secret:
+        secretName: $(params.REGISTRY_AUTH_SECRET)
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        optional: true
