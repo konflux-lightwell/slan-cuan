@@ -12,6 +12,7 @@ Tasks follow the pattern `slan-cuan-<subcommand>`:
 | `sign` | `slan-cuan-sign` | `tekton/tasks/slan-cuan-sign.yaml` |
 | `register` | `slan-cuan-register` | `tekton/tasks/slan-cuan-register.yaml` |
 | `publish` | `slan-cuan-publish` | `tekton/tasks/slan-cuan-publish.yaml` |
+| `generate-security-metadata` | `slan-cuan-generate-security-metadata` | `tekton/tasks/slan-cuan-generate-security-metadata.yaml` |
 
 ## Task Structure
 
