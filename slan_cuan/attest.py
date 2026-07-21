@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import json
-import tempfile
+import os
 from pathlib import Path
 
 import click
 from fath_cuan.workflow import process_osv
 
 from slan_cuan.context import GlobalContext, write_tekton_result
-from slan_cuan.extract import pull_image_to_file
 
 
 @click.command()
 @click.option(
-    "--build-index",
+    "--index-basedir",
     type=str,
     required=True,
-    help="The pullspec of the build index to attest.",
+    help="The base directory of the build index JSON file.",
+)
+@click.option(
+    "--index-filename",
+    type=str,
+    required=True,
+    help="The filename of the build index JSON file "
+    "relative to the base directory.",
+    default="gav-index.json",
 )
 @click.option(
     "--output-dir",
@@ -26,43 +33,27 @@ from slan_cuan.extract import pull_image_to_file
     required=True,
     help="The directory to output the attestations to.",
 )
-@click.option(
-    "--registry-auth-file",
-    type=click.Path(exists=True, path_type=Path),
-    help="Path to container registry authentication file.",
-)
 @click.pass_obj
 def attest(
     ctx: GlobalContext,
-    build_index: str,
+    index_basedir: str,
+    index_filename: str,
     output_dir: Path,
-    registry_auth_file: Path | None,
 ) -> None:
-    """Generate the OSV and VEX attestations for a given build."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        index_props = pull_image_to_file(
-            build_index,
-            registry_auth_file,
-            Path(temp_dir),
-            dry_run=ctx.dry_run,
-            verbose=ctx.verbose,
-        )
-        if index_props is None:
-            return
+    """Generate the OSV and VEX attestations for a given build index."""
+    index_full_path = os.path.join(index_basedir, index_filename)
+    file_name = Path(index_filename).stem
+    click.echo(f"Processing {index_full_path} to generate OSV and VEX...")
+    with open(index_full_path, "r") as f:
+        index_data = json.load(f)
 
-        for file_path in Path(temp_dir).rglob("*.json"):
-            file_name = file_path.stem
-            click.echo(f"Processing {file_name}...")
-            with open(file_path) as f:
-                data = json.load(f)
+    osv_records = process_osv(index_data)
+    osv_output_path = output_dir / f"{file_name}.osv.json"
+    click.echo(f"Writing OSV document to {osv_output_path}")
+    with open(osv_output_path, "w") as f:
+        json.dump(osv_records, f, indent=2)
 
-            osv_records = process_osv(data)
-            osv_output_path = output_dir / f"{file_name}.osv.json"
-            click.echo(f"Writing OSV document to {osv_output_path}")
-            with open(osv_output_path, "w") as f:
-                json.dump(osv_records, f, indent=2)
-
-            # TODO: Generate VEX document
+    # TODO: Generate VEX document
 
     write_tekton_result(
         ctx.tekton_results_dir,

@@ -12,8 +12,6 @@ from click.testing import CliRunner
 from slan_cuan.attest import attest
 from slan_cuan.context import GlobalContext
 
-IMAGE = "quay.io/test/idx@sha256:aaa"
-
 
 @pytest.fixture
 def ctx() -> GlobalContext:
@@ -24,12 +22,6 @@ def ctx() -> GlobalContext:
         ca_cert=None,
         tekton_results_dir=None,
     )
-
-
-@pytest.fixture
-def fake_image_props() -> Mock:
-    """Minimal ImageProperties mock — attest only checks for None."""
-    return Mock()
 
 
 @pytest.fixture
@@ -52,7 +44,7 @@ def fake_osv_records() -> list[dict]:
     ]
 
 
-def _create_build_index_json(directory: Path, name: str = "build") -> Path:
+def _create_index_file(directory: Path, name: str = "gav-index.json") -> Path:
     """Write a minimal build-index JSON file into *directory*."""
     data = {
         "buildId": "12345",
@@ -64,53 +56,78 @@ def _create_build_index_json(directory: Path, name: str = "build") -> Path:
             }
         ],
     }
-    path = directory / f"{name}.json"
+    path = directory / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data))
     return path
 
 
-def _invoke(runner, output_dir, ctx, **extra):
-    return runner.invoke(
-        attest,
-        [
-            "--build-index",
-            IMAGE,
-            "--output-dir",
-            str(output_dir),
-        ],
-        obj=ctx,
-        **extra,
-    )
+def _invoke(runner, index_basedir, output_dir, ctx, index_filename=None):
+    args = [
+        "--index-basedir",
+        str(index_basedir),
+        "--output-dir",
+        str(output_dir),
+    ]
+    if index_filename is not None:
+        args += ["--index-filename", index_filename]
+    return runner.invoke(attest, args, obj=ctx)
 
 
 @patch("slan_cuan.attest.process_osv")
-@patch("slan_cuan.attest.pull_image_to_file")
 def test_attest_generates_osv_output(
-    mock_pull: Mock,
     mock_process_osv: Mock,
-    fake_image_props: Mock,
     fake_osv_records: list[dict],
     ctx: GlobalContext,
     tmp_path: Path,
 ) -> None:
-    """Successful attestation writes one OSV file per input JSON."""
+    """Successful attestation writes an OSV file from the index."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    def pull_side_effect(image, auth, out_dir, **kwargs):
-        _create_build_index_json(out_dir, "cve-report")
-        return fake_image_props
-
-    mock_pull.side_effect = pull_side_effect
     mock_process_osv.return_value = fake_osv_records
 
     runner = CliRunner()
-    result = _invoke(runner, output_dir, ctx)
+    result = _invoke(runner, index_dir, output_dir, ctx)
 
     assert result.exit_code == 0, result.output
-    assert "Processing cve-report..." in result.output
+    assert "Processing" in result.output
     assert "Attestation command completed" in result.output
+
+    osv_file = output_dir / "gav-index.osv.json"
+    assert osv_file.exists()
+
+    written = json.loads(osv_file.read_text())
+    assert written == fake_osv_records
+
+
+@patch("slan_cuan.attest.process_osv")
+def test_attest_custom_filename(
+    mock_process_osv: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """A custom --index-filename produces an OSV file named after the stem."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir, name="cve-report.json")
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    mock_process_osv.return_value = fake_osv_records
+
+    runner = CliRunner()
+    result = _invoke(
+        runner, index_dir, output_dir, ctx, index_filename="cve-report.json"
+    )
+
+    assert result.exit_code == 0, result.output
 
     osv_file = output_dir / "cve-report.osv.json"
     assert osv_file.exists()
@@ -120,176 +137,44 @@ def test_attest_generates_osv_output(
 
 
 @patch("slan_cuan.attest.process_osv")
-@patch("slan_cuan.attest.pull_image_to_file")
-def test_attest_handles_multiple_json_files(
-    mock_pull: Mock,
+def test_attest_passes_index_data_to_process_osv(
     mock_process_osv: Mock,
-    fake_image_props: Mock,
-    fake_osv_records: list[dict],
     ctx: GlobalContext,
     tmp_path: Path,
 ) -> None:
-    """Each JSON file in the build index produces its own OSV output."""
+    """process_osv receives the parsed JSON data from the index file."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    index_data = {"buildId": "99", "artifacts": []}
+    (index_dir / "gav-index.json").write_text(json.dumps(index_data))
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    def pull_side_effect(image, auth, out_dir, **kwargs):
-        _create_build_index_json(out_dir, "alpha")
-        _create_build_index_json(out_dir, "beta")
-        return fake_image_props
-
-    mock_pull.side_effect = pull_side_effect
-    mock_process_osv.return_value = fake_osv_records
+    mock_process_osv.return_value = []
 
     runner = CliRunner()
-    result = _invoke(runner, output_dir, ctx)
+    result = _invoke(runner, index_dir, output_dir, ctx)
 
     assert result.exit_code == 0, result.output
-    assert (output_dir / "alpha.osv.json").exists()
-    assert (output_dir / "beta.osv.json").exists()
-
-
-@patch("slan_cuan.attest.pull_image_to_file")
-def test_attest_dry_run_exits_early(
-    mock_pull: Mock,
-    ctx: GlobalContext,
-    tmp_path: Path,
-) -> None:
-    """When pull returns None (dry-run), attest exits without processing."""
-    mock_pull.return_value = None
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    dry_ctx = GlobalContext(
-        verbose=False,
-        dry_run=True,
-        ca_cert=None,
-        tekton_results_dir=None,
-    )
-
-    runner = CliRunner()
-    result = _invoke(runner, output_dir, dry_ctx)
-
-    assert result.exit_code == 0
-    assert "Attestation command completed" not in result.output
-    osv_files = list(output_dir.glob("*.osv.json"))
-    assert len(osv_files) == 0
+    mock_process_osv.assert_called_once_with(index_data)
 
 
 @patch("slan_cuan.attest.process_osv")
-@patch("slan_cuan.attest.pull_image_to_file")
-def test_attest_no_json_files(
-    mock_pull: Mock,
-    mock_process_osv: Mock,
-    fake_image_props: Mock,
-    ctx: GlobalContext,
-    tmp_path: Path,
-) -> None:
-    """No JSON files in the build index means nothing is processed."""
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    mock_pull.return_value = fake_image_props
-
-    runner = CliRunner()
-    result = _invoke(runner, output_dir, ctx)
-
-    assert result.exit_code == 0
-    assert "Attestation command completed" in result.output
-    mock_process_osv.assert_not_called()
-
-
-@patch("slan_cuan.attest.pull_image_to_file")
-def test_attest_passes_correct_args_to_pull(
-    mock_pull: Mock,
-    fake_image_props: Mock,
-    tmp_path: Path,
-) -> None:
-    """pull_image_to_file receives the right arguments."""
-    mock_pull.return_value = fake_image_props
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    test_ctx = GlobalContext(
-        verbose=True,
-        dry_run=False,
-        ca_cert=None,
-        tekton_results_dir=None,
-    )
-
-    runner = CliRunner()
-    _invoke(runner, output_dir, test_ctx)
-
-    mock_pull.assert_called_once()
-    call_args = mock_pull.call_args
-    assert call_args[0][0] == IMAGE
-    assert call_args[0][1] is None
-    assert isinstance(call_args[0][2], Path)
-    assert call_args[1]["dry_run"] is False
-    assert call_args[1]["verbose"] is True
-
-
-@patch("slan_cuan.attest.process_osv")
-@patch("slan_cuan.attest.pull_image_to_file")
-def test_attest_with_registry_auth_file(
-    mock_pull: Mock,
-    mock_process_osv: Mock,
-    fake_image_props: Mock,
-    fake_osv_records: list[dict],
-    ctx: GlobalContext,
-    tmp_path: Path,
-) -> None:
-    """Registry auth file is forwarded to pull_image_to_file."""
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-    auth_file = tmp_path / "auth.json"
-    auth_file.write_text('{"auths": {}}')
-
-    def pull_side_effect(image, auth, out_dir, **kwargs):
-        _create_build_index_json(out_dir, "report")
-        return fake_image_props
-
-    mock_pull.side_effect = pull_side_effect
-    mock_process_osv.return_value = fake_osv_records
-
-    runner = CliRunner()
-    result = runner.invoke(
-        attest,
-        [
-            "--build-index",
-            IMAGE,
-            "--output-dir",
-            str(output_dir),
-            "--registry-auth-file",
-            str(auth_file),
-        ],
-        obj=ctx,
-    )
-
-    assert result.exit_code == 0, result.output
-    mock_pull.assert_called_once()
-    assert mock_pull.call_args[0][1] == auth_file
-
-
-@patch("slan_cuan.attest.process_osv")
-@patch("slan_cuan.attest.pull_image_to_file")
 def test_attest_writes_tekton_results(
-    mock_pull: Mock,
     mock_process_osv: Mock,
-    fake_image_props: Mock,
     fake_osv_records: list[dict],
     tmp_path: Path,
 ) -> None:
     """ATTESTATION_DIR Tekton result is written when results dir is set."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     results_dir = tmp_path / "results"
 
-    def pull_side_effect(image, auth, out_dir, **kwargs):
-        _create_build_index_json(out_dir, "report")
-        return fake_image_props
-
-    mock_pull.side_effect = pull_side_effect
     mock_process_osv.return_value = fake_osv_records
 
     tekton_ctx = GlobalContext(
@@ -300,7 +185,7 @@ def test_attest_writes_tekton_results(
     )
 
     runner = CliRunner()
-    result = _invoke(runner, output_dir, tekton_ctx)
+    result = _invoke(runner, index_dir, output_dir, tekton_ctx)
 
     assert result.exit_code == 0, result.output
 
@@ -309,37 +194,26 @@ def test_attest_writes_tekton_results(
     assert attestation_dir_file.read_text() == str(output_dir)
 
 
-@patch("slan_cuan.attest.pull_image_to_file")
-def test_attest_dry_run_skips_tekton_results(
-    mock_pull: Mock,
-    tmp_path: Path,
-) -> None:
-    """In dry-run mode, no Tekton result files are written."""
-    mock_pull.return_value = None
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-    results_dir = tmp_path / "results"
-
-    dry_ctx = GlobalContext(
-        verbose=False,
-        dry_run=True,
-        ca_cert=None,
-        tekton_results_dir=results_dir,
-    )
-
-    runner = CliRunner()
-    result = _invoke(runner, output_dir, dry_ctx)
-
-    assert result.exit_code == 0
-    assert not results_dir.exists()
-
-
 def test_attest_missing_required_options() -> None:
-    """Missing --build-index or --output-dir produces an error."""
+    """Missing --index-basedir or --output-dir produces an error."""
     runner = CliRunner()
 
     result = runner.invoke(attest, ["--output-dir", "/tmp/out"])
     assert result.exit_code != 0
 
-    result = runner.invoke(attest, ["--build-index", IMAGE])
+    result = runner.invoke(attest, ["--index-basedir", "/tmp/idx"])
+    assert result.exit_code != 0
+
+
+def test_attest_file_not_found(
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """A missing index file produces an error."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    runner = CliRunner()
+    result = _invoke(runner, tmp_path / "nonexistent", output_dir, ctx)
+
     assert result.exit_code != 0

@@ -15,13 +15,13 @@ spec:
   description: >-
     Attest a PNC container image via OSV and VEX.
   params:
-    - name: BUILD_INDEX
-      description: Build index file path with metadata to generate the OSV and VEX.
+    - name: INDEX_BASEDIR
+      description: The base directory of the build index JSON file.
       type: string
-    - name: REGISTRY_AUTH_SECRET
-      description: K8s Secret name for registry auth (.dockerconfigjson format).
+    - name: INDEX_FILENAME
+      description: The filename of the build index JSON file relative to the base directory.
       type: string
-      default: "registry-auth"
+      default: "gav-index.json"
     - name: OUTPUT_DIR
       description: The directory to output the OSV and VEX documents to.
       type: string
@@ -100,18 +100,14 @@ spec:
         - --verbose
         - attest
       env:
-        - name: SLAN_CUAN_ATTEST_BUILD_INDEX
-          value: $(params.BUILD_INDEX)
+        - name: SLAN_CUAN_ATTEST_INDEX_BASEDIR
+          value: $(params.INDEX_BASEDIR)
+        - name: SLAN_CUAN_ATTEST_INDEX_FILENAME
+          value: $(params.INDEX_FILENAME)
         - name: SLAN_CUAN_ATTEST_OUTPUT_DIR
           value: $(params.OUTPUT_DIR)
-        - name: SLAN_CUAN_ATTEST_REGISTRY_AUTH_FILE
-          value: /auth/.dockerconfigjson
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
-      volumeMounts:
-        - name: registry-auth
-          mountPath: /auth
-          readOnly: true
     - name: create-trusted-artifact
       ref:
         resolver: git
@@ -136,9 +132,6 @@ spec:
   volumes:
     - name: workdir
       emptyDir: {}
-    - name: registry-auth
-      secret:
-        secretName: $(params.REGISTRY_AUTH_SECRET)
     - name: trusted-ca
       configMap:
         name: $(params.caTrustConfigMapName)
