@@ -2,18 +2,18 @@
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: slan-cuan-attest
+  name: slan-cuan-generate-security-metadata
   labels:
     app.kubernetes.io/version: "0.1"
   annotations:
     tekton.dev/categories: Build
-    tekton.dev/displayName: "slan-cuan: Attest via OSV and VEX"
+    tekton.dev/displayName: "slan-cuan: Generate Security Metadata via OSV and VEX"
     tekton.dev/pipelines.minVersion: "0.50.0"
     tekton.dev/platforms: "linux/amd64"
-    tekton.dev/tags: "release,maven,attest"
+    tekton.dev/tags: "release,maven,generate-security-metadata"
 spec:
   description: >-
-    Attest a PNC container image via OSV and VEX.
+    Generate security metadata for a PNC container image via OSV and VEX.
   params:
     - name: INDEX_BASEDIR
       description: The base directory of the build index JSON file.
@@ -98,13 +98,13 @@ spec:
       imagePullPolicy: Always
       args:
         - --verbose
-        - attest
+        - generate-security-metadata
       env:
-        - name: SLAN_CUAN_ATTEST_INDEX_BASEDIR
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_INDEX_BASEDIR
           value: $(params.INDEX_BASEDIR)
-        - name: SLAN_CUAN_ATTEST_INDEX_FILENAME
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_INDEX_FILENAME
           value: $(params.INDEX_FILENAME)
-        - name: SLAN_CUAN_ATTEST_OUTPUT_DIR
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OUTPUT_DIR
           value: $(params.OUTPUT_DIR)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)

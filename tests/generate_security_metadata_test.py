@@ -1,4 +1,4 @@
-"""Unit tests for the attest subcommand."""
+"""Unit tests for the generate-security-metadata subcommand."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 import pytest
 from click.testing import CliRunner
 
-from slan_cuan.attest import attest
 from slan_cuan.context import GlobalContext
+from slan_cuan.generate_security_metadata import generate_security_metadata
 
 
 @pytest.fixture
@@ -71,11 +71,11 @@ def _invoke(runner, index_basedir, output_dir, ctx, index_filename=None):
     ]
     if index_filename is not None:
         args += ["--index-filename", index_filename]
-    return runner.invoke(attest, args, obj=ctx)
+    return runner.invoke(generate_security_metadata, args, obj=ctx)
 
 
-@patch("slan_cuan.attest.process_osv")
-def test_attest_generates_osv_output(
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_generate_security_metadata_creates_osv_output(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
     ctx: GlobalContext,
@@ -96,7 +96,7 @@ def test_attest_generates_osv_output(
 
     assert result.exit_code == 0, result.output
     assert "Processing" in result.output
-    assert "Attestation command completed" in result.output
+    assert "Security metadata generation completed" in result.output
 
     osv_file = output_dir / "gav-index.osv.json"
     assert osv_file.exists()
@@ -105,8 +105,8 @@ def test_attest_generates_osv_output(
     assert written == fake_osv_records
 
 
-@patch("slan_cuan.attest.process_osv")
-def test_attest_custom_filename(
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_generate_security_metadata_custom_filename(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
     ctx: GlobalContext,
@@ -136,8 +136,8 @@ def test_attest_custom_filename(
     assert written == fake_osv_records
 
 
-@patch("slan_cuan.attest.process_osv")
-def test_attest_passes_index_data_to_process_osv(
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_generate_security_metadata_passes_index_data_to_process_osv(
     mock_process_osv: Mock,
     ctx: GlobalContext,
     tmp_path: Path,
@@ -160,8 +160,8 @@ def test_attest_passes_index_data_to_process_osv(
     mock_process_osv.assert_called_once_with(index_data)
 
 
-@patch("slan_cuan.attest.process_osv")
-def test_attest_writes_tekton_results(
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_generate_security_metadata_writes_tekton_results(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
     tmp_path: Path,
@@ -194,18 +194,22 @@ def test_attest_writes_tekton_results(
     assert attestation_dir_file.read_text() == str(output_dir)
 
 
-def test_attest_missing_required_options() -> None:
+def test_generate_security_metadata_missing_required_options() -> None:
     """Missing --index-basedir or --output-dir produces an error."""
     runner = CliRunner()
 
-    result = runner.invoke(attest, ["--output-dir", "/tmp/out"])
+    result = runner.invoke(
+        generate_security_metadata, ["--output-dir", "/tmp/out"]
+    )
     assert result.exit_code != 0
 
-    result = runner.invoke(attest, ["--index-basedir", "/tmp/idx"])
+    result = runner.invoke(
+        generate_security_metadata, ["--index-basedir", "/tmp/idx"]
+    )
     assert result.exit_code != 0
 
 
-def test_attest_file_not_found(
+def test_generate_security_metadata_file_not_found(
     ctx: GlobalContext,
     tmp_path: Path,
 ) -> None:

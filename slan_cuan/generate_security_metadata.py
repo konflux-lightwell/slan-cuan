@@ -34,7 +34,7 @@ from slan_cuan.context import GlobalContext, write_tekton_result
     help="The directory to output the attestations to.",
 )
 @click.pass_obj
-def attest(
+def generate_security_metadata(
     ctx: GlobalContext,
     index_basedir: str,
     index_filename: str,
@@ -60,4 +60,4 @@ def attest(
         "ATTESTATION_DIR",
         str(output_dir),
     )
-    click.echo("Attestation command completed successfully.")
+    click.echo("Security metadata generation completed successfully.")

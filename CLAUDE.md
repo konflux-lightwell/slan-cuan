@@ -49,6 +49,7 @@ The naming convention is `slan-cuan-<subcommand>`.
 | `sign` | `slan-cuan-sign` | `tekton/tasks/slan-cuan-sign.yaml` |
 | `register` | `slan-cuan-register` | `tekton/tasks/slan-cuan-register.yaml` |
 | `publish` | `slan-cuan-publish` | `tekton/tasks/slan-cuan-publish.yaml` |
+| `generate-security-metadata` | `slan-cuan-generate-security-metadata` | `tekton/tasks/slan-cuan-generate-security-metadata.yaml` |
 
 **Invariant:** When adding or modifying a CLI subcommand, the corresponding
 Tekton Task MUST be updated (and vice versa). The Task's `run` step
