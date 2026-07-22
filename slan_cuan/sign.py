@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -56,6 +57,133 @@ def _build_radas_config_from_env(
         "radas_receiver_timeout": radas_receiver_timeout,
     }
     return io.StringIO(json.dumps(config))
+
+
+def _sign_in_radas(
+    repo_url: str,
+    signing_key: str,
+    radas_umb_host: str,
+    radas_result_queue: str,
+    radas_request_channel: str,
+    radas_client_ca: str,
+    radas_client_key: str,
+    radas_client_key_pass_file: str,
+    radas_root_ca: str,
+    radas_receiver_timeout: int,
+    requester_id: str,
+    ignore_patterns: tuple[str, ...],
+    registry_auth_file: Path | None,
+    tmp_dir_sign_url: str,
+    sign_artifact_dir: str,
+) -> None:
+    # Sign the repository in RADAS workflow
+    radas_config = _build_radas_config_from_env(
+        radas_umb_host=radas_umb_host,
+        radas_result_queue=radas_result_queue,
+        radas_request_channel=radas_request_channel,
+        radas_client_ca=radas_client_ca,
+        radas_client_key=radas_client_key,
+        radas_client_key_pass_file=radas_client_key_pass_file,
+        radas_root_ca=radas_root_ca,
+        radas_receiver_timeout=radas_receiver_timeout,
+    )
+
+    click.echo("Signing the repository in RADAS...")
+    click.echo(f"  - registry_auth_file: {registry_auth_file}")
+    if registry_auth_file is not None:
+        with open(registry_auth_file, "rb") as f:
+            file_hash = hashlib.file_digest(f, "sha256")
+        click.echo(f"  - sha256 creds: {file_hash.hexdigest()}")
+    click.echo(f"  - repo_url: {repo_url}")
+    click.echo(f"  - requester: {requester_id}")
+    click.echo(f"  - sign_key: {signing_key}")
+    click.echo(f"  - result_path: {sign_artifact_dir}")
+    click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
+    click.echo(f"  - radas_config: {radas_config}")
+
+    sign_in_radas_workflow(
+        repo_url=repo_url,
+        requester=requester_id,
+        sign_key=signing_key,
+        result_path=tmp_dir_sign_url,
+        ignore_patterns=list(ignore_patterns),
+        # upstream annotates as RadasConfig but calls json.load() on it
+        radas_config=radas_config,  # type: ignore[arg-type]
+        registry_auth_config_path=registry_auth_file,
+    )
+
+
+def _sign_directly(
+    repo_url: str,
+    signing_key: str,
+    requester_id: str,
+    ignore_patterns: tuple[str, ...],
+    registry_auth_file: Path | None,
+    direct_sign_pipeline_name: str,
+    direct_sign_pipeline_image: str,
+    direct_sign_task_git_url: str,
+    intention: str,
+    sign_artifact_dir: str,
+) -> None:
+    # Sign the repository directly via internal-request pipeline
+    click.echo("Signing the repository directly via internal-request...")
+    click.echo(f"  - registry_auth_file: {registry_auth_file}")
+    if registry_auth_file is not None:
+        with open(registry_auth_file, "rb") as f:
+            file_hash = hashlib.file_digest(f, "sha256")
+        click.echo(f"  - sha256 creds: {file_hash.hexdigest()}")
+    click.echo(f"  - repo_url: {repo_url}")
+    click.echo(f"  - requester: {requester_id}")
+    click.echo(f"  - sign_key: {signing_key}")
+    click.echo(f"  - result_path: {sign_artifact_dir}")
+    click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
+
+    cmd = [
+        "internal-request",
+        "--pipeline",
+        direct_sign_pipeline_name,
+        "-l",
+        "internal-services.appstudio.openshift.io/rate-limited='true'",
+        "-l",
+        "internal-services.appstudio.openshift.io/rate-limiting-group='signing-server'",
+        "-l",
+        f"internal-services.appstudio.openshift.io/intention={intention}",
+        "-p",
+        f"pipeline_image={direct_sign_pipeline_image}",
+        "-p",
+        f"taskGitUrl={direct_sign_task_git_url}",
+        "-p",
+        f"repoURL={repo_url}",
+        "-p",
+        f"requester={requester_id}",
+        "-p",
+        f"signKey={signing_key}",
+        "-p",
+        f"resultPath={sign_artifact_dir}",
+        "-p",
+        f"ignorePatterns={list(ignore_patterns)}",
+        "-p",
+        f"registryAuthFile={registry_auth_file}" if registry_auth_file else "",
+        "-s",
+        "true",  # Will wait for the pipeline to complete
+    ]
+
+    click.echo(f"  - cmd: {cmd}")
+    cmd_args = {
+        "capture_output": True,
+        "text": True,
+        "check": True,
+        "universal_newlines": True,
+        "stderr": subprocess.STDOUT,
+        "stdout": subprocess.PIPE,
+    }
+
+    response = subprocess.run(cmd, **cmd_args)
+    if response.returncode != 0:
+        raise click.ClickException(
+            f"Error signing the repository directly via internal-request: {response.stdout}"  # noqa: E501
+        )
+    click.echo(f"  - response: {response.stdout}")
 
 
 @click.command()
@@ -181,6 +309,41 @@ def _build_radas_config_from_env(
     type=click.Path(exists=True, path_type=Path),
     help="Path to container registry authentication file.",
 )
+@click.option(
+    "--direct-sign",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Directly sign the repository using the internal-request script instead of RADAS.",  # noqa: E501
+)
+@click.option(
+    "--direct-sign-pipeline-name",
+    default="direct-lightwell-signing",
+    type=str,
+    show_default=True,
+    help="The name of the pipeline to use for direct signing.",
+)
+@click.option(
+    "--direct-sign-pipeline-image",
+    default="quay.io/konflux-ci/signing:latest",
+    type=str,
+    show_default=True,
+    help="The image to use for direct signing.",
+)
+@click.option(
+    "--direct-sign-task-git-url",
+    default="gitlab.cee.redhat.com/signing/signing.git",
+    type=str,
+    show_default=True,
+    help="The Git URL to use for direct signing.",
+)
+@click.option(
+    "--intention",
+    default="production",
+    type=str,
+    show_default=True,
+    help="The intention to use for direct signing.",
+)
 @click.pass_obj
 def sign(
     ctx: GlobalContext,
@@ -201,9 +364,13 @@ def sign(
     product_key: str,
     ignore_patterns: tuple[str, ...],
     registry_auth_file: Path | None,
+    direct_sign: bool,
+    direct_sign_pipeline_name: str,
+    direct_sign_pipeline_image: str,
+    direct_sign_task_git_url: str,
+    intention: str,
 ) -> None:
-    """Sign Maven artifacts on RADAS."""
-    radas_config = None
+    """Sign Maven artifacts on RADAS or directly via internal-request."""
     try:
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
@@ -211,46 +378,49 @@ def sign(
         # Also set up logging for novabucks to propagate its logs
         set_logging("sign", "novabucks", log_level, use_log_file=False)
 
-        # 1 - Sign the repository in RADAS
-        radas_config = _build_radas_config_from_env(
-            radas_umb_host=radas_umb_host,
-            radas_result_queue=radas_result_queue,
-            radas_request_channel=radas_request_channel,
-            radas_client_ca=radas_client_ca,
-            radas_client_key=radas_client_key,
-            radas_client_key_pass_file=radas_client_key_pass_file,
-            radas_root_ca=radas_root_ca,
-            radas_receiver_timeout=radas_receiver_timeout,
-        )
-        repo_url = repo_url.removeprefix("https://").removeprefix("http://")
-        sign_artifact_dir = os.path.join(output_path, "signed", "repository")
-
-        click.echo("Signing the repository in RADAS...")
-        click.echo(f"  - registry_auth_file: {registry_auth_file}")
-        if registry_auth_file is not None:
-            with open(registry_auth_file, "rb") as f:
-                file_hash = hashlib.file_digest(f, "sha256")
-            click.echo(f"  - sha256 creds: {file_hash.hexdigest()}")
-        click.echo(f"  - repo_url: {repo_url}")
-        click.echo(f"  - requester: {requester_id}")
-        click.echo(f"  - sign_key: {signing_key}")
-        click.echo(f"  - result_path: {sign_artifact_dir}")
-        click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
-        click.echo(f"  - radas_config: {radas_config}")
-
         with tempfile.TemporaryDirectory(
             prefix="slan-cuan-sign-url-"
         ) as tmp_dir_sign_url:
-            sign_in_radas_workflow(
-                repo_url=repo_url,
-                requester=requester_id,
-                sign_key=signing_key,
-                result_path=tmp_dir_sign_url,
-                ignore_patterns=list(ignore_patterns),
-                # upstream annotates as RadasConfig but calls json.load() on it
-                radas_config=radas_config,  # type: ignore[arg-type]
-                registry_auth_config_path=registry_auth_file,
-            )
+            # 1 - Sign the repository
+            repo_url = repo_url.removeprefix("https://").removeprefix("http://")
+            sign_artifact_dir = os.path.join(output_path, "signed", "repository")
+
+            if direct_sign:
+                click.echo(
+                    "Signing the repository directly via internal-request..."
+                )
+                _sign_directly(
+                    repo_url=repo_url,
+                    signing_key=signing_key,
+                    requester_id=requester_id,
+                    ignore_patterns=ignore_patterns,
+                    registry_auth_file=registry_auth_file,
+                    direct_sign_pipeline_name=direct_sign_pipeline_name,
+                    direct_sign_pipeline_image=direct_sign_pipeline_image,
+                    direct_sign_task_git_url=direct_sign_task_git_url,
+                    intention=intention,
+                    sign_artifact_dir=sign_artifact_dir,
+                )
+            else:
+                click.echo("Signing the repository in RADAS...")
+                _sign_in_radas(
+                    repo_url=repo_url,
+                    signing_key=signing_key,
+                    radas_umb_host=radas_umb_host,
+                    radas_result_queue=radas_result_queue,
+                    radas_request_channel=radas_request_channel,
+                    radas_client_ca=radas_client_ca,
+                    radas_client_key=radas_client_key,
+                    radas_client_key_pass_file=radas_client_key_pass_file,
+                    radas_root_ca=radas_root_ca,
+                    radas_receiver_timeout=radas_receiver_timeout,
+                    requester_id=requester_id,
+                    ignore_patterns=ignore_patterns,
+                    registry_auth_file=registry_auth_file,
+                    tmp_dir_sign_url=tmp_dir_sign_url,
+                    sign_artifact_dir=sign_artifact_dir,
+                )
+
             # 2 - Find the signed JSON files in the output path
             click.echo("Finding the signed JSON files in the output path...")
             signed_json_files = list(Path(tmp_dir_sign_url).rglob("*.json"))
