@@ -2298,3 +2298,43 @@ def test_publish_requires_file_repo_when_security_metadata_exists(
 
     assert result.exit_code != 0
     assert "pulp-file-repository" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_whitespace_file_repo_treated_as_absent(
+    mock_maven_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Whitespace-only --pulp-file-repository is normalised to None."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "   ",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "pulp-file-repository" in result.output

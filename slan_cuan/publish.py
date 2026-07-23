@@ -215,6 +215,9 @@ def publish(
     pulp_file_repository: str | None,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
+    pulp_file_repository = (
+        pulp_file_repository.strip() or None if pulp_file_repository else None
+    )
     try:
         result_path = artifact_dir / EXTRACT_RESULT_FILENAME
         if ctx.verbose:

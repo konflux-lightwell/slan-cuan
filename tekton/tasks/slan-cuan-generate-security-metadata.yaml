@@ -90,7 +90,7 @@ spec:
             value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
       params:
         - name: workDir
-          value: /var/workdir/extracted
+          value: $(params.WORKDIR)
         - name: sourceDataArtifact
           value: $(params.sourceDataArtifact)
         - name: orasOptions
