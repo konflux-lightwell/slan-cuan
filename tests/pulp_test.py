@@ -1753,3 +1753,239 @@ class TestPulpFileClient:
         assert result.content_units_added == 1
         assert result.state == "completed"
         assert result.repository_version is not None
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_create_publication_success(self, mock_sleep: Mock) -> None:
+        """Publication returns the created publication href."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "publications" in url:
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/pub-task/"},
+                )
+            if "tasks" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "state": "completed",
+                        "created_resources": [
+                            "/api/v3/publications/file/file/pub-uuid/"
+                        ],
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        href = client.create_publication("/api/v3/repositories/file/file/uuid/")
+        assert href == "/api/v3/publications/file/file/pub-uuid/"
+
+    def test_create_publication_error(self) -> None:
+        """Error response raises PulpError."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="Internal Server Error")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError, match="Publication creation failed"):
+            client.create_publication("/api/v3/repositories/file/file/uuid/")
+
+    def test_create_publication_requires_domain(self) -> None:
+        """Missing domain raises PulpError."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+
+        with pytest.raises(PulpError, match="Domain is required"):
+            client.create_publication("/api/v3/repositories/file/file/uuid/")
+
+    def test_resolve_distribution_success(self) -> None:
+        """Successful lookup returns pulp_href."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "pulp_href": (
+                                "/api/v3/distributions/file/file/dist-uuid/"
+                            )
+                        }
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        href = client.resolve_distribution("my-file-repo")
+        assert href == "/api/v3/distributions/file/file/dist-uuid/"
+
+    def test_resolve_distribution_not_found(self) -> None:
+        """Empty results raises PulpError with 404."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"results": []})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError, match="not found"):
+            client.resolve_distribution("nonexistent")
+
+    def test_resolve_distribution_url(self) -> None:
+        """Verify the distribution API path is used."""
+        captured_url: str | None = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_url
+            captured_url = str(request.url)
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"pulp_href": ("/api/v3/distributions/file/file/uuid/")}
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="mydom",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.resolve_distribution("my-file-repo")
+
+        assert captured_url is not None
+        assert "/api/pulp/mydom/api/v3/distributions/file/file/" in captured_url
+        assert "name=my-file-repo" in captured_url
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_update_distribution_success(self, mock_sleep: Mock) -> None:
+        """PATCH updates the distribution and polls the task."""
+        captured_method: str | None = None
+        captured_body: bytes | None = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_method, captured_body
+            url = str(request.url)
+            if "distributions" in url and request.method == "PATCH":
+                captured_method = request.method
+                captured_body = request.content
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/dist-task/"},
+                )
+            if "tasks" in url:
+                return httpx.Response(
+                    200, json={"state": "completed", "created_resources": []}
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.update_distribution(
+            "/api/v3/distributions/file/file/dist-uuid/",
+            "/api/v3/publications/file/file/pub-uuid/",
+        )
+
+        assert captured_method == "PATCH"
+        assert captured_body is not None
+        import json
+
+        body = json.loads(captured_body)
+        assert body == {"publication": "/api/v3/publications/file/file/pub-uuid/"}
+
+    def test_update_distribution_error(self) -> None:
+        """Error response on PATCH raises PulpError."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="Internal Server Error")
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError, match="Distribution update failed"):
+            client.update_distribution(
+                "/api/v3/distributions/file/file/dist-uuid/",
+                "/api/v3/publications/file/file/pub-uuid/",
+            )

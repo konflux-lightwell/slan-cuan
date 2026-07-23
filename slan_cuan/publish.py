@@ -395,7 +395,7 @@ def publish(
                     if not file_path.is_file():
                         continue
                     sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-                    relative_path = f"{build.build_id}/{file_path.name}"
+                    relative_path = file_path.name
                     if ctx.verbose:
                         click.echo(
                             f"Uploading security metadata: {relative_path}"
@@ -415,6 +415,22 @@ def publish(
                     file_client.modify_repository(
                         file_repo_href, file_content_unit_hrefs
                     )
+
+                    if ctx.verbose:
+                        click.echo("Creating publication for file repository")
+                    pub_href = file_client.create_publication(file_repo_href)
+                    if ctx.verbose:
+                        click.echo(f"  -> publication: {pub_href}")
+
+                    dist_href = file_client.resolve_distribution(
+                        pulp_file_repository
+                    )
+                    if ctx.verbose:
+                        click.echo(f"  -> distribution: {dist_href}")
+
+                    file_client.update_distribution(dist_href, pub_href)
+                    if ctx.verbose:
+                        click.echo("  -> distribution updated")
 
             click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
         elif build.security_metadata_dir and not pulp_file_repository:

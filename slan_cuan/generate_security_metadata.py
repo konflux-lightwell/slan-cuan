@@ -66,7 +66,9 @@ def generate_security_metadata(
 
     # Save the updated extract result
     result = ExtractResult.from_file(workdir / EXTRACT_RESULT_FILENAME)
-    result = dataclasses.replace(result, security_metadata_dir=str(output_dir))
+    result = dataclasses.replace(
+        result, security_metadata_dir=str(output_dir.relative_to(workdir))
+    )
     result.save(workdir / EXTRACT_RESULT_FILENAME)
 
     write_tekton_result(

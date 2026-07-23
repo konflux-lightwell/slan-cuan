@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from slan_cuan.context import GlobalContext
 from slan_cuan.generate_security_metadata import generate_security_metadata
-from slan_cuan.models import EXTRACT_RESULT_FILENAME
+from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult
 
 
 @pytest.fixture
@@ -114,7 +114,7 @@ def test_generate_security_metadata_creates_osv_output(
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
 
-    output_dir = tmp_path / "output"
+    output_dir = workdir / "security_metadata"
     output_dir.mkdir()
 
     mock_process_osv.return_value = fake_osv_records
@@ -132,6 +132,9 @@ def test_generate_security_metadata_creates_osv_output(
     written = json.loads(osv_file.read_text())
     assert written == fake_osv_records
 
+    updated_result = ExtractResult.from_file(workdir / EXTRACT_RESULT_FILENAME)
+    assert updated_result.security_metadata_dir == "security_metadata"
+
 
 @patch("slan_cuan.generate_security_metadata.process_osv")
 def test_generate_security_metadata_custom_filename(
@@ -148,7 +151,7 @@ def test_generate_security_metadata_custom_filename(
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
 
-    output_dir = tmp_path / "output"
+    output_dir = workdir / "security_metadata"
     output_dir.mkdir()
 
     mock_process_osv.return_value = fake_osv_records
@@ -187,7 +190,7 @@ def test_generate_security_metadata_passes_index_data_to_process_osv(
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
 
-    output_dir = tmp_path / "output"
+    output_dir = workdir / "security_metadata"
     output_dir.mkdir()
 
     mock_process_osv.return_value = []
@@ -213,7 +216,7 @@ def test_generate_security_metadata_writes_tekton_results(
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
 
-    output_dir = tmp_path / "output"
+    output_dir = workdir / "security_metadata"
     output_dir.mkdir()
     results_dir = tmp_path / "results"
 
@@ -259,7 +262,7 @@ def test_generate_security_metadata_file_not_found(
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
 
-    output_dir = tmp_path / "output"
+    output_dir = workdir / "security_metadata"
     output_dir.mkdir()
 
     runner = CliRunner()
