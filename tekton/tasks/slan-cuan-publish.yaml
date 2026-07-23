@@ -121,6 +121,8 @@ spec:
       description: >-
         JSON object with source_image label (fully qualified
         OCI reference) attached to each Pulp content unit.
+    - name: SECURITY_METADATA_UPLOADED
+      description: Number of security metadata files uploaded to the Pulp File repository.
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir

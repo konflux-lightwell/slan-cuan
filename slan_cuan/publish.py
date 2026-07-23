@@ -265,6 +265,17 @@ def publish(
             click.echo(f"Upload workers: {upload_workers}")
             for artifact in build.artifacts:
                 click.echo(f"  {artifact.relative_path}")
+            if build.security_metadata_dir:
+                sec_files = sorted(
+                    f
+                    for f in build.security_metadata_dir.rglob("*")
+                    if f.is_file()
+                )
+                click.echo(f"Security metadata: {len(sec_files)} file(s)")
+                for f in sec_files:
+                    click.echo(f"  {f.name}")
+                if pulp_file_repository:
+                    click.echo(f"File repository: {pulp_file_repository}")
             click.echo(
                 f"\ndry-run: would upload "
                 f"{len(build.artifacts)} artifact(s) "
@@ -422,6 +433,8 @@ def publish(
             repository_version=repository_version,
             content_unit_hrefs=tuple(content_unit_hrefs),
             pulp_labels=pulp_labels,
+            file_repository=pulp_file_repository if file_uploaded else None,
+            security_metadata_uploaded=file_uploaded,
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
@@ -448,6 +461,11 @@ def publish(
             ctx.tekton_results_dir,
             "PULP_LABELS",
             json.dumps(pulp_labels),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "SECURITY_METADATA_UPLOADED",
+            str(file_uploaded),
         )
 
         click.echo(

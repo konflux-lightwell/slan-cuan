@@ -128,7 +128,7 @@ spec:
         - name: ociStorage
           value: $(params.ociStorage)
         - name: workDir
-          value: $(params.OUTPUT_DIR)
+          value: $(params.WORKDIR)
         - name: sourceDataArtifact
           value: $(results.sourceDataArtifact.path)
         - name: orasOptions
