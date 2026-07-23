@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from click.testing import CliRunner
 
 from slan_cuan.cli import main
-from slan_cuan.pulp import ContentUnit, ModifyResult, PulpError
+from slan_cuan.pulp import ContentUnit, FileContentUnit, ModifyResult, PulpError
 
 _CONTENT_UNIT = ContentUnit(
     pulp_href="/api/v3/content/maven/artifact/abc/",
@@ -29,6 +29,21 @@ _MODIFY_RESULT = ModifyResult(
     content_units_added=2,
 )
 
+_FILE_CONTENT_UNIT = FileContentUnit(
+    pulp_href="/api/v3/content/file/files/abc/",
+    relative_path="BUILD/gav-index.osv.json",
+    sha256="deadbeef" * 8,
+)
+
+_FILE_REPO_HREF = "/api/v3/repositories/file/file/abc/"
+
+_FILE_MODIFY_RESULT = ModifyResult(
+    task_href="/api/v3/tasks/file-abc/",
+    state="completed",
+    repository_version="/api/v3/repositories/file/file/abc/versions/1/",
+    content_units_added=1,
+)
+
 
 def _make_ctx_mock() -> Mock:
     """Create a Mock that supports the context manager protocol."""
@@ -46,7 +61,10 @@ def _setup_client_mock(mock_client: Mock) -> None:
 
 
 def create_test_artifact_dir(
-    base_dir: Path, *, include_metadata: bool = False
+    base_dir: Path,
+    *,
+    include_metadata: bool = False,
+    include_security_metadata: bool = False,
 ) -> Path:
     """Create a directory that mimics the extract stage output."""
     deliverable_dir = base_dir / "TEST-build-output"
@@ -69,6 +87,13 @@ def create_test_artifact_dir(
         )
         (metadata_dir / "maven-metadata.xml").write_text("<metadata/>")
 
+    security_metadata_dir = None
+    if include_security_metadata:
+        sec_dir = deliverable_dir / "security_metadata"
+        sec_dir.mkdir(parents=True, exist_ok=True)
+        (sec_dir / "gav-index.osv.json").write_text("[]")
+        security_metadata_dir = "TEST-build-output/security_metadata"
+
     # Create extract-result.json
     extract_result = {
         "image": {
@@ -83,6 +108,7 @@ def create_test_artifact_dir(
         "deliverable_dir": "TEST-build-output",
         "files": [],
         "extracted_at": "2026-06-22T12:00:00Z",
+        "security_metadata_dir": security_metadata_dir,
     }
     (base_dir / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
@@ -696,6 +722,7 @@ def test_publish_skips_missing_files(
             ),
         ),
         source_archive_path=None,
+        security_metadata_dir=None,
     )
 
     mock_client = _make_ctx_mock()
@@ -1060,6 +1087,7 @@ def test_publish_skips_missing_with_domain(
             ),
         ),
         source_archive_path=None,
+        security_metadata_dir=None,
     )
 
     mock_client = _make_ctx_mock()
@@ -1784,6 +1812,7 @@ def test_publish_concurrent_skips_missing_before_pool(
             ),
         ),
         source_archive_path=None,
+        security_metadata_dir=None,
     )
 
     mock_client = _make_ctx_mock()
@@ -2034,16 +2063,23 @@ def test_publish_require_supply_chain_metadata_fails_without_sbom(
     assert "Missing SBOM artifacts for" in result.output
 
 
+@patch("slan_cuan.publish.PulpFileClient")
 @patch("slan_cuan.publish.PulpMavenClient")
 def test_publish_require_supply_chain_metadata_passes_with_sbom(
-    mock_client_cls: Mock, tmp_path: Path
+    mock_client_cls: Mock, mock_file_client_cls: Mock, tmp_path: Path
 ) -> None:
     """--require-supply-chain-metadata succeeds when SBOMs are present."""
-    artifact_dir = create_test_artifact_dir(tmp_path)
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
 
     mock_client = _make_ctx_mock()
     mock_client_cls.return_value = mock_client
     _setup_client_mock(mock_client)
+
+    mock_file_client = _make_ctx_mock()
+    mock_file_client_cls.return_value = mock_file_client
+    _setup_client_mock(mock_file_client)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2063,10 +2099,12 @@ def test_publish_require_supply_chain_metadata_passes_with_sbom(
             "--pulp-password",
             "testpass",
             "--require-supply-chain-metadata",
+            "--pulp-file-repository",
+            "test-file-repo",
         ],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "Published: 6 artifact(s) uploaded" in result.output
 
 
@@ -2117,3 +2155,130 @@ def test_publish_require_supply_chain_metadata_env_var(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "Missing SBOM artifacts for" in result.output
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_uploads_security_metadata_to_file_repo(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Security metadata files are uploaded to the Pulp File repository."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
+    mock_file.resolve_repository.return_value = _FILE_REPO_HREF
+    mock_file.modify_repository.return_value = _FILE_MODIFY_RESULT
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "test-file-repo",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Security metadata: 1 file(s) uploaded" in result.output
+    mock_file.upload_content.assert_called_once()
+    call_kwargs = mock_file.upload_content.call_args
+    assert "gav-index.osv.json" in str(call_kwargs)
+    mock_file.resolve_repository.assert_called_once_with("test-file-repo")
+    mock_file.modify_repository.assert_called_once()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_skips_file_upload_when_no_security_metadata(
+    mock_maven_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """No file client is created when security metadata is absent."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Security metadata" not in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_requires_file_repo_when_security_metadata_exists(
+    mock_maven_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Error when security metadata exists but --pulp-file-repository missing."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "pulp-file-repository" in result.output

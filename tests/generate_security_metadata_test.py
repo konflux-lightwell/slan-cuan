@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from slan_cuan.context import GlobalContext
 from slan_cuan.generate_security_metadata import generate_security_metadata
+from slan_cuan.models import EXTRACT_RESULT_FILENAME
 
 
 @pytest.fixture
@@ -62,13 +63,37 @@ def _create_index_file(directory: Path, name: str = "gav-index.json") -> Path:
     return path
 
 
-def _invoke(runner, index_basedir, output_dir, ctx, index_filename=None):
+def _create_extract_result(workdir: Path) -> None:
+    """Write a minimal extract-result.json into *workdir*."""
+    data = {
+        "image": {
+            "registry": "quay.io",
+            "repository": "test/image",
+            "tag": None,
+            "digest": "sha256:abc123",
+        },
+        "manifest_digest": "sha256:manifest123",
+        "layers": [],
+        "annotations": {},
+        "deliverable_dir": "TEST-build-output",
+        "files": [],
+        "extracted_at": "2026-06-19T12:00:00Z",
+    }
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / EXTRACT_RESULT_FILENAME).write_text(json.dumps(data, indent=2))
+
+
+def _invoke(
+    runner, index_basedir, output_dir, ctx, index_filename=None, workdir=None
+):
     args = [
         "--index-basedir",
         str(index_basedir),
         "--output-dir",
         str(output_dir),
     ]
+    if workdir is not None:
+        args += ["--workdir", str(workdir)]
     if index_filename is not None:
         args += ["--index-filename", index_filename]
     return runner.invoke(generate_security_metadata, args, obj=ctx)
@@ -86,13 +111,16 @@ def test_generate_security_metadata_creates_osv_output(
     index_dir.mkdir()
     _create_index_file(index_dir)
 
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
     mock_process_osv.return_value = fake_osv_records
 
     runner = CliRunner()
-    result = _invoke(runner, index_dir, output_dir, ctx)
+    result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
     assert "Processing" in result.output
@@ -117,6 +145,9 @@ def test_generate_security_metadata_custom_filename(
     index_dir.mkdir()
     _create_index_file(index_dir, name="cve-report.json")
 
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -124,7 +155,12 @@ def test_generate_security_metadata_custom_filename(
 
     runner = CliRunner()
     result = _invoke(
-        runner, index_dir, output_dir, ctx, index_filename="cve-report.json"
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        index_filename="cve-report.json",
+        workdir=workdir,
     )
 
     assert result.exit_code == 0, result.output
@@ -148,13 +184,16 @@ def test_generate_security_metadata_passes_index_data_to_process_osv(
     index_data = {"buildId": "99", "artifacts": []}
     (index_dir / "gav-index.json").write_text(json.dumps(index_data))
 
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
     mock_process_osv.return_value = []
 
     runner = CliRunner()
-    result = _invoke(runner, index_dir, output_dir, ctx)
+    result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
     mock_process_osv.assert_called_once_with(index_data)
@@ -166,10 +205,13 @@ def test_generate_security_metadata_writes_tekton_results(
     fake_osv_records: list[dict],
     tmp_path: Path,
 ) -> None:
-    """ATTESTATION_DIR Tekton result is written when results dir is set."""
+    """SECURITY_METADATA_DIR Tekton result is written when results dir is set."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -185,13 +227,13 @@ def test_generate_security_metadata_writes_tekton_results(
     )
 
     runner = CliRunner()
-    result = _invoke(runner, index_dir, output_dir, tekton_ctx)
+    result = _invoke(runner, index_dir, output_dir, tekton_ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
 
-    attestation_dir_file = results_dir / "ATTESTATION_DIR"
-    assert attestation_dir_file.exists()
-    assert attestation_dir_file.read_text() == str(output_dir)
+    security_metadata_dir_file = results_dir / "SECURITY_METADATA_DIR"
+    assert security_metadata_dir_file.exists()
+    assert security_metadata_dir_file.read_text() == str(output_dir)
 
 
 def test_generate_security_metadata_missing_required_options() -> None:
@@ -214,10 +256,15 @@ def test_generate_security_metadata_file_not_found(
     tmp_path: Path,
 ) -> None:
     """A missing index file produces an error."""
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
     runner = CliRunner()
-    result = _invoke(runner, tmp_path / "nonexistent", output_dir, ctx)
+    result = _invoke(
+        runner, tmp_path / "nonexistent", output_dir, ctx, workdir=workdir
+    )
 
     assert result.exit_code != 0

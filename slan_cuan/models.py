@@ -15,6 +15,8 @@ PROVENANCE_SIGSTORE_FILE_SUFFIX = ".provenance.sigstore.json"
 SPDX_FILE_SUFFIX = ".spdx.json"
 VSA_FILE_SUFFIX = ".vsa.json"
 CYCLONEDX_FILE_SUFFIX = ".cyclonedx.json"
+OSV_FILE_SUFFIX = ".osv.json"
+VEX_FILE_SUFFIX = ".vex.json"
 
 
 @dataclass(frozen=True)
@@ -187,6 +189,10 @@ def _parse_extension(filename: str) -> str:
         return "vsa"
     elif filename.endswith(CYCLONEDX_FILE_SUFFIX):
         return "cyclonedx"
+    elif filename.endswith(OSV_FILE_SUFFIX):
+        return "osv"
+    elif filename.endswith(VEX_FILE_SUFFIX):
+        return "vex"
     return filename.rsplit(".", 1)[-1] if "." in filename else ""
 
 
@@ -320,6 +326,7 @@ class BuildOutput:
     deliverable_dir: Path
     artifacts: tuple[MavenArtifact, ...]
     source_archive_path: Path | None
+    security_metadata_dir: Path | None
 
     @property
     def coordinates(self) -> frozenset[MavenCoordinate]:
@@ -347,6 +354,12 @@ class BuildOutput:
         deliverable_path = output_dir / result.deliverable_dir
         repo_dir = deliverable_path / "repository"
 
+        security_metadata_path: Path | None = None
+        if result.security_metadata_dir:
+            candidate = output_dir / result.security_metadata_dir
+            if candidate.is_dir():
+                security_metadata_path = candidate
+
         # Extract build_id from deliverable dir name
         # e.g. "BPQESYGN2PQAA-build-output" -> "BPQESYGN2PQAA"
         parts = result.deliverable_dir.split("-", 1)
@@ -354,6 +367,7 @@ class BuildOutput:
 
         artifacts: list[MavenArtifact] = []
 
+        # Process repository directory
         if repo_dir.is_dir():
             for file_path in sorted(repo_dir.rglob("*")):
                 if not file_path.is_file():
@@ -440,6 +454,14 @@ class BuildOutput:
                 )
                 raise ValueError(f"Missing SBOM artifacts for: {missing_str}")
 
+            if not security_metadata_path or not any(
+                security_metadata_path.iterdir()
+            ):
+                raise ValueError(
+                    "No security metadata found: "
+                    "generate-security-metadata must run before publish"
+                )
+
         # Locate well-known files
         sources_path = deliverable_path / "sources" / "sources.tar.gz"
 
@@ -448,6 +470,7 @@ class BuildOutput:
             deliverable_dir=deliverable_path,
             artifacts=tuple(artifacts),
             source_archive_path=(sources_path if sources_path.exists() else None),
+            security_metadata_dir=security_metadata_path,
         )
 
 
@@ -462,6 +485,7 @@ class ExtractResult:
     deliverable_dir: str
     files: list[str]
     extracted_at: str
+    security_metadata_dir: str | None = None
 
     def to_json(self) -> str:
         """Serialize to JSON string.
@@ -526,6 +550,7 @@ class ExtractResult:
             annotations=data["annotations"],
             deliverable_dir=data["deliverable_dir"],
             files=data["files"],
+            security_metadata_dir=data.get("security_metadata_dir"),
             extracted_at=data["extracted_at"],
         )
 
