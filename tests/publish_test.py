@@ -31,9 +31,12 @@ _MODIFY_RESULT = ModifyResult(
 
 _FILE_CONTENT_UNIT = FileContentUnit(
     pulp_href="/api/v3/content/file/files/abc/",
-    relative_path="BUILD/gav-index.osv.json",
+    relative_path="gav-index.osv.json",
     sha256="deadbeef" * 8,
 )
+
+_FILE_PUB_HREF = "/api/v3/publications/file/file/pub-abc/"
+_FILE_DIST_HREF = "/api/v3/distributions/file/file/dist-abc/"
 
 _FILE_REPO_HREF = "/api/v3/repositories/file/file/abc/"
 
@@ -2079,7 +2082,12 @@ def test_publish_require_supply_chain_metadata_passes_with_sbom(
 
     mock_file_client = _make_ctx_mock()
     mock_file_client_cls.return_value = mock_file_client
-    _setup_client_mock(mock_file_client)
+    mock_file_client.upload_content.return_value = _FILE_CONTENT_UNIT
+    mock_file_client.resolve_repository.return_value = _FILE_REPO_HREF
+    mock_file_client.modify_repository.return_value = _FILE_MODIFY_RESULT
+    mock_file_client.create_publication.return_value = _FILE_PUB_HREF
+    mock_file_client.resolve_distribution.return_value = _FILE_DIST_HREF
+    mock_file_client.update_distribution.return_value = None
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2178,6 +2186,9 @@ def test_publish_uploads_security_metadata_to_file_repo(
     mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
     mock_file.resolve_repository.return_value = _FILE_REPO_HREF
     mock_file.modify_repository.return_value = _FILE_MODIFY_RESULT
+    mock_file.create_publication.return_value = _FILE_PUB_HREF
+    mock_file.resolve_distribution.return_value = _FILE_DIST_HREF
+    mock_file.update_distribution.return_value = None
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2208,6 +2219,11 @@ def test_publish_uploads_security_metadata_to_file_repo(
     assert "gav-index.osv.json" in str(call_kwargs)
     mock_file.resolve_repository.assert_called_once_with("test-file-repo")
     mock_file.modify_repository.assert_called_once()
+    mock_file.create_publication.assert_called_once_with(_FILE_REPO_HREF)
+    mock_file.resolve_distribution.assert_called_once_with("test-file-repo")
+    mock_file.update_distribution.assert_called_once_with(
+        _FILE_DIST_HREF, _FILE_PUB_HREF
+    )
 
 
 @patch("slan_cuan.publish.PulpMavenClient")

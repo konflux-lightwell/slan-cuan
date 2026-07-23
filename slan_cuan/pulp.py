@@ -25,6 +25,12 @@ REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/maven/maven/"
 # Pulp File plugin API URL path templates
 FILE_CONTENT_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/content/file/files/"
 FILE_REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/file/file/"
+FILE_PUBLICATION_API_PATH_TEMPLATE = (
+    "/api/pulp/{domain}/api/v3/publications/file/file/"
+)
+FILE_DISTRIBUTION_API_PATH_TEMPLATE = (
+    "/api/pulp/{domain}/api/v3/distributions/file/file/"
+)
 
 # Task polling configuration
 TASK_POLL_INTERVAL_SECONDS = 2.0
@@ -808,3 +814,220 @@ class PulpFileClient(_PulpClientBase):
                 status_code=response.status_code,
                 response_body=response.text,
             ) from e
+
+    def create_publication(self, repository_href: str) -> str:
+        """Create a File publication for a repository.
+
+        Args:
+            repository_href: The pulp_href of the repository.
+
+        Returns:
+            The pulp_href of the created publication.
+
+        Raises:
+            PulpError: If the publication fails or domain is not set.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for publication creation. Set --pulp-domain.",
+                status_code=0,
+                response_body="",
+            )
+
+        url = FILE_PUBLICATION_API_PATH_TEMPLATE.format(
+            domain=self._config.domain
+        )
+        payload = {"repository": repository_href}
+
+        try:
+            response = self._client.post(url, json=payload)
+        except httpx.ConnectError as e:
+            raise PulpError(
+                f"Connection failed: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+        except httpx.TimeoutException as e:
+            raise PulpError(
+                f"Request timed out: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+
+        if response.status_code >= 400:
+            body = response.text
+            summary = body[:ERROR_BODY_MAX_LENGTH]
+            if len(body) > ERROR_BODY_MAX_LENGTH:
+                summary += "... (truncated)"
+            raise PulpError(
+                f"Publication creation failed "
+                f"({response.status_code}): {summary}",
+                status_code=response.status_code,
+                response_body=body,
+            )
+
+        try:
+            response_data = response.json()
+            if not isinstance(response_data, dict):
+                raise PulpError(
+                    "Publication API returned non-dict response",
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+            task_href = str(response_data["task"])
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse publication response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+        task_data = self.poll_task(task_href)
+
+        created_resources = task_data.get("created_resources", [])
+        if not isinstance(created_resources, list) or not created_resources:
+            raise PulpError(
+                "Publication task completed but created no resources",
+                status_code=0,
+                response_body="",
+            )
+
+        return str(created_resources[0])
+
+    def resolve_distribution(self, name: str) -> str:
+        """Look up a file distribution by name, return its pulp_href.
+
+        Args:
+            name: The distribution name to look up.
+
+        Returns:
+            The pulp_href of the distribution.
+
+        Raises:
+            PulpError: If the distribution is not found or domain is not set.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for distribution lookup. Set --pulp-domain.",
+                status_code=0,
+                response_body="",
+            )
+
+        url = FILE_DISTRIBUTION_API_PATH_TEMPLATE.format(
+            domain=self._config.domain
+        )
+
+        try:
+            response = self._client.get(url, params={"name": name})
+        except httpx.ConnectError as e:
+            raise PulpError(
+                f"Connection failed: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+        except httpx.TimeoutException as e:
+            raise PulpError(
+                f"Request timed out: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+
+        if response.status_code >= 400:
+            body = response.text
+            summary = body[:ERROR_BODY_MAX_LENGTH]
+            if len(body) > ERROR_BODY_MAX_LENGTH:
+                summary += "... (truncated)"
+            raise PulpError(
+                f"Distribution lookup failed ({response.status_code}): {summary}",
+                status_code=response.status_code,
+                response_body=body,
+            )
+
+        try:
+            response_data = response.json()
+            if not isinstance(response_data, dict):
+                raise PulpError(
+                    "Distribution API returned non-dict response",
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+            results = response_data.get("results", [])
+            if not results:
+                raise PulpError(
+                    f"Distribution '{name}' not found. "
+                    "Check --pulp-file-repository.",
+                    status_code=404,
+                    response_body=response.text,
+                )
+
+            return str(results[0]["pulp_href"])
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse distribution lookup response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+    def update_distribution(
+        self, distribution_href: str, publication_href: str
+    ) -> None:
+        """Update a distribution to serve a new publication.
+
+        Args:
+            distribution_href: The pulp_href of the distribution.
+            publication_href: The pulp_href of the publication to serve.
+
+        Raises:
+            PulpError: If the update fails.
+
+        """
+        payload = {"publication": publication_href}
+
+        try:
+            response = self._client.patch(distribution_href, json=payload)
+        except httpx.ConnectError as e:
+            raise PulpError(
+                f"Connection failed: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+        except httpx.TimeoutException as e:
+            raise PulpError(
+                f"Request timed out: {e}",
+                status_code=0,
+                response_body="",
+            ) from e
+
+        if response.status_code >= 400:
+            body = response.text
+            summary = body[:ERROR_BODY_MAX_LENGTH]
+            if len(body) > ERROR_BODY_MAX_LENGTH:
+                summary += "... (truncated)"
+            raise PulpError(
+                f"Distribution update failed ({response.status_code}): {summary}",
+                status_code=response.status_code,
+                response_body=body,
+            )
+
+        try:
+            response_data = response.json()
+            if not isinstance(response_data, dict):
+                raise PulpError(
+                    "Distribution update API returned non-dict response",
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+            task_href = str(response_data["task"])
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse distribution update response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+        self.poll_task(task_href)
