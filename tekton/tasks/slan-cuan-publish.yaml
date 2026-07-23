@@ -73,6 +73,10 @@ spec:
       description: When active the pipeline will fail if the SBOM + Provenance is not present in the build artifact.
       type: string
       default: "false"
+    - name: PULP_FILE_REPOSITORY
+      description: Pulp File repository name for security metadata (OSV/VEX) upload.
+      type: string
+      default: ""
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -177,6 +181,8 @@ spec:
           value: $(params.PULP_AUTH_TYPE)
         - name: SLAN_CUAN_PUBLISH_REQUIRE_SUPPLY_CHAIN_METADATA
           value: $(params.REQUIRE_SUPPLY_CHAIN_METADATA)
+        - name: SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY
+          value: $(params.PULP_FILE_REPOSITORY)
         - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
           valueFrom:
             secretKeyRef:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -18,7 +19,13 @@ from slan_cuan.models import (
     MavenArtifact,
     PublishResult,
 )
-from slan_cuan.pulp import ContentUnit, PulpConfig, PulpError, PulpMavenClient
+from slan_cuan.pulp import (
+    ContentUnit,
+    PulpConfig,
+    PulpError,
+    PulpFileClient,
+    PulpMavenClient,
+)
 
 _DIAG_MAX_ENTRIES = 50
 DEFAULT_UPLOAD_WORKERS = 4
@@ -183,6 +190,13 @@ def _upload_one(
         "in the artifact directory."
     ),
 )
+@click.option(
+    "--pulp-file-repository",
+    envvar="SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY",
+    type=str,
+    default=None,
+    help="Pulp File repository name for security metadata upload.",
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -198,6 +212,7 @@ def publish(
     pulp_domain: str,
     upload_workers: int,
     require_supply_chain_metadata: bool,
+    pulp_file_repository: str | None,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     try:
@@ -355,6 +370,47 @@ def publish(
 
                 if ctx.verbose:
                     click.echo(f"  -> repository version: {repository_version}")
+
+        file_uploaded = 0
+        if build.security_metadata_dir and pulp_file_repository:
+            click.echo(
+                f"Uploading security metadata to file repository: "
+                f"{pulp_file_repository}"
+            )
+            file_content_unit_hrefs: list[str] = []
+
+            with PulpFileClient(config, pulp_file_repository) as file_client:
+                for file_path in sorted(build.security_metadata_dir.rglob("*")):
+                    if not file_path.is_file():
+                        continue
+                    sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+                    relative_path = f"{build.build_id}/{file_path.name}"
+                    if ctx.verbose:
+                        click.echo(
+                            f"Uploading security metadata: {relative_path}"
+                        )
+                    content_unit = file_client.upload_content(
+                        file_path=file_path,
+                        relative_path=relative_path,
+                        sha256=sha256,
+                    )
+                    file_content_unit_hrefs.append(content_unit.pulp_href)
+                    file_uploaded += 1
+
+                if file_content_unit_hrefs:
+                    file_repo_href = file_client.resolve_repository(
+                        pulp_file_repository
+                    )
+                    file_client.modify_repository(
+                        file_repo_href, file_content_unit_hrefs
+                    )
+
+            click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
+        elif build.security_metadata_dir and not pulp_file_repository:
+            raise click.UsageError(
+                "--pulp-file-repository is required when security "
+                "metadata is present."
+            )
 
         publish_result = PublishResult(
             pulp_url=pulp_url,
