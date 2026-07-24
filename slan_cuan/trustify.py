@@ -10,6 +10,13 @@ from types import TracebackType
 
 import httpx
 
+from slan_cuan.http import (
+    HttpApiError,
+    create_ssl_context,
+    parse_json_dict,
+    raise_for_status,
+)
+
 SBOM_UPLOAD_PATH = "api/v2/sbom"
 TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 TOKEN_EXPIRY_BUFFER_SECONDS = 15
@@ -37,20 +44,8 @@ class SBOMUploadResult:
     sbom_urn: str
 
 
-class TrustifyError(Exception):
+class TrustifyError(HttpApiError):
     """Exception raised when a Trustify API call fails."""
-
-    def __init__(
-        self,
-        message: str,
-        status_code: int,
-        response_body: str,
-    ) -> None:
-        """Initialize with structured error context."""
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-        self.response_body = response_body
 
 
 class TrustifyAuthError(TrustifyError):
@@ -66,22 +61,9 @@ class TrustifyClient:
         self._access_token: str | None = None
         self._token_expiration: float = 0.0
 
-        verify: ssl.SSLContext | bool = config.verify_ssl
-        if verify and config.ca_cert is not None:
-            try:
-                verify = ssl.create_default_context(
-                    cafile=str(config.ca_cert),
-                )
-                # Internal CAs may omit the "critical" flag on Basic
-                # Constraints; Python 3.14+ rejects them by default.
-                verify.verify_flags &= ~ssl.VERIFY_X509_STRICT
-            except (ssl.SSLError, OSError) as e:
-                raise TrustifyError(
-                    f"Failed to load CA certificate from {config.ca_cert}: {e}",
-                    status_code=0,
-                    response_body="",
-                ) from e
-
+        verify: ssl.SSLContext | bool = create_ssl_context(
+            config.ca_cert, config.verify_ssl, TrustifyError
+        )
         self._verify = verify
         self._client = httpx.Client(
             base_url=config.api_url,
@@ -135,21 +117,7 @@ class TrustifyClient:
                 response_body=response.text,
             )
 
-        try:
-            token_data = response.json()
-        except ValueError as e:
-            raise TrustifyAuthError(
-                f"Invalid JSON response from SSO endpoint: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-        if not isinstance(token_data, dict):
-            raise TrustifyAuthError(
-                "SSO response is not a JSON object",
-                status_code=response.status_code,
-                response_body=response.text,
-            )
+        token_data = parse_json_dict(response, "SSO", TrustifyAuthError)
 
         if "error" in token_data:
             error_desc = token_data.get("error_description", token_data["error"])
@@ -218,47 +186,26 @@ class TrustifyClient:
 
                 if response.status_code < 400:
                     # Success
-                    try:
-                        data = response.json()
-                        if not isinstance(data, dict):
-                            raise TrustifyError(
-                                "Trustify response is not a JSON object",
-                                status_code=response.status_code,
-                                response_body=response.text,
-                            )
+                    data = parse_json_dict(response, "Trustify", TrustifyError)
 
-                        sbom_id = data.get("id")
-                        if not sbom_id:
-                            raise TrustifyError(
-                                "Missing 'id' in Trustify response",
-                                status_code=response.status_code,
-                                response_body=response.text,
-                            )
-
-                        return SBOMUploadResult(
-                            file_path=str(sbom_path),
-                            file_size=len(sbom_bytes),
-                            sbom_urn=str(sbom_id),
-                        )
-                    except ValueError as e:
+                    sbom_id = data.get("id")
+                    if not sbom_id:
                         raise TrustifyError(
-                            f"Invalid JSON response: {e}",
+                            "Missing 'id' in Trustify response",
                             status_code=response.status_code,
                             response_body=response.text,
-                        ) from e
+                        )
+
+                    return SBOMUploadResult(
+                        file_path=str(sbom_path),
+                        file_size=len(sbom_bytes),
+                        sbom_urn=str(sbom_id),
+                    )
 
                 # HTTP error - check if transient
                 if response.status_code not in TRANSIENT_STATUS_CODES:
                     # Non-transient error
-                    body = response.text
-                    summary = body[:200]
-                    if len(body) > 200:
-                        summary += "... (truncated)"
-                    raise TrustifyError(
-                        f"SBOM upload failed ({response.status_code}): {summary}",
-                        status_code=response.status_code,
-                        response_body=body,
-                    )
+                    raise_for_status(response, "SBOM upload", TrustifyError)
 
                 # Transient error - retry
                 last_exception = TrustifyError(
