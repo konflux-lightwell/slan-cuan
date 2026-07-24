@@ -28,6 +28,7 @@ from slan_cuan.pulp import (
 )
 
 _DIAG_MAX_ENTRIES = 50
+_ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
 
 
@@ -368,15 +369,13 @@ def publish(
                     uploaded += 1
 
             if content_unit_hrefs:
-                if ctx.verbose:
-                    click.echo(f"Resolving repository: {pulp_repository}")
+                click.echo(f"Resolving repository: {pulp_repository}")
                 repo_href = client.resolve_repository(pulp_repository)
 
-                if ctx.verbose:
-                    click.echo(
-                        f"Adding {len(content_unit_hrefs)} content unit(s) "
-                        f"to repository"
-                    )
+                click.echo(
+                    f"Adding {len(content_unit_hrefs)} content unit(s) "
+                    f"to repository"
+                )
                 modify_result = client.modify_repository(
                     repo_href, content_unit_hrefs
                 )
@@ -494,6 +493,14 @@ def publish(
         )
 
     except PulpError as e:
-        raise click.ClickException(f"Pulp error: {e.message}") from e
+        parts = [f"Pulp error: {e.message}"]
+        if e.status_code:
+            parts.append(f"  HTTP status: {e.status_code}")
+        if e.response_body:
+            body = e.response_body[:_ERROR_RESPONSE_MAX]
+            if len(e.response_body) > _ERROR_RESPONSE_MAX:
+                body += "... (truncated)"
+            parts.append(f"  Response body: {body}")
+        raise click.ClickException("\n".join(parts)) from e
     except ValueError as e:
         raise click.ClickException(str(e)) from e

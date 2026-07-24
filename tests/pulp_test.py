@@ -1126,6 +1126,45 @@ class TestPollTask:
 
         assert "Task failed" in exc_info.value.message
         assert "Content validation failed" in exc_info.value.message
+        assert "/api/v3/tasks/task-uuid/" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_failed_with_traceback(self, mock_sleep: Mock) -> None:
+        """Task failure includes traceback from Pulp error response."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "state": "failed",
+                    "error": {
+                        "description": "Content validation failed",
+                        "traceback": "Traceback (most recent call last):\n"
+                        '  File "pulp", line 42\n'
+                        "ValueError: duplicate key",
+                    },
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert "Task failed" in exc_info.value.message
+        assert "Traceback:" in exc_info.value.message
+        assert "duplicate key" in exc_info.value.message
+        assert "/api/v3/tasks/task-uuid/" in exc_info.value.message
 
     @patch("slan_cuan.pulp.time.sleep")
     def test_poll_task_canceled(self, mock_sleep: Mock) -> None:
@@ -1153,6 +1192,7 @@ class TestPollTask:
             client.poll_task("/api/v3/tasks/task-uuid/")
 
         assert "Task canceled" in exc_info.value.message
+        assert "/api/v3/tasks/task-uuid/" in exc_info.value.message
 
     @patch("slan_cuan.pulp.time.sleep")
     def test_poll_task_timeout(self, mock_sleep: Mock) -> None:
