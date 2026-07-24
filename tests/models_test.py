@@ -745,6 +745,7 @@ class TestBuildOutput:
             deliverable_dir=tmp_path,
             artifacts=(artifact1, artifact2),
             source_archive_path=None,
+            security_metadata_dir=None,
         )
 
         # Two artifacts with same GAV should result in one coordinate
@@ -798,6 +799,7 @@ class TestBuildOutput:
             deliverable_dir=tmp_path,
             artifacts=(jar_artifact, pom_artifact, md5_artifact),
             source_archive_path=None,
+            security_metadata_dir=None,
         )
 
         # Only jar and pom should be signable
@@ -1040,6 +1042,7 @@ class TestRequireSupplyChainMetadata:
             deliverable_dir="TEST-build-output",
             files=[],
             extracted_at="2026-06-19T12:00:00Z",
+            security_metadata_dir="TEST-build-output/security_metadata",
         )
 
     def _make_repo(self, tmp_path: Path) -> Path:
@@ -1055,6 +1058,12 @@ class TestRequireSupplyChainMetadata:
         version_dir.mkdir(parents=True)
         return version_dir
 
+    def _make_security_metadata(self, tmp_path: Path) -> Path:
+        sec_dir = tmp_path / "TEST-build-output" / "security_metadata"
+        sec_dir.mkdir(parents=True, exist_ok=True)
+        (sec_dir / "gav-index.osv.json").write_text("[]")
+        return sec_dir
+
     def test_passes_when_sbom_present(
         self, tmp_path: Path, extract_result: ExtractResult
     ) -> None:
@@ -1063,6 +1072,7 @@ class TestRequireSupplyChainMetadata:
         (version_dir / "artifact-1.0.0.jar").write_text("jar")
         (version_dir / "artifact-1.0.0.pom").write_text("<project/>")
         (version_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
+        self._make_security_metadata(tmp_path)
 
         build = BuildOutput.from_extract_result(
             extract_result, tmp_path, require_supply_chain_metadata=True
@@ -1137,6 +1147,7 @@ class TestRequireSupplyChainMetadata:
         (version_dir / "artifact-1.0.0.jar").write_text("jar")
         (version_dir / "artifact-1.0.0.jar.md5").write_text("md5")
         (version_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
+        self._make_security_metadata(tmp_path)
 
         build = BuildOutput.from_extract_result(
             extract_result, tmp_path, require_supply_chain_metadata=True
@@ -1148,11 +1159,25 @@ class TestRequireSupplyChainMetadata:
     ) -> None:
         """No artifacts at all passes (nothing to validate)."""
         (tmp_path / "TEST-build-output" / "repository").mkdir(parents=True)
+        self._make_security_metadata(tmp_path)
 
         build = BuildOutput.from_extract_result(
             extract_result, tmp_path, require_supply_chain_metadata=True
         )
         assert len(build.artifacts) == 0
+
+    def test_raises_when_security_metadata_missing(
+        self, tmp_path: Path, extract_result: ExtractResult
+    ) -> None:
+        """Raises when SBOMs present but security metadata dir is missing."""
+        version_dir = self._make_repo(tmp_path)
+        (version_dir / "artifact-1.0.0.jar").write_text("jar")
+        (version_dir / "artifact-1.0.0.cyclonedx.json").write_text("{}")
+
+        with pytest.raises(ValueError, match="No security metadata found"):
+            BuildOutput.from_extract_result(
+                extract_result, tmp_path, require_supply_chain_metadata=True
+            )
 
 
 class TestPublishResult:

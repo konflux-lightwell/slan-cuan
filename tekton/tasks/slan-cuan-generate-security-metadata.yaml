@@ -22,10 +22,14 @@ spec:
       description: The filename of the build index JSON file relative to the base directory.
       type: string
       default: "gav-index.json"
-    - name: OUTPUT_DIR
-      description: The directory to output the OSV and VEX documents to.
+    - name: WORKDIR
+      description: The directory to work in, which is the extracted directory.
       type: string
-      default: "/var/workdir/attested"
+      default: /var/workdir/extracted
+    - name: OUTPUT_DIR
+      description: The directory to output the OSV and VEX documents to, which is the extracted directory + security_metadata.
+      type: string
+      default: $(params.WORKDIR)/security_metadata
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the build index.
       type: string
@@ -58,7 +62,7 @@ spec:
       type: string
       default: lightwell-pipeline
   results:
-    - name: ATTESTATION_DIR
+    - name: SECURITY_METADATA_DIR
       description: Name of the directory where the OSV and VEX documents are stored.
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the data directory.
@@ -86,7 +90,7 @@ spec:
             value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
       params:
         - name: workDir
-          value: /var/workdir/extracted
+          value: $(params.WORKDIR)
         - name: sourceDataArtifact
           value: $(params.sourceDataArtifact)
         - name: orasOptions
@@ -106,6 +110,8 @@ spec:
           value: $(params.INDEX_FILENAME)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OUTPUT_DIR
           value: $(params.OUTPUT_DIR)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_WORKDIR
+          value: $(params.WORKDIR)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
     - name: create-trusted-artifact
@@ -122,7 +128,7 @@ spec:
         - name: ociStorage
           value: $(params.ociStorage)
         - name: workDir
-          value: $(params.OUTPUT_DIR)
+          value: $(params.WORKDIR)
         - name: sourceDataArtifact
           value: $(results.sourceDataArtifact.path)
         - name: orasOptions
