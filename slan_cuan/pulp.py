@@ -13,6 +13,13 @@ from typing import Self
 
 import httpx
 
+from slan_cuan.http import (
+    HttpApiError,
+    create_ssl_context,
+    parse_json_dict,
+    request,
+)
+
 # Content API URL path templates
 CONTENT_API_PATH_TEMPLATE = (
     "/api/pulp/{domain}/api/v3/content/maven/artifact/upload/"
@@ -38,7 +45,6 @@ TASK_POLL_TIMEOUT_SECONDS = 600.0
 
 # HTTP client and error handling constants
 DEFAULT_TIMEOUT_SECONDS = 300.0
-ERROR_BODY_MAX_LENGTH = 200
 
 AUTH_TYPE_TBR: str = "tbr"
 AUTH_TYPE_CERT: str = "cert"
@@ -122,20 +128,8 @@ class ModifyResult:
     content_units_added: int
 
 
-class PulpError(Exception):
+class PulpError(HttpApiError):
     """Exception raised when a Pulp API call fails."""
-
-    def __init__(
-        self,
-        message: str,
-        status_code: int,
-        response_body: str,
-    ) -> None:
-        """Initialize with structured error context."""
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-        self.response_body = response_body
 
 
 class _PulpClientBase:
@@ -154,21 +148,7 @@ class _PulpClientBase:
         if not base_url.startswith(("http://", "https://")):
             base_url = f"https://{base_url}"
 
-        verify: ssl.SSLContext | bool = config.verify_ssl
-        if verify and config.ca_cert is not None:
-            try:
-                verify = ssl.create_default_context(
-                    cafile=str(config.ca_cert),
-                )
-                # Internal CAs may omit the "critical" flag on Basic
-                # Constraints; Python 3.14+ rejects them by default.
-                verify.verify_flags &= ~ssl.VERIFY_X509_STRICT
-            except (ssl.SSLError, OSError) as e:
-                raise PulpError(
-                    f"Failed to load CA certificate from {config.ca_cert}: {e}",
-                    status_code=0,
-                    response_body="",
-                ) from e
+        verify = create_ssl_context(config.ca_cert, config.verify_ssl, PulpError)
 
         if config.auth_type == AUTH_TYPE_CERT:
             if not isinstance(verify, ssl.SSLContext):
@@ -233,41 +213,16 @@ class _PulpClientBase:
         """
         start = time.time()
         while True:
-            try:
-                response = self._client.get(task_href)
-            except httpx.ConnectError as e:
-                raise PulpError(
-                    f"Connection failed while polling task: {e}",
-                    status_code=0,
-                    response_body="",
-                ) from e
-            except httpx.TimeoutException as e:
-                raise PulpError(
-                    f"Request timed out while polling task: {e}",
-                    status_code=0,
-                    response_body="",
-                ) from e
-
-            if response.status_code >= 400:
-                body = response.text
-                summary = body[:ERROR_BODY_MAX_LENGTH]
-                if len(body) > ERROR_BODY_MAX_LENGTH:
-                    summary += "... (truncated)"
-                raise PulpError(
-                    f"Task polling failed ({response.status_code}): {summary}",
-                    status_code=response.status_code,
-                    response_body=body,
-                )
+            response = request(
+                self._client,
+                "GET",
+                task_href,
+                "Task polling",
+                PulpError,
+            )
 
             try:
-                task_data = response.json()
-                if not isinstance(task_data, dict):
-                    raise PulpError(
-                        "Task API returned non-dict response",
-                        status_code=response.status_code,
-                        response_body=response.text,
-                    )
-
+                task_data = parse_json_dict(response, "Task", PulpError)
                 state = task_data.get("state", "")
                 if state == "completed":
                     return task_data
@@ -317,41 +272,17 @@ class _PulpClientBase:
         url = f"{repository_href}modify/"
         payload = {"add_content_units": content_unit_hrefs}
 
-        try:
-            response = self._client.post(url, json=payload)
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Repository modify failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
-            )
+        response = request(
+            self._client,
+            "POST",
+            url,
+            "Repository modify",
+            PulpError,
+            json=payload,
+        )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Modify API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "Modify", PulpError)
             task_href = str(response_data["task"])
         except (ValueError, KeyError) as e:
             raise PulpError(
@@ -397,41 +328,17 @@ class _PulpClientBase:
 
         url = self._repo_api_path_template.format(domain=self._config.domain)
 
-        try:
-            response = self._client.get(url, params={"name": name})
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Repository lookup failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
-            )
+        response = request(
+            self._client,
+            "GET",
+            url,
+            "Repository lookup",
+            PulpError,
+            params={"name": name},
+        )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Repository API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "Repository", PulpError)
             results = response_data.get("results", [])
             if not results:
                 raise PulpError(
@@ -521,53 +428,26 @@ class PulpMavenClient(_PulpClientBase):
         if labels:
             data["pulp_labels"] = json.dumps(labels)
 
-        try:
-            with file_path.open("rb") as f:
-                files = {
-                    "file": (
-                        file_path.name,
-                        f,
-                        "application/octet-stream",
-                    ),
-                }
-                response = self._client.post(
-                    url,
-                    data=data,
-                    files=files,
-                )
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Content upload failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
+        with file_path.open("rb") as f:
+            files = {
+                "file": (
+                    file_path.name,
+                    f,
+                    "application/octet-stream",
+                ),
+            }
+            response = request(
+                self._client,
+                "POST",
+                url,
+                "Content upload",
+                PulpError,
+                data=data,
+                files=files,
             )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Content API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "Content", PulpError)
             return ContentUnit(
                 pulp_href=str(response_data["pulp_href"]),
                 relative_path=str(
@@ -642,53 +522,26 @@ class PulpMavenClient(_PulpClientBase):
         if labels:
             data["pulp_labels"] = json.dumps(labels)
 
-        try:
-            with file_path.open("rb") as f:
-                files = {
-                    "file": (
-                        file_path.name,
-                        f,
-                        "application/octet-stream",
-                    ),
-                }
-                response = self._client.post(
-                    url,
-                    data=data,
-                    files=files,
-                )
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Metadata upload failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
+        with file_path.open("rb") as f:
+            files = {
+                "file": (
+                    file_path.name,
+                    f,
+                    "application/octet-stream",
+                ),
+            }
+            response = request(
+                self._client,
+                "POST",
+                url,
+                "Metadata upload",
+                PulpError,
+                data=data,
+                files=files,
             )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Metadata API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "Metadata", PulpError)
             return ContentUnit(
                 pulp_href=str(response_data["pulp_href"]),
                 relative_path=str(
@@ -754,53 +607,26 @@ class PulpFileClient(_PulpClientBase):
         if repository_href:
             data["repository"] = repository_href
 
-        try:
-            with file_path.open("rb") as f:
-                files = {
-                    "file": (
-                        file_path.name,
-                        f,
-                        "application/octet-stream",
-                    ),
-                }
-                response = self._client.post(
-                    url,
-                    data=data,
-                    files=files,
-                )
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"File upload failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
+        with file_path.open("rb") as f:
+            files = {
+                "file": (
+                    file_path.name,
+                    f,
+                    "application/octet-stream",
+                ),
+            }
+            response = request(
+                self._client,
+                "POST",
+                url,
+                "File upload",
+                PulpError,
+                data=data,
+                files=files,
             )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "File content API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "File content", PulpError)
             return FileContentUnit(
                 pulp_href=str(response_data["pulp_href"]),
                 relative_path=str(
@@ -840,42 +666,17 @@ class PulpFileClient(_PulpClientBase):
         )
         payload = {"repository": repository_href}
 
-        try:
-            response = self._client.post(url, json=payload)
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Publication creation failed "
-                f"({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
-            )
+        response = request(
+            self._client,
+            "POST",
+            url,
+            "Publication creation",
+            PulpError,
+            json=payload,
+        )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Publication API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "Publication", PulpError)
             task_href = str(response_data["task"])
         except (ValueError, KeyError) as e:
             raise PulpError(
@@ -920,41 +721,17 @@ class PulpFileClient(_PulpClientBase):
             domain=self._config.domain
         )
 
-        try:
-            response = self._client.get(url, params={"name": name})
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Distribution lookup failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
-            )
+        response = request(
+            self._client,
+            "GET",
+            url,
+            "Distribution lookup",
+            PulpError,
+            params={"name": name},
+        )
 
         try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Distribution API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
+            response_data = parse_json_dict(response, "Distribution", PulpError)
             results = response_data.get("results", [])
             if not results:
                 raise PulpError(
@@ -987,41 +764,19 @@ class PulpFileClient(_PulpClientBase):
         """
         payload = {"publication": publication_href}
 
-        try:
-            response = self._client.patch(distribution_href, json=payload)
-        except httpx.ConnectError as e:
-            raise PulpError(
-                f"Connection failed: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
-        except httpx.TimeoutException as e:
-            raise PulpError(
-                f"Request timed out: {e}",
-                status_code=0,
-                response_body="",
-            ) from e
+        response = request(
+            self._client,
+            "PATCH",
+            distribution_href,
+            "Distribution update",
+            PulpError,
+            json=payload,
+        )
 
-        if response.status_code >= 400:
-            body = response.text
-            summary = body[:ERROR_BODY_MAX_LENGTH]
-            if len(body) > ERROR_BODY_MAX_LENGTH:
-                summary += "... (truncated)"
-            raise PulpError(
-                f"Distribution update failed ({response.status_code}): {summary}",
-                status_code=response.status_code,
-                response_body=body,
+        try:
+            response_data = parse_json_dict(
+                response, "Distribution update", PulpError
             )
-
-        try:
-            response_data = response.json()
-            if not isinstance(response_data, dict):
-                raise PulpError(
-                    "Distribution update API returned non-dict response",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
             task_href = str(response_data["task"])
         except (ValueError, KeyError) as e:
             raise PulpError(
