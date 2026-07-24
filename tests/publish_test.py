@@ -324,6 +324,10 @@ def test_publish_successful_upload(mock_client_cls: Mock, tmp_path: Path) -> Non
     # Verify context manager was used (close via __exit__)
     mock_client.__exit__.assert_called_once()
 
+    # Verify always-on progress lines (not gated behind --verbose)
+    assert "Resolving repository: test-repo" in result.output
+    assert "Adding 6 content unit(s) to repository" in result.output
+
     # Verify summary output
     assert "Published: 6 artifact(s) uploaded" in result.output
 
@@ -589,6 +593,48 @@ def test_publish_pulp_error_handling(
 
     assert result.exit_code != 0
     assert "Pulp error:" in result.output
+    assert "HTTP status: 400" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_pulp_error_includes_response_body(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """PulpError with response body includes truncated body in output."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_content.side_effect = PulpError(
+        message="Task failed: conflict",
+        status_code=409,
+        response_body='{"error": "duplicate content unit"}',
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Pulp error:" in result.output
+    assert "HTTP status: 409" in result.output
+    assert "duplicate content unit" in result.output
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
@@ -1913,6 +1959,7 @@ def test_publish_modify_repository_error(
 
     assert result.exit_code != 0
     assert "Pulp error:" in result.output
+    assert "HTTP status: 409" in result.output
 
 
 @patch("slan_cuan.publish.PulpMavenClient")

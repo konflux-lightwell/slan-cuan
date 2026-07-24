@@ -229,8 +229,15 @@ class _PulpClientBase:
                 if state in ("failed", "canceled"):
                     error_details = task_data.get("error", {})
                     error_msg = str(error_details.get("description", state))
+                    traceback_str = str(
+                        error_details.get("traceback", "")
+                    ).strip()
+                    parts = [f"Task {state}: {error_msg}"]
+                    if traceback_str:
+                        parts.append(f"Traceback:\n{traceback_str}")
+                    parts.append(f"Task: {task_href}")
                     raise PulpError(
-                        f"Task {state}: {error_msg}",
+                        "\n".join(parts),
                         status_code=response.status_code,
                         response_body=response.text,
                     )
