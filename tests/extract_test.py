@@ -458,9 +458,9 @@ def test_extract_writes_tekton_results(
     assert attachment_dir_file.exists()
 
     # Verify content
-    assert manifest_digest_file.read_text() == "sha256:abc123"
-    assert deliverable_dir_file.read_text() == "TEST-build-output"
-    assert attachment_dir_file.read_text() == ""
+    assert manifest_digest_file.read_text() == "sha256:abc123\n"
+    assert deliverable_dir_file.read_text() == "TEST-build-output\n"
+    assert attachment_dir_file.read_text() == "\n"
 
 
 @patch("slan_cuan.extract.manifest_fetch")
@@ -605,7 +605,7 @@ def test_extract_tekton_result_attachment_dir(
     )
 
     assert result.exit_code == 0
-    assert (results_dir / "ATTACHMENT_DIR").read_text() == "attachments"
+    assert (results_dir / "ATTACHMENT_DIR").read_text() == "attachments\n"
 
 
 @patch("slan_cuan.extract.discover")
