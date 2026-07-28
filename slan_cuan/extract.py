@@ -222,27 +222,33 @@ def extract(
                         click.echo(f"  No referrers found for {art_type}")
                     continue
 
-                for referrer in referrers:
-                    digest = referrer.get("digest")
-                    if not digest:
-                        continue
-
-                    ref_image = ImageReference(
-                        registry=img_ref.registry,
-                        repository=img_ref.repository,
-                        tag=None,
-                        digest=digest,
+                if len(referrers) > 1:
+                    raise click.ClickException(
+                        f"Expected at most 1 referrer for artifact type "
+                        f"'{art_type}', found {len(referrers)}"
                     )
 
-                    if ctx.verbose:
-                        click.echo(f"  Pulling attachment: {ref_image}")
+                referrer = referrers[0]
+                digest = referrer.get("digest")
+                if not digest:
+                    continue
 
-                    pull(
-                        ref_image,
-                        attachments_dir,
-                        auth_file=registry_auth_file,
-                        verbose=ctx.verbose,
-                    )
+                ref_image = ImageReference(
+                    registry=img_ref.registry,
+                    repository=img_ref.repository,
+                    tag=None,
+                    digest=digest,
+                )
+
+                if ctx.verbose:
+                    click.echo(f"  Pulling attachment: {ref_image}")
+
+                pull(
+                    ref_image,
+                    attachments_dir,
+                    auth_file=registry_auth_file,
+                    verbose=ctx.verbose,
+                )
 
             # Collect attachment files
             for item in sorted(attachments_dir.rglob("*")):
