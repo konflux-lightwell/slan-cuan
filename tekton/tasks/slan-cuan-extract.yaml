@@ -26,6 +26,13 @@ spec:
       description: Overwrite existing output directory if it exists.
       type: string
       default: "false"
+    - name: DISCOVER_ATTACHMENTS
+      description: >-
+        Comma-separated list of OCI artifact-type values. When set, the
+        extract step discovers and pulls referrer attachments matching
+        these types.
+      type: string
+      default: ""
     - name: ociStorage
       description: The OCI repository where the Trusted Artifact is stored.
       type: string
@@ -59,6 +66,10 @@ spec:
       description: OCI manifest digest of the extracted image.
     - name: DELIVERABLE_DIR
       description: Name of the deliverable directory inside the artifact.
+    - name: ATTACHMENT_DIR
+      description: >-
+        Name of the attachments directory inside the extracted output.
+        Empty when no attachments were discovered.
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory.
       type: string
@@ -90,6 +101,8 @@ spec:
           value: /auth/.dockerconfigjson
         - name: SLAN_CUAN_EXTRACT_FORCE
           value: $(params.FORCE)
+        - name: SLAN_CUAN_EXTRACT_DISCOVER_ATTACHMENTS
+          value: $(params.DISCOVER_ATTACHMENTS)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: $(step.results)
       volumeMounts:

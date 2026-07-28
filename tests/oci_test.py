@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from slan_cuan.models import ImageReference
-from slan_cuan.oci import OrasError, manifest_fetch, pull
+from slan_cuan.oci import OrasError, discover, manifest_fetch, pull
 
 
 class TestPull:
@@ -310,6 +310,166 @@ class TestManifestFetch:
 
         captured = capsys.readouterr()
         assert "Running: oras manifest fetch" in captured.out
+
+
+class TestDiscover:
+    """Tests for the discover() function."""
+
+    @pytest.fixture
+    def image_ref(self) -> ImageReference:
+        """Create a sample image reference."""
+        return ImageReference(
+            registry="quay.io",
+            repository="light-castle/tmp-pnc",
+            tag=None,
+            digest="sha256:abc123",
+        )
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_success(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Successful discover returns referrer list."""
+        referrers = [
+            {
+                "digest": "sha256:ref1",
+                "artifactType": "application/vnd.example.sbom",
+            },
+            {
+                "digest": "sha256:ref2",
+                "artifactType": "application/vnd.example.sbom",
+            },
+        ]
+        mock_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps({"referrers": referrers}),
+        )
+        result = discover(image_ref, "application/vnd.example.sbom")
+
+        assert result == referrers
+        mock_run.assert_called_once()
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "oras"
+        assert cmd[1] == "discover"
+        assert "--artifact-type" in cmd
+        assert "application/vnd.example.sbom" in cmd
+        assert "--format" in cmd
+        assert "json" in cmd
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_no_referrers(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover returns empty list when no referrers found."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps({"referrers": []}),
+        )
+        result = discover(image_ref, "application/vnd.example.sbom")
+        assert result == []
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_auth_failure(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover raises OrasError for auth failure."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: 401 Unauthorized",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="Authentication failed"):
+            discover(image_ref, "application/vnd.example.sbom")
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_not_found(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover raises OrasError for not found."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: 404 Not Found",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="Image not found"):
+            discover(image_ref, "application/vnd.example.sbom")
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_network_error(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover raises OrasError for network errors."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: connection refused",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="Network error discovering"):
+            discover(image_ref, "application/vnd.example.sbom")
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_generic_error(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover raises OrasError for unrecognized errors."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: something went wrong",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="oras discover failed"):
+            discover(image_ref, "application/vnd.example.sbom")
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_invalid_json(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover raises OrasError for invalid JSON response."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout="not valid json",
+        )
+        with pytest.raises(OrasError, match="Invalid JSON in discover response"):
+            discover(image_ref, "application/vnd.example.sbom")
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_with_auth_file(
+        self, mock_run: Mock, image_ref: ImageReference
+    ) -> None:
+        """Discover includes --registry-config when auth_file provided."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps({"referrers": []}),
+        )
+        auth_file = Path("/path/to/auth.json")
+        discover(image_ref, "application/vnd.example.sbom", auth_file=auth_file)
+
+        cmd = mock_run.call_args[0][0]
+        assert "--registry-config" in cmd
+        assert str(auth_file) in cmd
+
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_discover_verbose_prints_command(
+        self,
+        mock_run: Mock,
+        image_ref: ImageReference,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Discover with verbose=True prints the command."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps({"referrers": []}),
+        )
+        discover(image_ref, "application/vnd.example.sbom", verbose=True)
+
+        captured = capsys.readouterr()
+        assert "Running: oras discover" in captured.out
 
 
 class TestOrasError:

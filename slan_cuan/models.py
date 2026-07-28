@@ -486,6 +486,7 @@ class ExtractResult:
     files: list[str]
     extracted_at: str
     security_metadata_dir: str | None = None
+    attachment_files: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         """Serialize to JSON string.
@@ -552,6 +553,7 @@ class ExtractResult:
             files=data["files"],
             security_metadata_dir=data.get("security_metadata_dir"),
             extracted_at=data["extracted_at"],
+            attachment_files=data.get("attachment_files", []),
         )
 
     def save(self, path: Path) -> None:
