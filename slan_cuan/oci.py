@@ -167,3 +167,93 @@ def manifest_fetch(
             result.stderr,
             1,  # Use returncode=1 for JSON parse errors
         ) from e
+
+
+def discover(
+    image: ImageReference,
+    artifact_type: str,
+    auth_file: Path | None = None,
+    verbose: bool = False,
+) -> list[dict]:
+    """Discover referrers of an OCI artifact by artifact type.
+
+    Args:
+        image: OCI image reference to discover referrers for
+        artifact_type: OCI artifact type to filter by
+        auth_file: Optional path to registry auth file
+        verbose: Whether to log the oras command
+
+    Returns:
+        List of referrer descriptors (each with digest, artifactType, etc.)
+
+    Raises:
+        OrasError: If oras command fails
+
+    """
+    cmd = [
+        "oras",
+        "discover",
+        str(image),
+        "--artifact-type",
+        artifact_type,
+        "--format",
+        "json",
+    ]
+    if auth_file:
+        cmd.extend(["--registry-config", str(auth_file)])
+
+    if verbose:
+        print(f"Running: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+
+        if "401 Unauthorized" in stderr or "authentication required" in stderr:
+            raise OrasError(
+                f"Authentication failed for {image}",
+                stderr,
+                result.returncode,
+            )
+        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
+            raise OrasError(
+                f"Image not found: {image}",
+                stderr,
+                result.returncode,
+            )
+        elif (
+            "network" in stderr.lower()
+            or "connection" in stderr.lower()
+            or "timeout" in stderr.lower()
+        ):
+            raise OrasError(
+                f"Network error discovering referrers for {image}",
+                stderr,
+                result.returncode,
+            )
+        else:
+            raise OrasError(
+                f"oras discover failed: {stderr}",
+                stderr,
+                result.returncode,
+            )
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise OrasError(
+            f"Invalid JSON in discover response: {e}",
+            result.stderr,
+            1,
+        ) from e
+
+    referrers = data.get("referrers", [])
+    if not isinstance(referrers, list):
+        return []
+    return referrers

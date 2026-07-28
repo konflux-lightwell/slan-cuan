@@ -17,7 +17,7 @@ from slan_cuan.models import (
     ImageReference,
     OCIManifest,
 )
-from slan_cuan.oci import OrasError, manifest_fetch, pull
+from slan_cuan.oci import OrasError, discover, manifest_fetch, pull
 
 
 @click.command()
@@ -44,6 +44,13 @@ from slan_cuan.oci import OrasError, manifest_fetch, pull
     default=False,
     help="Overwrite existing output directory.",
 )
+@click.option(
+    "--discover-attachments",
+    multiple=True,
+    envvar="SLAN_CUAN_EXTRACT_DISCOVER_ATTACHMENTS",
+    help="OCI artifact-type(s) to discover and pull as attachments. "
+    "Repeatable; env var accepts comma-separated values.",
+)
 @click.pass_obj
 def extract(
     ctx: GlobalContext,
@@ -51,6 +58,7 @@ def extract(
     output_dir: Path,
     registry_auth_file: Path | None,
     force: bool,
+    discover_attachments: tuple[str, ...],
 ) -> None:
     """Extract artifacts from a PNC container image."""
     try:
@@ -58,6 +66,14 @@ def extract(
         img_ref = ImageReference.parse(image)
         if ctx.verbose:
             click.echo(f"Parsed image reference: {img_ref}")
+
+        # Normalize discover_attachments: split comma-separated env var values
+        artifact_types: tuple[str, ...] = tuple(
+            t.strip()
+            for raw in discover_attachments
+            for t in raw.split(",")
+            if t.strip()
+        )
 
         # Validate/create output directory
         if output_dir.exists():
@@ -115,6 +131,26 @@ def extract(
                 f"\ndry-run: would extract {len(layers)} layer(s) "
                 f"({total_size:,} bytes) to {output_dir}"
             )
+            if artifact_types:
+                click.echo(
+                    f"\ndry-run: would discover attachments "
+                    f"for artifact types: {', '.join(artifact_types)}"
+                )
+                for art_type in artifact_types:
+                    referrers = discover(
+                        img_ref,
+                        art_type,
+                        auth_file=registry_auth_file,
+                        verbose=ctx.verbose,
+                    )
+                    if referrers:
+                        click.echo(
+                            f"  {art_type}: {len(referrers)} referrer(s) found"
+                        )
+                        for ref in referrers:
+                            click.echo(f"    - {ref.get('digest', 'unknown')}")
+                    else:
+                        click.echo(f"  {art_type}: no referrers found")
             return
 
         # Normal path: extract the artifact
@@ -162,6 +198,58 @@ def extract(
         # Sort for deterministic output
         files.sort()
 
+        # Discover and pull attachments
+        attachment_files: list[str] = []
+        if artifact_types:
+            attachments_dir = output_dir / "attachments"
+            attachments_dir.mkdir(exist_ok=True)
+
+            for art_type in artifact_types:
+                if ctx.verbose:
+                    click.echo(
+                        f"Discovering referrers for artifact type: {art_type}"
+                    )
+
+                referrers = discover(
+                    img_ref,
+                    art_type,
+                    auth_file=registry_auth_file,
+                    verbose=ctx.verbose,
+                )
+
+                if not referrers:
+                    if ctx.verbose:
+                        click.echo(f"  No referrers found for {art_type}")
+                    continue
+
+                for referrer in referrers:
+                    digest = referrer.get("digest")
+                    if not digest:
+                        continue
+
+                    ref_image = ImageReference(
+                        registry=img_ref.registry,
+                        repository=img_ref.repository,
+                        tag=None,
+                        digest=digest,
+                    )
+
+                    if ctx.verbose:
+                        click.echo(f"  Pulling attachment: {ref_image}")
+
+                    pull(
+                        ref_image,
+                        attachments_dir,
+                        auth_file=registry_auth_file,
+                        verbose=ctx.verbose,
+                    )
+
+            # Collect attachment files
+            for item in sorted(attachments_dir.rglob("*")):
+                if item.is_file():
+                    rel_path = item.relative_to(output_dir)
+                    attachment_files.append(str(rel_path))
+
         # Build and save ExtractResult
         result = ExtractResult(
             image=img_ref,
@@ -171,6 +259,7 @@ def extract(
             deliverable_dir=deliverable_name,
             files=files,
             extracted_at=datetime.now(timezone.utc).isoformat(),
+            attachment_files=attachment_files,
         )
 
         result_path = output_dir / EXTRACT_RESULT_FILENAME
@@ -184,6 +273,11 @@ def extract(
         )
         write_tekton_result(
             ctx.tekton_results_dir, "DELIVERABLE_DIR", deliverable_name
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "ATTACHMENT_DIR",
+            "attachments" if attachment_files else "",
         )
 
         # Log summary
@@ -209,6 +303,9 @@ def extract(
             f"{'provenance, ' if has_provenance else ''}"
             f"{len(files)} total files ({total_size:,} bytes)"
         )
+
+        if attachment_files:
+            click.echo(f"Attachments: {len(attachment_files)} file(s) discovered")
 
         if ctx.verbose:
             click.echo(f"\nExtracted files ({len(files)}):")

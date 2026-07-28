@@ -451,13 +451,16 @@ def test_extract_writes_tekton_results(
     # Verify Tekton result files were created
     manifest_digest_file = results_dir / "MANIFEST_DIGEST"
     deliverable_dir_file = results_dir / "DELIVERABLE_DIR"
+    attachment_dir_file = results_dir / "ATTACHMENT_DIR"
 
     assert manifest_digest_file.exists()
     assert deliverable_dir_file.exists()
+    assert attachment_dir_file.exists()
 
     # Verify content
     assert manifest_digest_file.read_text() == "sha256:abc123"
     assert deliverable_dir_file.read_text() == "TEST-build-output"
+    assert attachment_dir_file.read_text() == ""
 
 
 @patch("slan_cuan.extract.manifest_fetch")
@@ -490,3 +493,326 @@ def test_extract_dry_run_skips_tekton_results(
 
     # Verify no Tekton result files were created
     assert not results_dir.exists()
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_with_discover_attachments(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Discover attachments pulls referrers into attachments/ dir."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        if "attachments" not in str(out_dir):
+            create_mock_deliverable(out_dir)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "sbom.json").write_text('{"bomFormat": "CycloneDX"}')
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = [
+        {"digest": "sha256:att1", "artifactType": "application/vnd.example.sbom"},
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify discover was called
+    mock_discover.assert_called_once()
+    discover_args = mock_discover.call_args
+    assert discover_args[0][1] == "application/vnd.example.sbom"
+
+    # Verify pull was called for the attachment
+    assert mock_pull.call_count == 2
+    attachment_pull = mock_pull.call_args_list[1]
+    assert attachment_pull[0][0].digest == "sha256:att1"
+
+    # Verify attachments dir exists
+    assert (output_dir / "attachments").is_dir()
+
+    # Verify attachment_files in result
+    result_file = output_dir / "extract-result.json"
+    with result_file.open() as f:
+        result_data = json.load(f)
+    assert len(result_data["attachment_files"]) > 0
+    assert any("attachments/" in f for f in result_data["attachment_files"])
+
+    # Verify summary output
+    assert "Attachments:" in result.output
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_tekton_result_attachment_dir(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """ATTACHMENT_DIR Tekton result is 'attachments' when attachments exist."""
+    output_dir = tmp_path / "output"
+    results_dir = tmp_path / "results"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        if "attachments" not in str(out_dir):
+            create_mock_deliverable(out_dir)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "sbom.json").write_text("{}")
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = [
+        {"digest": "sha256:att1", "artifactType": "application/vnd.example.sbom"},
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (results_dir / "ATTACHMENT_DIR").read_text() == "attachments"
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_discover_no_referrers(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """No referrers found results in empty attachment_files."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        create_mock_deliverable(out_dir)
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = []
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    result_file = output_dir / "extract-result.json"
+    with result_file.open() as f:
+        result_data = json.load(f)
+    assert result_data["attachment_files"] == []
+
+    # Pull should only be called once (main pull, no attachment pulls)
+    assert mock_pull.call_count == 1
+
+
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_without_discover_attachments_backward_compat(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Without --discover-attachments, discover is never called."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        create_mock_deliverable(out_dir)
+
+    mock_pull.side_effect = side_effect_pull
+
+    runner = CliRunner()
+    with patch("slan_cuan.extract.discover") as mock_discover:
+        result = runner.invoke(
+            main,
+            [
+                "extract",
+                "--image",
+                "quay.io/light-castle/tmp-pnc@sha256:abc123",
+                "--output-dir",
+                str(output_dir),
+            ],
+        )
+
+        assert result.exit_code == 0
+        mock_discover.assert_not_called()
+
+    result_file = output_dir / "extract-result.json"
+    with result_file.open() as f:
+        result_data = json.load(f)
+    assert result_data["attachment_files"] == []
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+def test_extract_dry_run_with_discover_attachments(
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Dry-run with --discover-attachments shows referrers without pulling."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+    mock_discover.return_value = [
+        {"digest": "sha256:att1", "artifactType": "application/vnd.example.sbom"},
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--dry-run",
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not output_dir.exists()
+    assert "would discover attachments" in result.output
+    assert "1 referrer(s) found" in result.output
+    assert "sha256:att1" in result.output
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_discover_multiple_types(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Multiple --discover-attachments values discover each type."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        if "attachments" not in str(out_dir):
+            create_mock_deliverable(out_dir)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "att.json").write_text("{}")
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.side_effect = [
+        [{"digest": "sha256:att1", "artifactType": "type1"}],
+        [{"digest": "sha256:att2", "artifactType": "type2"}],
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "type1",
+            "--discover-attachments",
+            "type2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert mock_discover.call_count == 2
+    # Main pull + 2 attachment pulls
+    assert mock_pull.call_count == 3
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_discover_env_var_comma_split(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Comma-separated env var value is split into multiple artifact types."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        create_mock_deliverable(out_dir)
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = []
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+        ],
+        env={"SLAN_CUAN_EXTRACT_DISCOVER_ATTACHMENTS": "type1,type2"},
+    )
+
+    assert result.exit_code == 0
+    assert mock_discover.call_count == 2
+    types_called = [c[0][1] for c in mock_discover.call_args_list]
+    assert "type1" in types_called
+    assert "type2" in types_called

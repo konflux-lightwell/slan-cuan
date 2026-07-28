@@ -247,6 +247,57 @@ class TestExtractResult:
         with pytest.raises(KeyError):
             ExtractResult.from_file(incomplete)
 
+    def test_attachment_files_roundtrip(self, tmp_path: Path) -> None:
+        """attachment_files field survives save/load roundtrip."""
+        result = ExtractResult(
+            image=ImageReference(
+                registry="quay.io",
+                repository="light-castle/tmp-pnc",
+                tag=None,
+                digest="sha256:abc123",
+            ),
+            manifest_digest="sha256:manifest123",
+            layers=[],
+            annotations={},
+            deliverable_dir="TEST-build-output",
+            files=["TEST-build-output/test.jar"],
+            extracted_at="2026-07-28T12:00:00Z",
+            attachment_files=["attachments/sbom.json", "attachments/sig.json"],
+        )
+
+        file_path = tmp_path / "extract-result.json"
+        result.save(file_path)
+        loaded = ExtractResult.from_file(file_path)
+
+        assert loaded.attachment_files == [
+            "attachments/sbom.json",
+            "attachments/sig.json",
+        ]
+
+    def test_from_file_missing_attachment_files_defaults_empty(
+        self, tmp_path: Path
+    ) -> None:
+        """Old JSON without attachment_files field loads with empty list."""
+        data = {
+            "image": {
+                "registry": "quay.io",
+                "repository": "light-castle/tmp-pnc",
+                "tag": None,
+                "digest": "sha256:abc123",
+            },
+            "manifest_digest": "sha256:manifest123",
+            "layers": [],
+            "annotations": {},
+            "deliverable_dir": "TEST-build-output",
+            "files": [],
+            "extracted_at": "2026-07-28T12:00:00Z",
+        }
+        file_path = tmp_path / "extract-result.json"
+        file_path.write_text(json.dumps(data))
+
+        loaded = ExtractResult.from_file(file_path)
+        assert loaded.attachment_files == []
+
 
 class TestOCIManifest:
     """Tests for OCIManifest parsing and serialization."""
