@@ -20,4 +20,4 @@ def write_tekton_result(results_dir: Path | None, name: str, value: str) -> None
         return
     results_dir.mkdir(parents=True, exist_ok=True)
     result_file = results_dir / name
-    result_file.write_text(value + "\n")
+    result_file.write_text(value)
