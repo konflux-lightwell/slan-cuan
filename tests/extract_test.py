@@ -781,6 +781,48 @@ def test_extract_discover_multiple_types(
 @patch("slan_cuan.extract.discover")
 @patch("slan_cuan.extract.manifest_fetch")
 @patch("slan_cuan.extract.pull")
+def test_extract_discover_multiple_referrers_fails(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """More than one referrer for a single artifact-type raises an error."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = fake_manifest
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        create_mock_deliverable(out_dir)
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = [
+        {"digest": "sha256:att1", "artifactType": "application/vnd.example.sbom"},
+        {"digest": "sha256:att2", "artifactType": "application/vnd.example.sbom"},
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Expected at most 1 referrer" in result.output
+    assert "found 2" in result.output
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
 def test_extract_discover_env_var_comma_split(
     mock_pull: Mock,
     mock_manifest_fetch: Mock,
