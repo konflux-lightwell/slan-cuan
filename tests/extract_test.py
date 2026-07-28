@@ -460,7 +460,7 @@ def test_extract_writes_tekton_results(
     # Verify content
     assert manifest_digest_file.read_text() == "sha256:abc123"
     assert deliverable_dir_file.read_text() == "TEST-build-output"
-    assert attachment_dir_file.read_text() == ""
+    assert attachment_dir_file.read_text() == "__EMPTY__"
 
 
 @patch("slan_cuan.extract.manifest_fetch")

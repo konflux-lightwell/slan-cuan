@@ -283,7 +283,7 @@ def extract(
         write_tekton_result(
             ctx.tekton_results_dir,
             "ATTACHMENT_DIR",
-            "attachments" if attachment_files else "",
+            "attachments" if attachment_files else "__EMPTY__",
         )
 
         # Log summary
