@@ -265,7 +265,7 @@ def test_write_tekton_result_creates_file(tmp_path) -> None:
 
     result_file = results_dir / "TEST_RESULT"
     assert result_file.exists()
-    assert result_file.read_text() == "test-value\n"
+    assert result_file.read_text() == "test-value"
 
 
 def test_write_tekton_result_creates_directory(tmp_path) -> None:
@@ -277,7 +277,7 @@ def test_write_tekton_result_creates_directory(tmp_path) -> None:
 
     result_file = results_dir / "TEST_RESULT"
     assert result_file.exists()
-    assert result_file.read_text() == "test-value\n"
+    assert result_file.read_text() == "test-value"
 
 
 def test_write_tekton_result_noop_when_none() -> None:
