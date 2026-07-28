@@ -594,7 +594,7 @@ def test_register_writes_tekton_results(
     # Verify Tekton result file was created
     sbom_urn_file = results_dir / "SBOM_URN"
     assert sbom_urn_file.exists()
-    assert sbom_urn_file.read_text() == "urn:uuid:test-tekton-results\n"
+    assert sbom_urn_file.read_text() == "urn:uuid:test-tekton-results"
 
 
 @patch("slan_cuan.register.TrustifyClient")

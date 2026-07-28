@@ -851,8 +851,8 @@ def test_publish_writes_tekton_results(
     assert outputs_file.exists()
 
     # Verify content
-    assert uploaded_file.read_text() == "6\n"
-    assert skipped_file.read_text() == "0\n"
+    assert uploaded_file.read_text() == "6"
+    assert skipped_file.read_text() == "0"
 
     # Verify JSON format for artifact outputs
     outputs_data = json.loads(outputs_file.read_text())

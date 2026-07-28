@@ -236,7 +236,7 @@ def test_generate_security_metadata_writes_tekton_results(
 
     security_metadata_dir_file = results_dir / "SECURITY_METADATA_DIR"
     assert security_metadata_dir_file.exists()
-    assert security_metadata_dir_file.read_text() == str(output_dir) + "\n"
+    assert security_metadata_dir_file.read_text() == str(output_dir)
 
 
 def test_generate_security_metadata_missing_required_options() -> None:
