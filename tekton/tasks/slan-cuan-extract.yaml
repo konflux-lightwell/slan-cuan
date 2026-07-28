@@ -64,12 +64,15 @@ spec:
   results:
     - name: MANIFEST_DIGEST
       description: OCI manifest digest of the extracted image.
+      value: $(steps.run.results.MANIFEST_DIGEST)
     - name: DELIVERABLE_DIR
       description: Name of the deliverable directory inside the artifact.
+      value: $(steps.run.results.DELIVERABLE_DIR)
     - name: ATTACHMENT_DIR
       description: >-
         Name of the attachments directory inside the extracted output.
         Empty when no attachments were discovered.
+      value: $(steps.run.results.ATTACHMENT_DIR)
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory.
       type: string
@@ -90,6 +93,13 @@ spec:
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
+      results:
+        - name: MANIFEST_DIGEST
+          type: string
+        - name: DELIVERABLE_DIR
+          type: string
+        - name: ATTACHMENT_DIR
+          type: string
       args:
         - extract
       env:
