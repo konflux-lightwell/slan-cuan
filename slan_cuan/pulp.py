@@ -634,6 +634,29 @@ class PulpFileClient(_PulpClientBase):
 
         try:
             response_data = parse_json_dict(response, "File content", PulpError)
+
+            if "task" in response_data:
+                task_href = str(response_data["task"])
+                task_data = self.poll_task(task_href)
+                created = task_data.get("created_resources", [])
+                if not isinstance(created, list) or not created:
+                    raise PulpError(
+                        "File upload task completed but created no resources",
+                        status_code=response.status_code,
+                        response_body=response.text,
+                    )
+                content_href = str(created[0])
+                content_response = request(
+                    self._client,
+                    "GET",
+                    content_href,
+                    "File content lookup",
+                    PulpError,
+                )
+                response_data = parse_json_dict(
+                    content_response, "File content", PulpError
+                )
+
             return FileContentUnit(
                 pulp_href=str(response_data["pulp_href"]),
                 relative_path=str(

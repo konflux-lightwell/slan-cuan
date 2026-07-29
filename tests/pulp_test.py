@@ -1540,6 +1540,103 @@ class TestPulpFileClient:
         assert result.relative_path == "BUILD123/gav-index.osv.json"
         assert result.sha256 == "deadbeef" * 8
 
+    def test_upload_content_async_task(self, tmp_path: Path) -> None:
+        """Async 202 response polls task and fetches created resource."""
+        test_file = tmp_path / "gav-index.osv.json"
+        test_file.write_text("[]")
+
+        task_href = "/api/pulp/testdomain/api/v3/tasks/task-uuid/"
+        content_href = "/api/v3/content/file/files/new123/"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "/api/v3/content/file/files/" in url and request.method == "POST":
+                return httpx.Response(202, json={"task": task_href})
+            if task_href in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "state": "completed",
+                        "created_resources": [content_href],
+                    },
+                )
+            if content_href in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "pulp_href": content_href,
+                        "relative_path": "BUILD123/gav-index.osv.json",
+                        "sha256": "deadbeef" * 8,
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        result = client.upload_content(
+            test_file,
+            "BUILD123/gav-index.osv.json",
+            sha256="deadbeef" * 8,
+        )
+
+        assert result.pulp_href == content_href
+        assert result.relative_path == "BUILD123/gav-index.osv.json"
+        assert result.sha256 == "deadbeef" * 8
+
+    def test_upload_content_async_task_no_resources(self, tmp_path: Path) -> None:
+        """Async task that creates no resources raises PulpError."""
+        test_file = tmp_path / "gav-index.osv.json"
+        test_file.write_text("[]")
+
+        task_href = "/api/pulp/testdomain/api/v3/tasks/task-uuid/"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "/api/v3/content/file/files/" in url and request.method == "POST":
+                return httpx.Response(202, json={"task": task_href})
+            if task_href in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "state": "completed",
+                        "created_resources": [],
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        with pytest.raises(PulpError, match="created no resources"):
+            client.upload_content(
+                test_file,
+                "BUILD123/gav-index.osv.json",
+                sha256="deadbeef" * 8,
+            )
+
     def test_upload_content_url(self, tmp_path: Path) -> None:
         """Upload hits the File content API path."""
         test_file = tmp_path / "test.osv.json"
