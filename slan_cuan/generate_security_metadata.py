@@ -56,6 +56,7 @@ def generate_security_metadata(
         index_data = json.load(f)
 
     osv_records = process_osv(index_data)
+    output_dir.mkdir(parents=True, exist_ok=True)
     osv_output_path = output_dir / f"{file_name}.osv.json"
     click.echo(f"Writing OSV document to {osv_output_path}")
     with open(osv_output_path, "w") as f:

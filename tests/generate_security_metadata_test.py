@@ -115,7 +115,6 @@ def test_generate_security_metadata_creates_osv_output(
     _create_extract_result(workdir)
 
     output_dir = workdir / "security_metadata"
-    output_dir.mkdir()
 
     mock_process_osv.return_value = fake_osv_records
 
@@ -126,6 +125,7 @@ def test_generate_security_metadata_creates_osv_output(
     assert "Processing" in result.output
     assert "Security metadata generation completed" in result.output
 
+    assert output_dir.is_dir()
     osv_file = output_dir / "gav-index.osv.json"
     assert osv_file.exists()
 
@@ -152,7 +152,6 @@ def test_generate_security_metadata_custom_filename(
     _create_extract_result(workdir)
 
     output_dir = workdir / "security_metadata"
-    output_dir.mkdir()
 
     mock_process_osv.return_value = fake_osv_records
 
@@ -191,7 +190,6 @@ def test_generate_security_metadata_passes_index_data_to_process_osv(
     _create_extract_result(workdir)
 
     output_dir = workdir / "security_metadata"
-    output_dir.mkdir()
 
     mock_process_osv.return_value = []
 
@@ -217,7 +215,6 @@ def test_generate_security_metadata_writes_tekton_results(
     _create_extract_result(workdir)
 
     output_dir = workdir / "security_metadata"
-    output_dir.mkdir()
     results_dir = tmp_path / "results"
 
     mock_process_osv.return_value = fake_osv_records
@@ -237,6 +234,33 @@ def test_generate_security_metadata_writes_tekton_results(
     security_metadata_dir_file = results_dir / "SECURITY_METADATA_DIR"
     assert security_metadata_dir_file.exists()
     assert security_metadata_dir_file.read_text() == str(output_dir)
+
+
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_generate_security_metadata_creates_nested_output_dir(
+    mock_process_osv: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Nested output_dir is created with intermediate parents."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+
+    output_dir = workdir / "nested" / "security_metadata"
+
+    mock_process_osv.return_value = fake_osv_records
+
+    runner = CliRunner()
+    result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    assert output_dir.is_dir()
+    assert (output_dir / "gav-index.osv.json").exists()
 
 
 def test_generate_security_metadata_missing_required_options() -> None:
@@ -263,7 +287,6 @@ def test_generate_security_metadata_file_not_found(
     _create_extract_result(workdir)
 
     output_dir = workdir / "security_metadata"
-    output_dir.mkdir()
 
     runner = CliRunner()
     result = _invoke(
