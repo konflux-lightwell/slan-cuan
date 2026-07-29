@@ -71,6 +71,7 @@ spec:
   results:
     - name: SBOM_URN
       description: URN of the SBOM registered in Trustify.
+      value: $(steps.run.results.SBOM_URN)
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir
@@ -107,6 +108,9 @@ spec:
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
+      results:
+        - name: SBOM_URN
+          type: string
       args:
         - register
       env:
