@@ -50,6 +50,13 @@ def generate_security_metadata(
 ) -> None:
     """Generate the OSV and VEX attestations for a given build index."""
     index_full_path = workdir / index_basedir / index_filename
+    if not index_full_path.exists():
+        click.echo(
+            f"Index file not found at {index_full_path}, "
+            "skipping security metadata generation."
+        )
+        return
+
     file_name = Path(index_filename).stem
     click.echo(f"Processing {index_full_path} to generate OSV and VEX...")
     with open(index_full_path, "r") as f:
