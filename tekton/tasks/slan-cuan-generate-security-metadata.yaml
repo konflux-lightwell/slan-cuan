@@ -64,7 +64,6 @@ spec:
   results:
     - name: SECURITY_METADATA_DIR
       description: Name of the directory where the OSV and VEX documents are stored.
-      value: $(steps.run.results.SECURITY_METADATA_DIR)
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the data directory.
       type: string
@@ -101,9 +100,6 @@ spec:
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
-      results:
-        - name: SECURITY_METADATA_DIR
-          type: string
       args:
         - --verbose
         - generate-security-metadata
