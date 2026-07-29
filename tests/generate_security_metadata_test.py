@@ -282,7 +282,7 @@ def test_generate_security_metadata_file_not_found(
     ctx: GlobalContext,
     tmp_path: Path,
 ) -> None:
-    """A missing index file produces an error."""
+    """A missing index file skips generation gracefully."""
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
 
@@ -293,4 +293,6 @@ def test_generate_security_metadata_file_not_found(
         runner, tmp_path / "nonexistent", output_dir, ctx, workdir=workdir
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 0
+    assert "skipping security metadata generation" in result.output
+    assert not output_dir.exists()
