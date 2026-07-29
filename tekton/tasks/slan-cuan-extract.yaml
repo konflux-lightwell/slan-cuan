@@ -104,7 +104,7 @@ spec:
         - name: SLAN_CUAN_EXTRACT_DISCOVER_ATTACHMENTS
           value: $(params.DISCOVER_ATTACHMENTS)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
-          value: $(step.results)
+          value: /tekton/results
       volumeMounts:
         - name: registry-auth
           mountPath: /auth

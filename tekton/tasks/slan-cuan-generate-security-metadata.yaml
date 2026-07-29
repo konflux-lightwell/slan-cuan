@@ -113,7 +113,7 @@ spec:
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_WORKDIR
           value: $(params.WORKDIR)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
-          value: $(step.results)
+          value: /tekton/results
     - name: create-trusted-artifact
       ref:
         resolver: git

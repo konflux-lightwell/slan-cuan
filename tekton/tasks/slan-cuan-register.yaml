@@ -133,7 +133,7 @@ spec:
         - name: SLAN_CUAN_REGISTER_RETRIES
           value: $(params.RETRIES)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
-          value: $(step.results)
+          value: /tekton/results
       volumeMounts:
         - name: ca-cert
           mountPath: /certs
