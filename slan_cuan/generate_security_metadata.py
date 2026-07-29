@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 from pathlib import Path
 
 import click
@@ -50,7 +49,7 @@ def generate_security_metadata(
     workdir: Path,
 ) -> None:
     """Generate the OSV and VEX attestations for a given build index."""
-    index_full_path = os.path.join(index_basedir, index_filename)
+    index_full_path = workdir / index_basedir / index_filename
     file_name = Path(index_filename).stem
     click.echo(f"Processing {index_full_path} to generate OSV and VEX...")
     with open(index_full_path, "r") as f:
