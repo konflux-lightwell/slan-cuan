@@ -107,8 +107,10 @@ spec:
   results:
     - name: ARTIFACTS_UPLOADED
       description: Number of artifacts uploaded to Pulp.
+      value: $(steps.run.results.ARTIFACTS_UPLOADED)
     - name: ARTIFACTS_SKIPPED
       description: Number of artifacts skipped during upload.
+      value: $(steps.run.results.ARTIFACTS_SKIPPED)
     - name: PUBLISHED_ARTIFACT_OUTPUTS
       description: >-
         JSON object for Tekton Chains SLSA provenance.
@@ -117,12 +119,15 @@ spec:
       properties:
         uri: {}
         digest: {}
+      value: $(steps.run.results.PUBLISHED_ARTIFACT_OUTPUTS)
     - name: PULP_LABELS
       description: >-
         JSON object with source_image label (fully qualified
         OCI reference) attached to each Pulp content unit.
+      value: $(steps.run.results.PULP_LABELS)
     - name: SECURITY_METADATA_UPLOADED
       description: Number of security metadata files uploaded to the Pulp File repository.
+      value: $(steps.run.results.SECURITY_METADATA_UPLOADED)
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir
@@ -159,6 +164,17 @@ spec:
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
+      results:
+        - name: ARTIFACTS_UPLOADED
+          type: string
+        - name: ARTIFACTS_SKIPPED
+          type: string
+        - name: PUBLISHED_ARTIFACT_OUTPUTS
+          type: string
+        - name: PULP_LABELS
+          type: string
+        - name: SECURITY_METADATA_UPLOADED
+          type: string
       args:
         - --verbose
         - publish
