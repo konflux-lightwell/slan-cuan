@@ -45,7 +45,6 @@ jobs:
           labels: ${{ steps.tag.outputs.extra_label }}
 
       - name: Push to registry
-        if: github.event_name != 'pull_request'
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ steps.build.outputs.image }}
@@ -55,13 +54,11 @@ jobs:
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
 
       - name: Install Tekton CLI
-        if: github.event_name != 'pull_request'
         uses: tektoncd/actions/setup-tektoncd-cli@main
         with:
           version: latest
 
       - name: Push Tekton bundle
-        if: github.event_name != 'pull_request'
         run: |
           tkn bundle push \
             "${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}-bundle" \
