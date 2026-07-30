@@ -30,7 +30,7 @@ def fake_osv_records() -> list[dict]:
     """Sample OSV records as returned by process_osv."""
     return [
         {
-            "id": "OSV-2024-001",
+            "id": "x_RHLW-CVE-2024-001-1.0.0",
             "summary": "Buffer overflow in example-lib",
             "affected": [
                 {
@@ -126,11 +126,11 @@ def test_generate_security_metadata_creates_osv_output(
     assert "Security metadata generation completed" in result.output
 
     assert output_dir.is_dir()
-    osv_file = output_dir / "gav-index.osv.json"
+    osv_file = output_dir / "x_RHLW-CVE-2024-001-1.0.0.json"
     assert osv_file.exists()
 
     written = json.loads(osv_file.read_text())
-    assert written == fake_osv_records
+    assert written == fake_osv_records[0]
 
     updated_result = ExtractResult.from_file(workdir / EXTRACT_RESULT_FILENAME)
     assert updated_result.security_metadata_dir == "security_metadata"
@@ -167,11 +167,11 @@ def test_generate_security_metadata_custom_filename(
 
     assert result.exit_code == 0, result.output
 
-    osv_file = output_dir / "cve-report.osv.json"
+    osv_file = output_dir / "x_RHLW-CVE-2024-001-1.0.0.json"
     assert osv_file.exists()
 
     written = json.loads(osv_file.read_text())
-    assert written == fake_osv_records
+    assert written == fake_osv_records[0]
 
 
 @patch("slan_cuan.generate_security_metadata.process_osv")
@@ -260,7 +260,7 @@ def test_generate_security_metadata_creates_nested_output_dir(
 
     assert result.exit_code == 0, result.output
     assert output_dir.is_dir()
-    assert (output_dir / "gav-index.osv.json").exists()
+    assert (output_dir / "x_RHLW-CVE-2024-001-1.0.0.json").exists()
 
 
 def test_generate_security_metadata_missing_required_options() -> None:

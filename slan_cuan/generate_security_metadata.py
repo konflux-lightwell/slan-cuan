@@ -57,17 +57,17 @@ def generate_security_metadata(
         )
         return
 
-    file_name = Path(index_filename).stem
     click.echo(f"Processing {index_full_path} to generate OSV and VEX...")
     with open(index_full_path, "r") as f:
         index_data = json.load(f)
 
     osv_records = process_osv(index_data)
     output_dir.mkdir(parents=True, exist_ok=True)
-    osv_output_path = output_dir / f"{file_name}.osv.json"
-    click.echo(f"Writing OSV document to {osv_output_path}")
-    with open(osv_output_path, "w") as f:
-        json.dump(osv_records, f, indent=2)
+    for record in osv_records:
+        osv_output_path = output_dir / f"{record['id']}.json"
+        click.echo(f"Writing OSV record to {osv_output_path}")
+        with open(osv_output_path, "w") as f:
+            json.dump(record, f, indent=2)
 
     # TODO: Generate VEX document
 
