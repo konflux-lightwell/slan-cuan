@@ -792,7 +792,7 @@ class PulpFileClient(_PulpClientBase):
             PulpError: If the update fails.
 
         """
-        payload = {"publication": publication_href}
+        payload = {"publication": publication_href, "repository": ""}
 
         response = request(
             self._client,

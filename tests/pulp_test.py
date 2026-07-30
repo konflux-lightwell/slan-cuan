@@ -2100,7 +2100,10 @@ class TestPulpFileClient:
         import json
 
         body = json.loads(captured_body)
-        assert body == {"publication": "/api/v3/publications/file/file/pub-uuid/"}
+        assert body == {
+            "publication": "/api/v3/publications/file/file/pub-uuid/",
+            "repository": "",
+        }
 
     def test_update_distribution_error(self) -> None:
         """Error response on PATCH raises PulpError."""
