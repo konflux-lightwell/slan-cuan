@@ -691,9 +691,6 @@ class TestBuildOutput:
 
         build = BuildOutput.from_extract_result(result, tmp_path)
 
-        # Verify build_id extraction
-        assert build.build_id == "TEST"
-
         # 3 primary + 3 checksums + 2 SBOM + 2 SBOM checksums = 10 total
         assert len(build.artifacts) == 10
 
@@ -792,7 +789,6 @@ class TestBuildOutput:
         )
 
         build = BuildOutput(
-            build_id="TEST",
             deliverable_dir=tmp_path,
             artifacts=(artifact1, artifact2),
             source_archive_path=None,
@@ -846,7 +842,6 @@ class TestBuildOutput:
         )
 
         build = BuildOutput(
-            build_id="TEST",
             deliverable_dir=tmp_path,
             artifacts=(jar_artifact, pom_artifact, md5_artifact),
             source_archive_path=None,

@@ -322,7 +322,6 @@ class MavenArtifact:
 class BuildOutput:
     """Parsed PNC build-output deliverable."""
 
-    build_id: str
     deliverable_dir: Path
     artifacts: tuple[MavenArtifact, ...]
     source_archive_path: Path | None
@@ -359,11 +358,6 @@ class BuildOutput:
             candidate = output_dir / result.security_metadata_dir
             if candidate.is_dir():
                 security_metadata_path = candidate
-
-        # Extract build_id from deliverable dir name
-        # e.g. "BPQESYGN2PQAA-build-output" -> "BPQESYGN2PQAA"
-        parts = result.deliverable_dir.split("-", 1)
-        build_id = parts[0] if parts else result.deliverable_dir
 
         artifacts: list[MavenArtifact] = []
 
@@ -466,7 +460,6 @@ class BuildOutput:
         sources_path = deliverable_path / "sources" / "sources.tar.gz"
 
         return cls(
-            build_id=build_id,
             deliverable_dir=deliverable_path,
             artifacts=tuple(artifacts),
             source_archive_path=(sources_path if sources_path.exists() else None),

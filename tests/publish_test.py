@@ -742,7 +742,6 @@ def test_publish_skips_missing_files(
         / "artifact-1.0.0.pom"
     )
     mock_from_extract.return_value = BuildOutput(
-        build_id="TEST",
         deliverable_dir=artifact_dir / "TEST-build-output",
         artifacts=(
             MavenArtifact(
@@ -1107,7 +1106,6 @@ def test_publish_skips_missing_with_domain(
     )
 
     mock_from_extract.return_value = BuildOutput(
-        build_id="TEST",
         deliverable_dir=artifact_dir / "TEST-build-output",
         artifacts=(
             MavenArtifact(
@@ -1832,7 +1830,6 @@ def test_publish_concurrent_skips_missing_before_pool(
         / "artifact-1.0.0.pom"
     )
     mock_from_extract.return_value = BuildOutput(
-        build_id="TEST",
         deliverable_dir=artifact_dir / "TEST-build-output",
         artifacts=(
             MavenArtifact(
