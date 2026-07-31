@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -179,6 +180,18 @@ def extract(
             auth_file=registry_auth_file,
             verbose=ctx.verbose,
         )
+
+        # If the deliverable is a zip archive, extract it
+        deliverable_file = output_dir / deliverable_name
+        if deliverable_file.is_file() and zipfile.is_zipfile(deliverable_file):
+            if ctx.verbose:
+                click.echo(f"Extracting archive: {deliverable_file}")
+            with zipfile.ZipFile(deliverable_file, "r") as zf:
+                zf.extractall(output_dir)
+            deliverable_file.unlink()
+            deliverable_name = deliverable_name.removesuffix(".zip")
+            if ctx.verbose:
+                click.echo(f"Deliverable directory: {deliverable_name}")
 
         # Discover extracted files
         deliverable_path = output_dir / deliverable_name

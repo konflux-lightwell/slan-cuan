@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -67,6 +68,21 @@ def create_mock_deliverable(output_dir: Path) -> None:
     logs_dir.mkdir(parents=True)
     (logs_dir / "build.log").write_text("build log content")
     (logs_dir / "alignment.log").write_text("alignment log content")
+
+
+def create_mock_deliverable_zip(output_dir: Path) -> None:
+    """Create a mock deliverable as a zip archive.
+
+    Simulates newer PNC images where oras pull produces a zip file.
+    """
+    zip_path = output_dir / "TEST-build-output.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        prefix = "TEST-build-output"
+        zf.writestr(f"{prefix}/cyclonedx.json", '{"bomFormat": "CycloneDX"}')
+        zf.writestr(f"{prefix}/provenance.json", '{"_type": "in-toto"}')
+        ver = f"{prefix}/repository/org/example/artifact/1.0.0"
+        zf.writestr(f"{ver}/artifact-1.0.0.jar", "jar content")
+        zf.writestr(f"{ver}/artifact-1.0.0.pom", "<project/>")
 
 
 @patch("slan_cuan.extract.manifest_fetch")
@@ -858,3 +874,55 @@ def test_extract_discover_env_var_comma_split(
     types_called = [c[0][1] for c in mock_discover.call_args_list]
     assert "type1" in types_called
     assert "type2" in types_called
+
+
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_zip_deliverable(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """Zip-archived deliverables are extracted before file discovery."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = {
+        "layers": [
+            {
+                "digest": "sha256:zipdigest",
+                "mediaType": "application/zip",
+                "size": 5000,
+            }
+        ],
+        "annotations": {
+            "org.opencontainers.image.title": "TEST-build-output.zip",
+        },
+    }
+    mock_pull.side_effect = lambda img, out_dir, **kw: (
+        create_mock_deliverable_zip(out_dir)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Zip should be removed, directory should exist
+    assert not (output_dir / "TEST-build-output.zip").exists()
+    assert (output_dir / "TEST-build-output").is_dir()
+
+    with (output_dir / "extract-result.json").open() as f:
+        data = json.load(f)
+
+    assert data["deliverable_dir"] == "TEST-build-output"
+    assert any("artifact-1.0.0.jar" in f for f in data["files"])
+    assert "1 artifact(s)" in result.output
+    assert "1 POM(s)" in result.output
