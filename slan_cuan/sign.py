@@ -169,20 +169,13 @@ def _sign_directly(
     ]
 
     click.echo(f"  - cmd: {cmd}")
-    cmd_args = {
-        "capture_output": True,
-        "text": True,
-        "check": True,
-        "universal_newlines": True,
-        "stderr": subprocess.STDOUT,
-        "stdout": subprocess.PIPE,
-    }
-
-    response = subprocess.run(cmd, **cmd_args)
-    if response.returncode != 0:
-        raise click.ClickException(
-            f"Error signing the repository directly via internal-request: {response.stdout}"  # noqa: E501
-        )
+    response = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=True,
+    )
     click.echo(f"  - response: {response.stdout}")
 
 
