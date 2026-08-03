@@ -642,6 +642,43 @@ def test_sign_ignore_patterns_single_from_env_var(
     assert len(individual_kwargs["ignore_patterns"]) == 1
 
 
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_falls_back_to_extracted_directory(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_sign_individual: Mock,
+    tmp_path: Path,
+) -> None:
+    """When repo_path is a .zip that doesn't exist, fall back to the directory."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repos_dir = tmp_path / "repos"
+    repos_dir.mkdir()
+    (repos_dir / "extract-result.json").write_text(
+        json.dumps({"deliverable_dir": "original"})
+    )
+    # Create the extracted directory (no zip file)
+    (repos_dir / "build-output").mkdir()
+    zip_path = str(repos_dir / "build-output.zip")
+
+    def radas_side_effect(**kwargs):
+        result_dir = Path(kwargs["result_path"]) / "results"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "sign-result.json").write_text('{"signed": true}')
+
+    mock_sign_radas.side_effect = radas_side_effect
+
+    runner = CliRunner()
+    result = runner.invoke(main, _base_sign_args(output_path, zip_path))
+
+    assert result.exit_code == 0
+
+    individual_kwargs = mock_sign_individual.call_args.kwargs
+    assert individual_kwargs["repos"] == [str(repos_dir / "build-output")]
+
+
 def test_build_radas_config_from_env() -> None:
     """_build_radas_config_from_env returns a file-like JSON object."""
     config_io = _build_radas_config_from_env(
