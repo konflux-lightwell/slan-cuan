@@ -205,6 +205,13 @@ def sign(
     """Sign Maven artifacts on RADAS."""
     radas_config = None
     try:
+        # Fall back to the extracted directory when the zip was already unpacked
+        # by the extract command (newer PNC images deliver a zip that extract
+        # unzips in-place and removes).
+        if repo_path.endswith(".zip") and not os.path.exists(repo_path):
+            dir_path = repo_path.removesuffix(".zip")
+            if os.path.isdir(dir_path):
+                repo_path = dir_path
         # 0 - Setup logging
         log_level = logging.DEBUG if ctx.verbose else logging.INFO
         set_logging("sign", "slan-cuan", log_level, use_log_file=False)
