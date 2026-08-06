@@ -169,13 +169,19 @@ def _sign_directly(
     ]
 
     click.echo(f"  - cmd: {cmd}")
-    response = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=True,
-    )
+    try:
+        response = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Command failed with exit code: {e.returncode}")
+        err_output = e.stderr or e.stdout
+        click.echo(f"Error output: {err_output}")
+        raise
     click.echo(f"  - response: {response.stdout}")
 
 
