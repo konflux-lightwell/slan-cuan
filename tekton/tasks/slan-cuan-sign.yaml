@@ -57,7 +57,7 @@ spec:
     - name: DIRECT_SIGN_PIPELINE_IMAGE
       description: The image to use for the internal-request pipeline.
       type: string
-      default: "quay.io/konflux-ci/signing:latest"
+      default: "quay.io/konflux-ci/signing@sha256:9e7a52fdcc357946e9497882a56cd6818547616db85b468eb66d20d8c73be654"
     - name: DIRECT_SIGN_TASK_GIT_URL
       description: The url to the git repo where the internal-request task is stored.
       type: string
