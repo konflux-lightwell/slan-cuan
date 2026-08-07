@@ -122,6 +122,7 @@ def _sign_directly(
     direct_sign_pipeline_name: str,
     direct_sign_pipeline_image: str,
     direct_sign_task_git_url: str,
+    direct_sign_task_git_revision: str,
     intention: str,
     sign_artifact_dir: str,
 ) -> None:
@@ -152,6 +153,8 @@ def _sign_directly(
         f"pipeline_image={direct_sign_pipeline_image}",
         "-p",
         f"taskGitUrl={direct_sign_task_git_url}",
+        "-p",
+        f"taskGitRevision={direct_sign_task_git_revision}",
         "-p",
         f"repoURL={repo_url}",
         "-p",
@@ -337,6 +340,13 @@ def _sign_directly(
     help="The Git URL to use for direct signing.",
 )
 @click.option(
+    "--direct-sign-task-git-revision",
+    type=str,
+    default="main",
+    show_default=True,
+    help="The Git branch to use for direct signing.",
+)
+@click.option(
     "--intention",
     default="production",
     type=str,
@@ -367,6 +377,7 @@ def sign(
     direct_sign_pipeline_name: str,
     direct_sign_pipeline_image: str,
     direct_sign_task_git_url: str,
+    direct_sign_task_git_revision: str,
     intention: str,
 ) -> None:
     """Sign Maven artifacts on RADAS or directly via internal-request."""
@@ -404,6 +415,7 @@ def sign(
                     direct_sign_pipeline_name=direct_sign_pipeline_name,
                     direct_sign_pipeline_image=direct_sign_pipeline_image,
                     direct_sign_task_git_url=direct_sign_task_git_url,
+                    direct_sign_task_git_revision=direct_sign_task_git_revision,
                     intention=intention,
                     sign_artifact_dir=sign_artifact_dir,
                 )

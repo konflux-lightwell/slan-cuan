@@ -85,6 +85,7 @@ def test_sign_help_output() -> None:
     assert "--direct-sign-pipeline-name" in result.output
     assert "--direct-sign-pipeline-image" in result.output
     assert "--direct-sign-task-git-url" in result.output
+    assert "--direct-sign-task-git-revision" in result.output
     assert "--intention" in result.output
 
 
@@ -874,6 +875,8 @@ def test_sign_direct_sign_custom_pipeline_options(
                 "quay.io/custom/image:v1",
                 "--direct-sign-task-git-url",
                 "gitlab.example.com/signing.git",
+                "--direct-sign-task-git-revision",
+                "release-v2",
                 "--intention",
                 "staging",
             ],
@@ -886,6 +889,7 @@ def test_sign_direct_sign_custom_pipeline_options(
     assert "custom-pipeline" in cmd_str
     assert "quay.io/custom/image:v1" in cmd_str
     assert "gitlab.example.com/signing.git" in cmd_str
+    assert "release-v2" in cmd_str
     assert "staging" in cmd_str
 
 
@@ -931,6 +935,7 @@ def test_sign_direct_sign_default_options(
     assert "middleware-signing" in cmd_str
     assert "quay.io/konflux-ci/signing:latest" in cmd_str
     assert "gitlab.cee.redhat.com/signing/signing.git" in cmd_str
+    assert "taskGitRevision=main" in cmd_str
     assert "production" in cmd_str
 
 

@@ -62,6 +62,10 @@ spec:
       description: The url to the git repo where the internal-request task is stored.
       type: string
       default: gitlab.cee.redhat.com/signing/signing.git
+    - name: DIRECT_SIGN_TASK_GIT_REVISION
+      description: The branch name for the git repo where the internal-request task is stored.
+      type: string
+      default: main
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -179,6 +183,8 @@ spec:
           value: $(params.DIRECT_SIGN_PIPELINE_IMAGE)
         - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_URL
           value: $(params.DIRECT_SIGN_TASK_GIT_URL)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_REVISION
+          value: $(params.DIRECT_SIGN_TASK_GIT_REVISION)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
           value: $(params.IGNORE_PATTERNS)
         - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE
