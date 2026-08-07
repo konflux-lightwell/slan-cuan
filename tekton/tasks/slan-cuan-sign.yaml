@@ -46,6 +46,26 @@ spec:
       default: ""
     - name: REGISTRY_AUTH_SECRET
       description: K8s Secret name for registry auth (.dockerconfigjson format).
+    - name: DIRECT_SIGN
+      description: Whether to sign the repository directly via internal-request pipeline.
+      type: string
+      default: "false"
+    - name: DIRECT_SIGN_PIPELINE_NAME
+      description: The name of the internal-request pipeline to use for signing.
+      type: string
+      default: "middleware-signing"
+    - name: DIRECT_SIGN_PIPELINE_IMAGE
+      description: The image to use for the internal-request pipeline.
+      type: string
+      default: "quay.io/konflux-ci/signing@sha256:9e7a52fdcc357946e9497882a56cd6818547616db85b468eb66d20d8c73be654"
+    - name: DIRECT_SIGN_TASK_GIT_URL
+      description: The url to the git repo where the internal-request task is stored.
+      type: string
+      default: gitlab.cee.redhat.com/signing/signing.git
+    - name: DIRECT_SIGN_TASK_GIT_REVISION
+      description: The branch name for the git repo where the internal-request task is stored.
+      type: string
+      default: main
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -113,7 +133,7 @@ spec:
         - name: caCertPath
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
     - name: run
-      image: quay.io/light-castle/slan-cuan:latest
+      image: quay.io/light-castle/slan-cuan:pr-52-direct_sign
       imagePullPolicy: Always
       args:
         - --verbose
@@ -155,6 +175,16 @@ spec:
           value: $(params.ZIP_ROOT_PATH)
         - name: SLAN_CUAN_SIGN_PRODUCT_KEY
           value: $(params.PRODUCT_KEY)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN
+          value: $(params.DIRECT_SIGN)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_PIPELINE_NAME
+          value: $(params.DIRECT_SIGN_PIPELINE_NAME)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_PIPELINE_IMAGE
+          value: $(params.DIRECT_SIGN_PIPELINE_IMAGE)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_URL
+          value: $(params.DIRECT_SIGN_TASK_GIT_URL)
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_REVISION
+          value: $(params.DIRECT_SIGN_TASK_GIT_REVISION)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
           value: $(params.IGNORE_PATTERNS)
         - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE
