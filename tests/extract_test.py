@@ -915,8 +915,8 @@ def test_extract_zip_deliverable(
 
     assert result.exit_code == 0
 
-    # Zip should be removed, directory should exist
-    assert not (output_dir / "TEST-build-output.zip").exists()
+    # Zip should be kept, directory should exist
+    assert (output_dir / "TEST-build-output.zip").exists()
     assert (output_dir / "TEST-build-output").is_dir()
 
     with (output_dir / "extract-result.json").open() as f:
