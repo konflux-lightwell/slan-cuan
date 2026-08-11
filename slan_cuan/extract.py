@@ -188,7 +188,6 @@ def extract(
                 click.echo(f"Extracting archive: {deliverable_file}")
             with zipfile.ZipFile(deliverable_file, "r") as zf:
                 zf.extractall(output_dir)
-            deliverable_file.unlink()
             deliverable_name = deliverable_name.removesuffix(".zip")
             if ctx.verbose:
                 click.echo(f"Deliverable directory: {deliverable_name}")
