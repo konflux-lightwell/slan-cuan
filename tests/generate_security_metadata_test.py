@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -84,7 +84,15 @@ def _create_extract_result(workdir: Path) -> None:
 
 
 def _invoke(
-    runner, index_basedir, output_dir, ctx, index_filename=None, workdir=None
+    runner,
+    index_basedir,
+    output_dir,
+    ctx,
+    index_filename=None,
+    workdir=None,
+    osidb_keytab=None,
+    osidb_kerberos_principal=None,
+    osidb_api_url=None,
 ):
     args = [
         "--index-basedir",
@@ -96,6 +104,12 @@ def _invoke(
         args += ["--workdir", str(workdir)]
     if index_filename is not None:
         args += ["--index-filename", index_filename]
+    if osidb_keytab is not None:
+        args += ["--osidb-keytab", str(osidb_keytab)]
+    if osidb_kerberos_principal is not None:
+        args += ["--osidb-kerberos-principal", osidb_kerberos_principal]
+    if osidb_api_url is not None:
+        args += ["--osidb-api-url", osidb_api_url]
     return runner.invoke(generate_security_metadata, args, obj=ctx)
 
 
@@ -197,7 +211,7 @@ def test_generate_security_metadata_passes_index_data_to_process_osv(
     result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
-    mock_process_osv.assert_called_once_with(index_data)
+    mock_process_osv.assert_called_once_with(index_data, osidb_client=None)
 
 
 @patch("slan_cuan.generate_security_metadata.process_osv")
@@ -296,3 +310,200 @@ def test_generate_security_metadata_file_not_found(
     assert result.exit_code == 0
     assert "skipping security metadata generation" in result.output
     assert not output_dir.exists()
+
+
+# ── OSIDB authentication tests ──────────────────────────────────
+
+
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_no_keytab_skips_osidb(
+    mock_process_osv: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Without a keytab, OSIDB is skipped and process_osv gets None."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    mock_process_osv.return_value = fake_osv_records
+
+    runner = CliRunner()
+    result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    assert "skipping OSIDB fetching" in result.output
+    mock_process_osv.assert_called_once_with(
+        json.loads((index_dir / "gav-index.json").read_text()),
+        osidb_client=None,
+    )
+
+
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_nonexistent_keytab_skips_osidb(
+    mock_process_osv: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """A keytab path that doesn't exist skips OSIDB."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    mock_process_osv.return_value = fake_osv_records
+
+    runner = CliRunner()
+    result = _invoke(
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        osidb_keytab=tmp_path / "missing.keytab",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "skipping OSIDB fetching" in result.output
+    mock_process_osv.assert_called_once_with(
+        json.loads((index_dir / "gav-index.json").read_text()),
+        osidb_client=None,
+    )
+
+
+@patch("fath_cuan.osidb.OsidbClient")
+@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_valid_keytab_creates_osidb_client(
+    mock_process_osv: Mock,
+    mock_get_token: Mock,
+    mock_osidb_client_cls: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """A valid keytab authenticates and passes the client to process_osv."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    keytab = tmp_path / "test.keytab"
+    keytab.write_text("fake-keytab")
+
+    mock_get_token.return_value = "jwt-token-123"
+    mock_client = MagicMock()
+    mock_client.available = True
+    mock_osidb_client_cls.return_value = mock_client
+    mock_process_osv.return_value = fake_osv_records
+
+    api_url = "https://osidb.example.com/api/v1"
+    principal = "user@REALM"
+
+    runner = CliRunner()
+    result = _invoke(
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        osidb_keytab=keytab,
+        osidb_kerberos_principal=principal,
+        osidb_api_url=api_url,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Creating OSIDB client" in result.output
+
+    mock_get_token.assert_called_once_with(api_url, principal, str(keytab))
+    mock_osidb_client_cls.assert_called_once_with(
+        base_url=api_url, token="jwt-token-123"
+    )
+    mock_process_osv.assert_called_once_with(
+        json.loads((index_dir / "gav-index.json").read_text()),
+        osidb_client=mock_client,
+    )
+
+
+@patch("fath_cuan.osidb.OsidbClient")
+@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_osidb_client_unavailable_aborts(
+    mock_process_osv: Mock,
+    mock_get_token: Mock,
+    mock_osidb_client_cls: Mock,
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """When OsidbClient reports unavailable, the command aborts."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    keytab = tmp_path / "test.keytab"
+    keytab.write_text("fake-keytab")
+
+    mock_get_token.return_value = "jwt-token-123"
+    mock_client = MagicMock()
+    mock_client.available = False
+    mock_osidb_client_cls.return_value = mock_client
+
+    runner = CliRunner()
+    result = _invoke(
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        osidb_keytab=keytab,
+    )
+
+    assert result.exit_code != 0
+    assert "Failed to create OSIDB client" in result.output
+    mock_process_osv.assert_not_called()
+
+
+@patch("requests.get")
+@patch("krbticket.KrbTicket")
+def test_get_osidb_auth_token_uses_spnego(
+    mock_krbticket_cls: Mock,
+    mock_requests_get: Mock,
+) -> None:
+    """_get_osidb_auth_token gets a TGT and negotiates via SPNEGO."""
+    from slan_cuan.generate_security_metadata import (
+        _get_osidb_auth_token,
+    )
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"access": "my-jwt"}
+    mock_requests_get.return_value = mock_response
+
+    token = _get_osidb_auth_token(
+        "https://osidb.example.com/api/v1",
+        "user@REALM",
+        "/path/to/keytab",
+    )
+
+    assert token == "my-jwt"
+    mock_krbticket_cls.init.assert_called_once_with(
+        "user@REALM", keytab="/path/to/keytab"
+    )
+    call_args = mock_requests_get.call_args
+    assert call_args[0][0] == "https://osidb.example.com/auth/token"
+    mock_response.raise_for_status.assert_called_once()

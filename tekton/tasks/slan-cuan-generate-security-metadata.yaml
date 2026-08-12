@@ -103,6 +103,10 @@ spec:
       args:
         - --verbose
         - generate-security-metadata
+      volumeMounts:
+        - mountPath: /var/run/secrets/osidb-keytab
+          name: osidb-keytab-secret
+          readOnly: true
       env:
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_INDEX_BASEDIR
           value: $(params.INDEX_BASEDIR)
@@ -112,6 +116,12 @@ spec:
           value: $(params.OUTPUT_DIR)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_WORKDIR
           value: $(params.WORKDIR)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KEYTAB
+          value: /var/run/secrets/osidb-keytab/lightwell-osidb.keytab
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KERBEROS_PRINCIPAL
+          value: lightwell-konflux-osidb@IPA.REDHAT.COM
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_API_URL
+          value: https://osidb.lightwell.redhat.com/osidb/api/v1
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: /tekton/results
     - name: create-trusted-artifact
@@ -138,6 +148,9 @@ spec:
   volumes:
     - name: workdir
       emptyDir: {}
+    - name: osidb-keytab-secret
+      secret:
+        secretName: lightwell-osidb-keytab
     - name: trusted-ca
       configMap:
         name: $(params.caTrustConfigMapName)

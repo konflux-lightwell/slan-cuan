@@ -11,6 +11,7 @@ RUN dnf -y install \
     git \
     gcc \
     make \
+    krb5-devel \
     && dnf clean all \
     && mkdir -p /export/wheels
 
@@ -19,7 +20,7 @@ COPY . /src/
 WORKDIR /src
 
 # Generate the wheels
-RUN pip3.12 wheel --wheel-dir=/export/wheels .
+RUN pip3.12 wheel --wheel-dir=/export/wheels '.[kerberos]'
 
 
 # Build the final image using task-runner which includes oras and other Tekton tooling
@@ -44,6 +45,7 @@ RUN echo "${RH_IT_CERT}" | base64 -d > /etc/pki/ca-trust/source/anchors/Current-
     && microdnf install -y \
         python3.12-pip \
         jq \
+        krb5-workstation \
     && curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl -o /usr/bin/kubectl \
     && chmod +x /usr/bin/kubectl \
     # for CVEs in base image
