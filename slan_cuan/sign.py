@@ -122,8 +122,6 @@ def _sign_directly(
     direct_sign_pipeline_name: str,
     direct_sign_task_git_url: str,
     direct_sign_task_git_revision: str,
-    direct_sign_task_ta_git_url: str,
-    direct_sign_task_ta_git_revision: str,
     intention: str,
     sign_artifact_dir: str,
     tmp_dir_sign_url: str,
@@ -146,8 +144,6 @@ def _sign_directly(
     params: dict[str, str] = {
         "taskGitUrl": direct_sign_task_git_url,
         "taskGitRevision": direct_sign_task_git_revision,
-        "taTaskGitUrl": direct_sign_task_ta_git_url,
-        "taTaskGitRevision": direct_sign_task_ta_git_revision,
         "sourceDataArtifact": repo_url,
         "onbehalfof": requester_id,
         "keyname": signing_key,
@@ -371,14 +367,6 @@ def _sign_directly(
     ),
 )
 @click.option(
-    "--direct-sign-task-ta-git-url",
-    type=str,
-)
-@click.option(
-    "--direct-sign-task-ta-git-revision",
-    type=str,
-)
-@click.option(
     "--intention",
     default="production",
     type=str,
@@ -409,8 +397,6 @@ def sign(
     direct_sign_pipeline_name: str,
     direct_sign_task_git_url: str,
     direct_sign_task_git_revision: str,
-    direct_sign_task_ta_git_url: str,
-    direct_sign_task_ta_git_revision: str,
     direct_sign_task_ta_storage: str,
     direct_sign_task_ta_source_artifact: str,
     intention: str,
@@ -450,8 +436,6 @@ def sign(
                     direct_sign_pipeline_name=direct_sign_pipeline_name,
                     direct_sign_task_git_url=direct_sign_task_git_url,
                     direct_sign_task_git_revision=direct_sign_task_git_revision,
-                    direct_sign_task_ta_git_url=direct_sign_task_ta_git_url,
-                    direct_sign_task_ta_git_revision=direct_sign_task_ta_git_revision,
                     intention=intention,
                     sign_artifact_dir=direct_sign_task_ta_storage,
                     tmp_dir_sign_url=tmp_dir_sign_url,
