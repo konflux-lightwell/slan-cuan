@@ -169,6 +169,7 @@ def _sign_directly(
         params=params,
         labels=labels,
         sync=True,
+        service_account="signing-pipeline-sa",
     )
     click.echo(f"  - InternalRequest '{ir_name}' completed successfully")
 
