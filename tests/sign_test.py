@@ -821,6 +821,7 @@ def test_sign_direct_sign_successful(
     call_kwargs = mock_create_ir.call_args
     assert call_kwargs.args[0] == "middleware-signing"
     assert call_kwargs.kwargs["sync"] is True
+    assert call_kwargs.kwargs["service_account"] == "signing-pipeline-sa"
 
 
 @patch("slan_cuan.sign.blob_fetch")
@@ -1011,6 +1012,7 @@ def test_sign_direct_sign_default_options(
         labels["internal-services.appstudio.openshift.io/intention"]
         == "production"
     )
+    assert call_kwargs.kwargs["service_account"] == "signing-pipeline-sa"
 
 
 @patch("internal_request.create")
