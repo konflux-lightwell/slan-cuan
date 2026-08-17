@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import click
@@ -28,12 +29,18 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
     parsed = urlparse(api_url)
     token_url = f"{parsed.scheme}://{parsed.netloc}/auth/token"
 
-    KrbTicket.init(principal, keytab=keytab)
-    response = requests.get(
+    # Use a file-based ccache — keyring/API ccache backends are not
+    # available in Konflux container environments.
+    ccache_path = os.path.join(tempfile.gettempdir(), "osidb_krb5cc")
+    os.environ["KRB5CCNAME"] = f"FILE:{ccache_path}"
+    KrbTicket.init(principal, keytab=keytab, ccache_name=ccache_path)
+
+    session = requests.Session()
+    response = session.get(
         token_url,
         timeout=_OSIDB_TOKEN_REQUEST_TIMEOUT,
         auth=HTTPSPNEGOAuth(
-            mutual_authentication=OPTIONAL, opportunistic_auth=True
+            mutual_authentication=OPTIONAL, opportunistic_auth=False
         ),
     )
     response.raise_for_status()
@@ -119,7 +126,13 @@ def generate_security_metadata(
         auth_token = _get_osidb_auth_token(
             osidb_api_url, osidb_kerberos_principal, osidb_keytab
         )
-        osidb_client = OsidbClient(base_url=osidb_api_url, token=auth_token)
+        # OsidbClient appends /osidb/api/v1/... paths itself, so pass only
+        # the base URL (scheme + host) — not the full API path.
+        from urllib.parse import urlparse as _urlparse
+
+        _parsed = _urlparse(osidb_api_url)
+        osidb_base_url = f"{_parsed.scheme}://{_parsed.netloc}"
+        osidb_client = OsidbClient(base_url=osidb_base_url, token=auth_token)
         if not osidb_client.available:
             click.echo("Failed to create OSIDB client, exiting.")
             raise click.Abort()

@@ -429,7 +429,7 @@ def test_valid_keytab_creates_osidb_client(
 
     mock_get_token.assert_called_once_with(api_url, principal, str(keytab))
     mock_osidb_client_cls.assert_called_once_with(
-        base_url=api_url, token="jwt-token-123"
+        base_url="https://osidb.example.com", token="jwt-token-123"
     )
     mock_process_osv.assert_called_once_with(
         json.loads((index_dir / "gav-index.json").read_text()),
@@ -479,20 +479,26 @@ def test_osidb_client_unavailable_aborts(
     mock_process_osv.assert_not_called()
 
 
-@patch("requests.get")
+@patch("requests.Session")
 @patch("krbticket.KrbTicket")
 def test_get_osidb_auth_token_uses_spnego(
     mock_krbticket_cls: Mock,
-    mock_requests_get: Mock,
+    mock_session_cls: Mock,
 ) -> None:
     """_get_osidb_auth_token gets a TGT and negotiates via SPNEGO."""
+    import os
+    import tempfile
+
     from slan_cuan.generate_security_metadata import (
         _get_osidb_auth_token,
     )
 
     mock_response = MagicMock()
+    mock_response.ok = True
     mock_response.json.return_value = {"access": "my-jwt"}
-    mock_requests_get.return_value = mock_response
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_response
+    mock_session_cls.return_value = mock_session
 
     token = _get_osidb_auth_token(
         "https://osidb.example.com/api/v1",
@@ -501,9 +507,10 @@ def test_get_osidb_auth_token_uses_spnego(
     )
 
     assert token == "my-jwt"
+    expected_ccache = os.path.join(tempfile.gettempdir(), "osidb_krb5cc")
     mock_krbticket_cls.init.assert_called_once_with(
-        "user@REALM", keytab="/path/to/keytab"
+        "user@REALM", keytab="/path/to/keytab", ccache_name=expected_ccache
     )
-    call_args = mock_requests_get.call_args
+    call_args = mock_session.get.call_args
     assert call_args[0][0] == "https://osidb.example.com/auth/token"
     mock_response.raise_for_status.assert_called_once()
