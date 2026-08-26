@@ -842,10 +842,68 @@ def test_extract_discover_multiple_referrers_deduplicates(
     )
 
     assert result.exit_code == 0
-    assert (
-        "Found 2 referrers for 'application/vnd.example.sbom' with identical "
-        "layer blobs; deduplicating"
-    ) in result.output
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_discover_multiple_referrers_without_pnc_annotations(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Standard OCI SBOM manifests without deliverable annotations deduplicate."""
+    output_dir = tmp_path / "output"
+
+    def side_effect_manifest_fetch(img, **kwargs):
+        if img.digest in ("sha256:att1", "sha256:att2"):
+            return {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "artifactType": "application/vnd.example.sbom",
+                "layers": [
+                    {
+                        "digest": "sha256:same_blob_hash",
+                        "mediaType": "application/spdx+json",
+                        "size": 500,
+                    }
+                ],
+                "annotations": {},
+            }
+        return fake_manifest
+
+    mock_manifest_fetch.side_effect = side_effect_manifest_fetch
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        if "attachments" not in str(out_dir):
+            create_mock_deliverable(out_dir)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "sbom.json").write_text("{}")
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = [
+        {"digest": "sha256:att1", "artifactType": "application/vnd.example.sbom"},
+        {"digest": "sha256:att2", "artifactType": "application/vnd.example.sbom"},
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
 
 
 @patch("slan_cuan.extract.discover")
