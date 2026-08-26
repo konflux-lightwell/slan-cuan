@@ -797,19 +797,91 @@ def test_extract_discover_multiple_types(
 @patch("slan_cuan.extract.discover")
 @patch("slan_cuan.extract.manifest_fetch")
 @patch("slan_cuan.extract.pull")
-def test_extract_discover_multiple_referrers_fails(
+def test_extract_discover_multiple_referrers_deduplicates(
     mock_pull: Mock,
     mock_manifest_fetch: Mock,
     mock_discover: Mock,
     fake_manifest: dict,
     tmp_path: Path,
 ) -> None:
-    """More than one referrer for a single artifact-type raises an error."""
+    """Multiple referrers with identical layer blobs are deduplicated."""
     output_dir = tmp_path / "output"
     mock_manifest_fetch.return_value = fake_manifest
 
     def side_effect_pull(img, out_dir, **kwargs):
-        create_mock_deliverable(out_dir)
+        if "attachments" not in str(out_dir):
+            create_mock_deliverable(out_dir)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "sbom.json").write_text("{}")
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = [
+        {
+            "digest": "sha256:att1",
+            "artifactType": "application/vnd.example.sbom",
+        },
+        {
+            "digest": "sha256:att2",
+            "artifactType": "application/vnd.example.sbom",
+        },
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_discover_multiple_referrers_without_pnc_annotations(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    fake_manifest: dict,
+    tmp_path: Path,
+) -> None:
+    """Standard OCI SBOM manifests without deliverable annotations deduplicate."""
+    output_dir = tmp_path / "output"
+
+    def side_effect_manifest_fetch(img, **kwargs):
+        if img.digest in ("sha256:att1", "sha256:att2"):
+            return {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "artifactType": "application/vnd.example.sbom",
+                "layers": [
+                    {
+                        "digest": "sha256:same_blob_hash",
+                        "mediaType": "application/spdx+json",
+                        "size": 500,
+                    }
+                ],
+                "annotations": {},
+            }
+        return fake_manifest
+
+    mock_manifest_fetch.side_effect = side_effect_manifest_fetch
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        if "attachments" not in str(out_dir):
+            create_mock_deliverable(out_dir)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "sbom.json").write_text("{}")
 
     mock_pull.side_effect = side_effect_pull
     mock_discover.return_value = [
@@ -831,9 +903,93 @@ def test_extract_discover_multiple_referrers_fails(
         ],
     )
 
+    assert result.exit_code == 0
+
+
+@patch("slan_cuan.extract.discover")
+@patch("slan_cuan.extract.manifest_fetch")
+@patch("slan_cuan.extract.pull")
+def test_extract_discover_multiple_referrers_distinct_blobs_fails(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    mock_discover: Mock,
+    tmp_path: Path,
+) -> None:
+    """Multiple referrers with distinct layer blobs raise an error."""
+    output_dir = tmp_path / "output"
+
+    def side_effect_manifest_fetch(img, **kwargs):
+        if img.digest == "sha256:att1":
+            return {
+                "layers": [
+                    {
+                        "digest": "sha256:blob1",
+                        "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                        "size": 100,
+                    }
+                ],
+                "annotations": {"deliverable.name": "att1"},
+            }
+        elif img.digest == "sha256:att2":
+            return {
+                "layers": [
+                    {
+                        "digest": "sha256:blob2",
+                        "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                        "size": 200,
+                    }
+                ],
+                "annotations": {"deliverable.name": "att2"},
+            }
+        return {
+            "layers": [
+                {
+                    "digest": "sha256:layer1abc",
+                    "mediaType": (
+                        "application/vnd.lightwell.build-output.layer.v1+tar"
+                    ),
+                    "size": 1000,
+                }
+            ],
+            "annotations": {
+                "org.opencontainers.image.title": "TEST-build-output"
+            },
+        }
+
+    mock_manifest_fetch.side_effect = side_effect_manifest_fetch
+
+    def side_effect_pull(img, out_dir, **kwargs):
+        create_mock_deliverable(out_dir)
+
+    mock_pull.side_effect = side_effect_pull
+    mock_discover.return_value = [
+        {
+            "digest": "sha256:att1",
+            "artifactType": "application/vnd.example.sbom",
+        },
+        {
+            "digest": "sha256:att2",
+            "artifactType": "application/vnd.example.sbom",
+        },
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+            "--discover-attachments",
+            "application/vnd.example.sbom",
+        ],
+    )
+
     assert result.exit_code != 0
-    assert "Expected at most 1 referrer" in result.output
-    assert "found 2" in result.output
+    assert "Expected at most 1 unique artifact" in result.output
+    assert "found 2 distinct blob sets" in result.output
 
 
 @patch("slan_cuan.extract.discover")
