@@ -234,13 +234,47 @@ def extract(
                         click.echo(f"  No referrers found for {art_type}")
                     continue
 
+                # Deduplicate referrers by inspecting their layer blob digests
                 if len(referrers) > 1:
-                    raise click.ClickException(
-                        f"Expected at most 1 referrer for artifact type "
-                        f"'{art_type}', found {len(referrers)}"
-                    )
+                    blob_digests_seen: dict[tuple[str, ...], dict] = {}
+                    for ref_desc in referrers:
+                        ref_digest = ref_desc.get("digest")
+                        if not ref_digest:
+                            continue
+                        ref_img = ImageReference(
+                            registry=img_ref.registry,
+                            repository=img_ref.repository,
+                            tag=None,
+                            digest=ref_digest,
+                        )
+                        ref_manifest_raw = manifest_fetch(
+                            ref_img,
+                            auth_file=registry_auth_file,
+                            verbose=ctx.verbose,
+                        )
+                        ref_manifest = OCIManifest.from_dict(ref_manifest_raw)
+                        layer_digests = tuple(
+                            layer.digest for layer in ref_manifest.layers
+                        )
+                        if layer_digests not in blob_digests_seen:
+                            blob_digests_seen[layer_digests] = ref_desc
 
-                referrer = referrers[0]
+                    if len(blob_digests_seen) > 1:
+                        raise click.ClickException(
+                            f"Expected at most 1 unique artifact for type "
+                            f"'{art_type}', found {len(blob_digests_seen)} "
+                            f"distinct blob sets across {len(referrers)} "
+                            f"referrers"
+                        )
+
+                    click.echo(
+                        f"Found {len(referrers)} referrers for '{art_type}' "
+                        f"with identical layer blobs; deduplicating."
+                    )
+                    referrer = next(iter(blob_digests_seen.values()))
+                else:
+                    referrer = referrers[0]
+
                 digest = referrer.get("digest")
                 if not digest:
                     continue
