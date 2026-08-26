@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -1082,3 +1082,56 @@ def test_extract_zip_deliverable(
     assert any("artifact-1.0.0.jar" in f for f in data["files"])
     assert "1 artifact(s)" in result.output
     assert "1 POM(s)" in result.output
+
+
+@patch("slan_cuan.extract.pull")
+@patch("slan_cuan.extract.manifest_fetch")
+def test_extract_zip_slip_prevention(
+    mock_manifest: MagicMock,
+    mock_pull: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Test that zip archives with directory traversal paths are rejected."""
+    output_dir = tmp_path / "output"
+    mock_manifest.return_value = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {
+            "mediaType": "application/vnd.oci.empty.v1+json",
+            "size": 2,
+            "digest": "sha256:e3b0c44",
+        },
+        "layers": [
+            {
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                "size": 1000,
+                "digest": "sha256:layer1",
+            }
+        ],
+        "annotations": {"org.opencontainers.image.title": "malicious.zip"},
+    }
+
+    def create_malicious_zip(out_dir: Path) -> None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = out_dir / "malicious.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("../../evil.sh", "malicious content")
+
+    mock_pull.side_effect = lambda img, out_dir, **kw: create_malicious_zip(
+        out_dir
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Zip-slip path traversal attempt detected" in result.output
