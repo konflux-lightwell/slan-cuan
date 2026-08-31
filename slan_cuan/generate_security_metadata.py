@@ -6,6 +6,7 @@ import dataclasses
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -18,6 +19,8 @@ from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult
 _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
     os.getenv("OSIDB_TOKEN_REQUEST_TIMEOUT", "10.0")
 )
+_OSIDB_TOKEN_MAX_RETRIES = int(os.getenv("OSIDB_TOKEN_MAX_RETRIES", "3"))
+_OSIDB_TOKEN_RETRY_BACKOFF = float(os.getenv("OSIDB_TOKEN_RETRY_BACKOFF", "2.0"))
 
 
 def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
@@ -37,15 +40,40 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
     KrbTicket.init(principal, keytab=keytab, ccache_name=ccache_path)
 
     session = requests.Session()
-    response = session.get(
-        token_url,
-        timeout=_OSIDB_TOKEN_REQUEST_TIMEOUT,
-        auth=HTTPSPNEGOAuth(
-            mutual_authentication=OPTIONAL, opportunistic_auth=False
-        ),
+    auth = HTTPSPNEGOAuth(
+        mutual_authentication=OPTIONAL, opportunistic_auth=False
     )
-    response.raise_for_status()
-    return response.json()["access"]
+
+    last_error: Exception | None = None
+    for attempt in range(1, _OSIDB_TOKEN_MAX_RETRIES + 1):
+        try:
+            response = session.get(
+                token_url,
+                timeout=_OSIDB_TOKEN_REQUEST_TIMEOUT,
+                auth=auth,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            token = payload.get("access")
+            if not token:
+                raise ValueError(
+                    "OSIDB token response is missing the 'access' key "
+                    f"(got keys: {sorted(payload)})"
+                )
+            return token
+        except (requests.exceptions.RequestException, ValueError) as e:
+            last_error = e
+            click.echo(
+                f"OSIDB token request attempt {attempt}/"
+                f"{_OSIDB_TOKEN_MAX_RETRIES} failed: {e}"
+            )
+            if attempt < _OSIDB_TOKEN_MAX_RETRIES:
+                time.sleep(_OSIDB_TOKEN_RETRY_BACKOFF * attempt)
+
+    raise click.ClickException(
+        f"Failed to retrieve OSIDB auth token after "
+        f"{_OSIDB_TOKEN_MAX_RETRIES} attempts: {last_error}"
+    )
 
 
 @click.command()

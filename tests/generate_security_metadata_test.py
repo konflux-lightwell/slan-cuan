@@ -514,3 +514,95 @@ def test_get_osidb_auth_token_uses_spnego(
     call_args = mock_session.get.call_args
     assert call_args[0][0] == "https://osidb.example.com/auth/token"
     mock_response.raise_for_status.assert_called_once()
+
+
+@patch("slan_cuan.generate_security_metadata.time.sleep")
+@patch("requests.Session")
+@patch("krbticket.KrbTicket")
+def test_get_osidb_auth_token_retries_on_failure(
+    mock_krbticket_cls: Mock,
+    mock_session_cls: Mock,
+    mock_sleep: Mock,
+) -> None:
+    """_get_osidb_auth_token retries transient failures and succeeds."""
+    import requests
+
+    from slan_cuan.generate_security_metadata import _get_osidb_auth_token
+
+    ok_response = MagicMock()
+    ok_response.json.return_value = {"access": "my-jwt"}
+    mock_session = MagicMock()
+    mock_session.get.side_effect = [
+        requests.exceptions.ConnectionError("boom"),
+        requests.exceptions.ConnectionError("boom again"),
+        ok_response,
+    ]
+    mock_session_cls.return_value = mock_session
+
+    token = _get_osidb_auth_token(
+        "https://osidb.example.com/api/v1",
+        "user@REALM",
+        "/path/to/keytab",
+    )
+
+    assert token == "my-jwt"
+    assert mock_session.get.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+@patch("slan_cuan.generate_security_metadata.time.sleep")
+@patch("requests.Session")
+@patch("krbticket.KrbTicket")
+def test_get_osidb_auth_token_raises_after_max_retries(
+    mock_krbticket_cls: Mock,
+    mock_session_cls: Mock,
+    mock_sleep: Mock,
+) -> None:
+    """_get_osidb_auth_token raises once all retries are exhausted."""
+    import click
+    import requests
+
+    from slan_cuan.generate_security_metadata import (
+        _OSIDB_TOKEN_MAX_RETRIES,
+        _get_osidb_auth_token,
+    )
+
+    mock_session = MagicMock()
+    mock_session.get.side_effect = requests.exceptions.ConnectionError("boom")
+    mock_session_cls.return_value = mock_session
+
+    with pytest.raises(click.ClickException, match="Failed to retrieve OSIDB"):
+        _get_osidb_auth_token(
+            "https://osidb.example.com/api/v1",
+            "user@REALM",
+            "/path/to/keytab",
+        )
+
+    assert mock_session.get.call_count == _OSIDB_TOKEN_MAX_RETRIES
+
+
+@patch("slan_cuan.generate_security_metadata.time.sleep")
+@patch("requests.Session")
+@patch("krbticket.KrbTicket")
+def test_get_osidb_auth_token_missing_access_key(
+    mock_krbticket_cls: Mock,
+    mock_session_cls: Mock,
+    mock_sleep: Mock,
+) -> None:
+    """_get_osidb_auth_token fails when the 'access' key is absent."""
+    import click
+
+    from slan_cuan.generate_security_metadata import _get_osidb_auth_token
+
+    bad_response = MagicMock()
+    bad_response.json.return_value = {"detail": "unauthorized"}
+    mock_session = MagicMock()
+    mock_session.get.return_value = bad_response
+    mock_session_cls.return_value = mock_session
+
+    with pytest.raises(click.ClickException, match="Failed to retrieve OSIDB"):
+        _get_osidb_auth_token(
+            "https://osidb.example.com/api/v1",
+            "user@REALM",
+            "/path/to/keytab",
+        )
