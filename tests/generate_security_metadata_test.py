@@ -91,14 +91,18 @@ def _invoke(
     index_filename=None,
     workdir=None,
     osidb_keytab=None,
-    osidb_kerberos_principal=None,
-    osidb_api_url=None,
+    osidb_kerberos_principal="user@REALM",
+    osidb_api_url="https://osidb.example.com/api/v1",
 ):
     args = [
         "--index-basedir",
         str(index_basedir),
         "--output-dir",
         str(output_dir),
+        "--osidb-api-url",
+        osidb_api_url,
+        "--osidb-kerberos-principal",
+        osidb_kerberos_principal,
     ]
     if workdir is not None:
         args += ["--workdir", str(workdir)]
@@ -106,10 +110,6 @@ def _invoke(
         args += ["--index-filename", index_filename]
     if osidb_keytab is not None:
         args += ["--osidb-keytab", str(osidb_keytab)]
-    if osidb_kerberos_principal is not None:
-        args += ["--osidb-kerberos-principal", osidb_kerberos_principal]
-    if osidb_api_url is not None:
-        args += ["--osidb-api-url", osidb_api_url]
     return runner.invoke(generate_security_metadata, args, obj=ctx)
 
 
@@ -290,6 +290,48 @@ def test_generate_security_metadata_missing_required_options() -> None:
         generate_security_metadata, ["--index-basedir", "/tmp/idx"]
     )
     assert result.exit_code != 0
+
+
+def test_generate_security_metadata_requires_osidb_api_url() -> None:
+    """Omitting --osidb-api-url produces an error (no default is applied)."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        generate_security_metadata,
+        [
+            "--index-basedir",
+            "/tmp/idx",
+            "--output-dir",
+            "/tmp/out",
+            "--workdir",
+            "/tmp/work",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "osidb-api-url" in result.output
+
+
+def test_generate_security_metadata_requires_osidb_kerberos_principal() -> None:
+    """Omitting --osidb-kerberos-principal errors (no default is applied)."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        generate_security_metadata,
+        [
+            "--index-basedir",
+            "/tmp/idx",
+            "--output-dir",
+            "/tmp/out",
+            "--workdir",
+            "/tmp/work",
+            "--osidb-api-url",
+            "https://osidb.example.com/api/v1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "osidb-kerberos-principal" in result.output
 
 
 def test_generate_security_metadata_file_not_found(
