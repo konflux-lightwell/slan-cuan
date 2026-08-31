@@ -33,8 +33,11 @@ spec:
     - name: OSIDB_API_URL
       description: The URL of the OSIDB API to use for authentication on OSIDB.
       type: string
+    - name: OSIDB_KERBEROS_KEYTAB_PATH
+      description: The path to the Kerberos keytab file for the OSIDB API.
+      type: string
     - name: OSIDB_KERBEROS_PRINCIPAL
-      description: The Kerberos principal to use for authentication on OSIDB.
+      description: The Kerberos principal for the OSIDB API.
       type: string
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the build index.
@@ -123,7 +126,7 @@ spec:
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_WORKDIR
           value: $(params.WORKDIR)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KEYTAB
-          value: /var/run/secrets/osidb-keytab/lightwell-osidb.keytab
+          value: $(params.OSIDB_KERBEROS_KEYTAB_PATH)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KERBEROS_PRINCIPAL
           value: $(params.OSIDB_KERBEROS_PRINCIPAL)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_API_URL
