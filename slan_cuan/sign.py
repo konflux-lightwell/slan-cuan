@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import tarfile
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -126,6 +127,8 @@ def _sign_directly(
     sign_artifact_dir: str,
     tmp_dir_sign_url: str,
 ) -> None:
+    # Lazy import: internal_request is a vendored, runtime-only module that is
+    # only on the path inside the container, not in dev/test environments.
     from internal_request import create as create_internal_request
     from internal_request import fetch_results
 
@@ -183,8 +186,6 @@ def _sign_directly(
         )
     pullspec = source_data_artifact.removeprefix("oci:")
     click.echo(f"  - Fetching signed artifact blob: {pullspec}")
-
-    import tarfile
 
     blob_tar = Path(tmp_dir_sign_url) / "blob.tar.gz"
     blob_fetch(pullspec, blob_tar, auth_file=registry_auth_file)

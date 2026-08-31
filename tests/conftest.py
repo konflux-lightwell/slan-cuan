@@ -11,3 +11,11 @@ sys.modules.setdefault("novabucks", _novabucks)
 sys.modules.setdefault("novabucks.utils", _novabucks.utils)
 sys.modules.setdefault("novabucks.utils.logs", _novabucks.utils.logs)
 sys.modules.setdefault("novabucks.workflows", _novabucks.workflows)
+
+_krbticket = MagicMock()
+sys.modules.setdefault("krbticket", _krbticket)
+
+_requests_gssapi = MagicMock()
+sys.modules.setdefault("requests_gssapi", _requests_gssapi)
+
+sys.modules.setdefault("fath_cuan.osidb", MagicMock())
