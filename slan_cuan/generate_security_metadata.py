@@ -94,8 +94,7 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
 @click.option(
     "--osidb-api-url",
     type=str,
-    default="https://osidb.lightwell.redhat.com/osidb/api/v1",
-    show_default=True,
+    required=True,
     help="The URL of the OSIDB API to use for authentication on OSIDB.",
 )
 @click.option(
@@ -108,8 +107,7 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
 @click.option(
     "--osidb-kerberos-principal",
     type=str,
-    default="lightwell-konflux-osidb@IPA.REDHAT.COM",
-    show_default=True,
+    required=True,
     help="The Kerberos principal to use for authentication on OSIDB.",
 )
 @click.option(
