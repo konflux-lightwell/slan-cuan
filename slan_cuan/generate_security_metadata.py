@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 from fath_cuan.workflow import process_osv
@@ -20,8 +21,8 @@ _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
 
 
 def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
-    from urllib.parse import urlparse
-
+    # Lazy imports: these come from the optional "kerberos" extra and must not
+    # break importing this module (and hence the CLI) when it is not installed.
     import requests
     from krbticket import KrbTicket
     from requests_gssapi import OPTIONAL, HTTPSPNEGOAuth
@@ -117,6 +118,8 @@ def generate_security_metadata(
 
     osidb_client = None
     if osidb_keytab and Path(osidb_keytab).is_file():
+        # Lazy import: fath_cuan.osidb only exists in newer fath-cuan and is
+        # only needed when a keytab is supplied.
         from fath_cuan.osidb import OsidbClient
 
         click.echo(
@@ -128,9 +131,7 @@ def generate_security_metadata(
         )
         # OsidbClient appends /osidb/api/v1/... paths itself, so pass only
         # the base URL (scheme + host) — not the full API path.
-        from urllib.parse import urlparse as _urlparse
-
-        _parsed = _urlparse(osidb_api_url)
+        _parsed = urlparse(osidb_api_url)
         osidb_base_url = f"{_parsed.scheme}://{_parsed.netloc}"
         osidb_client = OsidbClient(base_url=osidb_base_url, token=auth_token)
         if not osidb_client.available:
