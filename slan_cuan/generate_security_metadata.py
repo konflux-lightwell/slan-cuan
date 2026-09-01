@@ -94,7 +94,8 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
 @click.option(
     "--osidb-api-url",
     type=str,
-    required=True,
+    default="",
+    show_default=True,
     help="The URL of the OSIDB API to use for authentication on OSIDB.",
 )
 @click.option(
@@ -107,7 +108,8 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
 @click.option(
     "--osidb-kerberos-principal",
     type=str,
-    required=True,
+    default="",
+    show_default=True,
     help="The Kerberos principal to use for authentication on OSIDB.",
 )
 @click.option(

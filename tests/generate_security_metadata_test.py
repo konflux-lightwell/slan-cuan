@@ -292,46 +292,62 @@ def test_generate_security_metadata_missing_required_options() -> None:
     assert result.exit_code != 0
 
 
-def test_generate_security_metadata_requires_osidb_api_url() -> None:
-    """Omitting --osidb-api-url produces an error (no default is applied)."""
-    runner = CliRunner()
+def test_generate_security_metadata_allows_omitted_osidb_options(
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Omitting the osidb-* options is allowed (they default to empty)."""
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
 
+    runner = CliRunner()
     result = runner.invoke(
         generate_security_metadata,
         [
             "--index-basedir",
-            "/tmp/idx",
+            str(tmp_path / "nonexistent"),
             "--output-dir",
-            "/tmp/out",
+            str(workdir / "security_metadata"),
             "--workdir",
-            "/tmp/work",
+            str(workdir),
         ],
+        obj=ctx,
     )
 
-    assert result.exit_code != 0
-    assert "osidb-api-url" in result.output
+    assert result.exit_code == 0, result.output
+    assert "osidb-api-url" not in result.output
+    assert "osidb-kerberos-principal" not in result.output
 
 
-def test_generate_security_metadata_requires_osidb_kerberos_principal() -> None:
-    """Omitting --osidb-kerberos-principal errors (no default is applied)."""
+def test_generate_security_metadata_allows_empty_osidb_options(
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Passing empty strings for the osidb-* options is allowed."""
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+
     runner = CliRunner()
-
     result = runner.invoke(
         generate_security_metadata,
         [
             "--index-basedir",
-            "/tmp/idx",
+            str(tmp_path / "nonexistent"),
             "--output-dir",
-            "/tmp/out",
+            str(workdir / "security_metadata"),
             "--workdir",
-            "/tmp/work",
+            str(workdir),
             "--osidb-api-url",
-            "https://osidb.example.com/api/v1",
+            "",
+            "--osidb-kerberos-principal",
+            "",
+            "--osidb-keytab",
+            "",
         ],
+        obj=ctx,
     )
 
-    assert result.exit_code != 0
-    assert "osidb-kerberos-principal" in result.output
+    assert result.exit_code == 0, result.output
 
 
 def test_generate_security_metadata_file_not_found(
