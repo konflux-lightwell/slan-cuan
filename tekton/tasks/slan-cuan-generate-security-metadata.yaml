@@ -126,14 +126,11 @@ spec:
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_WORKDIR
           value: $(params.WORKDIR)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KEYTAB
-          # value: $(params.OSIDB_KERBEROS_KEYTAB_PATH)
-          value: ""
+          value: $(params.OSIDB_KERBEROS_KEYTAB_PATH)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KERBEROS_PRINCIPAL
-          # value: $(params.OSIDB_KERBEROS_PRINCIPAL)
-          value: ""
+          value: $(params.OSIDB_KERBEROS_PRINCIPAL)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_API_URL
-          # value: $(params.OSIDB_API_URL)
-          value: ""
+          value: $(params.OSIDB_API_URL)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
           value: /tekton/results
     - name: create-trusted-artifact
