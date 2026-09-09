@@ -1595,6 +1595,67 @@ class TestPulpFileClient:
         assert result.relative_path == "BUILD123/gav-index.osv.json"
         assert result.sha256 == "deadbeef" * 8
 
+    def test_upload_content_async_task_with_repo_version_resource(
+        self, tmp_path: Path
+    ) -> None:
+        """Async task creating repo version and content unit resolves content."""
+        test_file = tmp_path / "gav-index.osv.json"
+        test_file.write_text("[]")
+
+        task_href = "/api/pulp/testdomain/api/v3/tasks/task-uuid/"
+        repo_ver_href = (
+            "/api/pulp/testdomain/api/v3/repositories/file/file/uuid/versions/1/"
+        )
+        content_href = "/api/v3/content/file/files/new123/"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "/api/v3/content/file/files/" in url and request.method == "POST":
+                return httpx.Response(202, json={"task": task_href})
+            if task_href in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "state": "completed",
+                        "created_resources": [repo_ver_href, content_href],
+                    },
+                )
+            if content_href in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "pulp_href": content_href,
+                        "relative_path": "BUILD123/gav-index.osv.json",
+                        "sha256": "deadbeef" * 8,
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport,
+            base_url="https://pulp.example.com",
+        )
+
+        result = client.upload_content(
+            test_file,
+            "BUILD123/gav-index.osv.json",
+            sha256="deadbeef" * 8,
+            repository_href="/api/pulp/testdomain/api/v3/repositories/file/file/uuid/",
+        )
+
+        assert result.pulp_href == content_href
+        assert result.relative_path == "BUILD123/gav-index.osv.json"
+        assert result.sha256 == "deadbeef" * 8
+
     def test_upload_content_async_task_no_resources(self, tmp_path: Path) -> None:
         """Async task that creates no resources raises PulpError."""
         test_file = tmp_path / "gav-index.osv.json"
@@ -2129,3 +2190,75 @@ class TestPulpFileClient:
                 "/api/v3/distributions/file/file/dist-uuid/",
                 "/api/v3/publications/file/file/pub-uuid/",
             )
+
+    def test_request_logging_when_verbose(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When verbose is enabled, Pulp requests and responses are logged."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"pulp_href": "/api/v3/repositories/file/file/uuid/"}
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+            verbose=True,
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        repo_href = client.resolve_repository("test-dist")
+        assert repo_href == "/api/v3/repositories/file/file/uuid/"
+
+        captured = capsys.readouterr()
+        assert "Pulp request: GET" in captured.out
+        assert "Pulp response: 200" in captured.out
+
+    def test_request_logging_when_not_verbose(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When verbose is disabled, requests and responses are not logged."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"pulp_href": "/api/v3/repositories/file/file/uuid/"}
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+            verbose=False,
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        repo_href = client.resolve_repository("test-dist")
+        assert repo_href == "/api/v3/repositories/file/file/uuid/"
+
+        captured = capsys.readouterr()
+        assert "Pulp request:" not in captured.out
+        assert "Pulp response:" not in captured.out

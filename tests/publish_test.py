@@ -2263,7 +2263,7 @@ def test_publish_uploads_security_metadata_to_file_repo(
     call_kwargs = mock_file.upload_content.call_args
     assert "gav-index.osv.json" in str(call_kwargs)
     assert call_kwargs.kwargs.get("repository_href") == _FILE_REPO_HREF
-    mock_file.modify_repository.assert_called_once()
+    mock_file.modify_repository.assert_not_called()
     mock_file.create_publication.assert_called_once_with(_FILE_REPO_HREF)
     mock_file.resolve_distribution.assert_called_once_with("test-file-repo")
     mock_file.update_distribution.assert_called_once_with(

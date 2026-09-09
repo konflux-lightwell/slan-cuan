@@ -316,6 +316,7 @@ def publish(
             password=pulp_password,
             client_cert=pulp_client_cert,
             client_key=pulp_client_key,
+            verbose=ctx.verbose,
         )
 
         if ctx.verbose:
@@ -418,11 +419,7 @@ def publish(
                     file_content_unit_hrefs.append(content_unit.pulp_href)
                     file_uploaded += 1
 
-                if file_content_unit_hrefs:
-                    file_client.modify_repository(
-                        file_repo_href, file_content_unit_hrefs
-                    )
-
+                if file_uploaded > 0:
                     if ctx.verbose:
                         click.echo("Creating publication for file repository")
                     pub_href = file_client.create_publication(file_repo_href)
