@@ -393,6 +393,13 @@ def publish(
             file_content_unit_hrefs: list[str] = []
 
             with PulpFileClient(config, pulp_file_repository) as file_client:
+                click.echo(f"Resolving file repository: {pulp_file_repository}")
+                file_repo_href = file_client.resolve_repository(
+                    pulp_file_repository
+                )
+                if ctx.verbose:
+                    click.echo(f"  -> file repository: {file_repo_href}")
+
                 for file_path in sorted(build.security_metadata_dir.rglob("*")):
                     if not file_path.is_file():
                         continue
@@ -406,14 +413,12 @@ def publish(
                         file_path=file_path,
                         relative_path=relative_path,
                         sha256=sha256,
+                        repository_href=file_repo_href,
                     )
                     file_content_unit_hrefs.append(content_unit.pulp_href)
                     file_uploaded += 1
 
                 if file_content_unit_hrefs:
-                    file_repo_href = file_client.resolve_repository(
-                        pulp_file_repository
-                    )
                     file_client.modify_repository(
                         file_repo_href, file_content_unit_hrefs
                     )
