@@ -9,8 +9,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 
+import click
 import httpx
 
 from slan_cuan.http import (
@@ -64,6 +65,7 @@ class PulpConfig:
     password: str | None = None
     client_cert: Path | None = None
     client_key: Path | None = None
+    verbose: bool = False
 
 
 def _validate_auth(config: PulpConfig) -> None:
@@ -191,6 +193,52 @@ class _PulpClientBase:
         """Exit context manager and close client."""
         self.close()
 
+    def _request(
+        self,
+        method: str,
+        url: str,
+        operation: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Send an HTTP request with optional verbose logging."""
+        if self._config.verbose:
+            details: list[str] = []
+            if "params" in kwargs and kwargs["params"]:
+                details.append(f"params={kwargs['params']}")
+            if "data" in kwargs and kwargs["data"]:
+                safe_data = {
+                    k: (
+                        "***"
+                        if any(
+                            s in k.lower()
+                            for s in ("password", "secret", "token", "key")
+                        )
+                        else v
+                    )
+                    for k, v in kwargs["data"].items()
+                }
+                details.append(f"data={safe_data}")
+            if "json" in kwargs and kwargs["json"]:
+                details.append(f"json={kwargs['json']}")
+            if "files" in kwargs and kwargs["files"]:
+                details.append(f"files={list(kwargs['files'].keys())}")
+            payload_str = f" [{', '.join(details)}]" if details else ""
+            click.echo(f"  Pulp request: {method} {url}{payload_str}")
+
+        response = request(
+            self._client,
+            method,
+            url,
+            operation,
+            PulpError,
+            **kwargs,
+        )
+
+        if self._config.verbose:
+            click.echo(f"  Pulp response: {response.status_code}")
+
+        return response
+
     def poll_task(
         self,
         task_href: str,
@@ -213,18 +261,22 @@ class _PulpClientBase:
         """
         start = time.time()
         while True:
-            response = request(
-                self._client,
+            response = self._request(
                 "GET",
                 task_href,
                 "Task polling",
-                PulpError,
             )
 
             try:
                 task_data = parse_json_dict(response, "Task", PulpError)
                 state = task_data.get("state", "")
                 if state == "completed":
+                    if self._config.verbose:
+                        created = task_data.get("created_resources", [])
+                        click.echo(
+                            f"  Pulp task completed: {task_href} "
+                            f"(created_resources={created})"
+                        )
                     return task_data
                 if state in ("failed", "canceled"):
                     error_details = task_data.get("error", {})
@@ -279,18 +331,18 @@ class _PulpClientBase:
         url = f"{repository_href}modify/"
         payload = {"add_content_units": content_unit_hrefs}
 
-        response = request(
-            self._client,
+        response = self._request(
             "POST",
             url,
             "Repository modify",
-            PulpError,
             json=payload,
         )
 
         try:
             response_data = parse_json_dict(response, "Modify", PulpError)
             task_href = str(response_data["task"])
+            if self._config.verbose:
+                click.echo(f"  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse modify response: {e}",
@@ -335,12 +387,10 @@ class _PulpClientBase:
 
         url = self._repo_api_path_template.format(domain=self._config.domain)
 
-        response = request(
-            self._client,
+        response = self._request(
             "GET",
             url,
             "Repository lookup",
-            PulpError,
             params={"name": name},
         )
 
@@ -443,12 +493,10 @@ class PulpMavenClient(_PulpClientBase):
                     "application/octet-stream",
                 ),
             }
-            response = request(
-                self._client,
+            response = self._request(
                 "POST",
                 url,
                 "Content upload",
-                PulpError,
                 data=data,
                 files=files,
             )
@@ -537,12 +585,10 @@ class PulpMavenClient(_PulpClientBase):
                     "application/octet-stream",
                 ),
             }
-            response = request(
-                self._client,
+            response = self._request(
                 "POST",
                 url,
                 "Metadata upload",
-                PulpError,
                 data=data,
                 files=files,
             )
@@ -622,12 +668,10 @@ class PulpFileClient(_PulpClientBase):
                     "application/octet-stream",
                 ),
             }
-            response = request(
-                self._client,
+            response = self._request(
                 "POST",
                 url,
                 "File upload",
-                PulpError,
                 data=data,
                 files=files,
             )
@@ -637,6 +681,8 @@ class PulpFileClient(_PulpClientBase):
 
             if "task" in response_data:
                 task_href = str(response_data["task"])
+                if self._config.verbose:
+                    click.echo(f"  Pulp task queued: {task_href}")
                 task_data = self.poll_task(task_href)
                 created = task_data.get("created_resources", [])
                 if not isinstance(created, list) or not created:
@@ -645,13 +691,14 @@ class PulpFileClient(_PulpClientBase):
                         status_code=response.status_code,
                         response_body=response.text,
                     )
-                content_href = str(created[0])
-                content_response = request(
-                    self._client,
+                content_href = next(
+                    (str(r) for r in created if "/content/file/files/" in str(r)),
+                    str(created[-1]),
+                )
+                content_response = self._request(
                     "GET",
                     content_href,
                     "File content lookup",
-                    PulpError,
                 )
                 response_data = parse_json_dict(
                     content_response, "File content", PulpError
@@ -696,18 +743,18 @@ class PulpFileClient(_PulpClientBase):
         )
         payload = {"repository": repository_href}
 
-        response = request(
-            self._client,
+        response = self._request(
             "POST",
             url,
             "Publication creation",
-            PulpError,
             json=payload,
         )
 
         try:
             response_data = parse_json_dict(response, "Publication", PulpError)
             task_href = str(response_data["task"])
+            if self._config.verbose:
+                click.echo(f"  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse publication response: {e}",
@@ -751,12 +798,10 @@ class PulpFileClient(_PulpClientBase):
             domain=self._config.domain
         )
 
-        response = request(
-            self._client,
+        response = self._request(
             "GET",
             url,
             "Distribution lookup",
-            PulpError,
             params={"name": name},
         )
 
@@ -794,12 +839,10 @@ class PulpFileClient(_PulpClientBase):
         """
         payload = {"publication": publication_href, "repository": ""}
 
-        response = request(
-            self._client,
+        response = self._request(
             "PATCH",
             distribution_href,
             "Distribution update",
-            PulpError,
             json=payload,
         )
 
@@ -808,6 +851,8 @@ class PulpFileClient(_PulpClientBase):
                 response, "Distribution update", PulpError
             )
             task_href = str(response_data["task"])
+            if self._config.verbose:
+                click.echo(f"  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse distribution update response: {e}",
