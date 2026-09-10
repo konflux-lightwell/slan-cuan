@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +31,109 @@ from slan_cuan.pulp import (
 _DIAG_MAX_ENTRIES = 50
 _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
+GAV_INDEX_FILENAME = "gav-index.json"
+
+
+def _gav_index_vulnerabilities(
+    attachment_files: list[str], artifact_dir: Path
+) -> tuple[str, ...]:
+    """Load and validate the GAV index from its declared attachment.
+
+    The GAV index is release security input.  Consequently, uncertainty about
+    its presence or contents is an error rather than evidence of a clean
+    release.  Only an attachment is accepted: an identically named Maven file
+    must not be mistaken for the build index.
+    """
+    if not isinstance(attachment_files, list):
+        raise ValueError("Unable to verify the required GAV index attachment.")
+
+    index_paths: list[Path] = []
+    artifact_root = artifact_dir.resolve()
+    for relative_path in attachment_files:
+        if not isinstance(relative_path, str):
+            raise ValueError(
+                "Unable to verify the required GAV index attachment."
+            )
+        candidate = artifact_dir / relative_path
+        try:
+            candidate.resolve().relative_to(artifact_root)
+        except ValueError:
+            raise ValueError(
+                "Unable to verify the required GAV index attachment."
+            ) from None
+        if candidate.name == GAV_INDEX_FILENAME:
+            index_paths.append(candidate)
+
+    if len(index_paths) != 1 or not index_paths[0].is_file():
+        raise ValueError("Unable to verify the required GAV index attachment.")
+
+    try:
+        data = json.loads(index_paths[0].read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError("Unable to parse the required GAV index.") from e
+
+    if not isinstance(data, dict) or not isinstance(data.get("vulns"), list):
+        raise ValueError("The required GAV index has invalid vulnerability data.")
+    vulns = data["vulns"]
+    if any(not isinstance(vuln, str) or not vuln.strip() for vuln in vulns):
+        raise ValueError("The required GAV index has invalid vulnerability data.")
+    return tuple(vulns)
+
+
+def _load_security_metadata(
+    security_metadata_files: tuple[Path, ...], vulns: tuple[str, ...]
+) -> None:
+    """Validate generated OSV/VEX metadata and its GAV-index relationship."""
+    osv_vulnerability_ids: set[str] = set()
+    for path in security_metadata_files:
+        if path.suffix != ".json":
+            raise ValueError(
+                "Generated security metadata is not OSV or VEX JSON."
+            )
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise ValueError("Generated security metadata is malformed.") from e
+        if not isinstance(record, dict):
+            raise ValueError(
+                "Generated security metadata is not OSV or VEX JSON."
+            )
+
+        osv_id = record.get("id")
+        affected = record.get("affected")
+        aliases = record.get("aliases", [])
+        is_osv = (
+            isinstance(osv_id, str)
+            and bool(osv_id.strip())
+            and isinstance(affected, list)
+            and bool(affected)
+            and isinstance(aliases, list)
+            and all(isinstance(alias, str) and alias.strip() for alias in aliases)
+        )
+        is_vex = isinstance(record.get("statements"), list) and (
+            "@context" in record or "document" in record
+        )
+        if not is_osv and not is_vex:
+            raise ValueError(
+                "Generated security metadata is not OSV or VEX JSON."
+            )
+        if is_osv:
+            osv_vulnerability_ids.update((osv_id, *aliases))
+
+    if vulns and not osv_vulnerability_ids:
+        raise ValueError("Vulnerable GAV index has no generated OSV metadata.")
+    if not vulns and security_metadata_files:
+        raise ValueError(
+            "Generated security metadata does not match the clean GAV index."
+        )
+
+    if any(
+        not any(vulnerability in osv_id for osv_id in osv_vulnerability_ids)
+        for vulnerability in vulns
+    ):
+        raise ValueError(
+            "Generated OSV metadata does not cover all GAV index vulnerabilities."
+        )
 
 
 def _list_entries(path: Path, recursive: bool = False) -> None:
@@ -260,6 +364,23 @@ def publish(
             ]
             click.echo(f"Coordinates: {', '.join(coords)}")
 
+        vulns = _gav_index_vulnerabilities(
+            extract_result.attachment_files, artifact_dir
+        )
+        security_metadata_files = (
+            tuple(
+                f for f in build.security_metadata_dir.rglob("*") if f.is_file()
+            )
+            if build.security_metadata_dir
+            else ()
+        )
+        _load_security_metadata(security_metadata_files, vulns)
+        requires_file_repository = bool(vulns or security_metadata_files)
+        if requires_file_repository and not pulp_file_repository:
+            raise click.UsageError(
+                "--pulp-file-repository is required for OSV publication."
+            )
+
         if ctx.dry_run:
             click.echo(f"Distribution: {pulp_repository}")
             click.echo(f"Pulp URL: {pulp_url}")
@@ -269,17 +390,12 @@ def publish(
             click.echo(f"Upload workers: {upload_workers}")
             for artifact in build.artifacts:
                 click.echo(f"  {artifact.relative_path}")
-            if build.security_metadata_dir:
-                sec_files = sorted(
-                    f
-                    for f in build.security_metadata_dir.rglob("*")
-                    if f.is_file()
+            if security_metadata_files:
+                click.echo(
+                    f"Security metadata: {len(security_metadata_files)} file(s)"
                 )
-                click.echo(f"Security metadata: {len(sec_files)} file(s)")
-                for f in sec_files:
+                for f in security_metadata_files:
                     click.echo(f"  {f.name}")
-                if pulp_file_repository:
-                    click.echo(f"File repository: {pulp_file_repository}")
             click.echo(
                 f"\ndry-run: would upload "
                 f"{len(build.artifacts)} artifact(s) "
@@ -344,7 +460,27 @@ def publish(
         }
         click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
 
-        with PulpMavenClient(config, pulp_repository) as client:
+        file_uploaded = 0
+        with ExitStack() as clients:
+            file_client: PulpFileClient | None = None
+            file_repo_href: str | None = None
+            if requires_file_repository:
+                try:
+                    file_client = clients.enter_context(
+                        PulpFileClient(config, pulp_file_repository)
+                    )
+                    file_repo_href = file_client.resolve_repository(
+                        pulp_file_repository
+                    )
+                except PulpError as e:
+                    raise click.ClickException(
+                        "Unable to verify the required OSV publication "
+                        "repository."
+                    ) from e
+
+            client = clients.enter_context(
+                PulpMavenClient(config, pulp_repository)
+            )
             uploadable: list[MavenArtifact] = []
             for artifact in build.artifacts:
                 if not artifact.file_path.exists():
@@ -385,63 +521,33 @@ def publish(
                 if ctx.verbose:
                     click.echo(f"  -> repository version: {repository_version}")
 
-        file_uploaded = 0
-        if build.security_metadata_dir and pulp_file_repository:
-            click.echo(
-                f"Uploading security metadata to file repository: "
-                f"{pulp_file_repository}"
-            )
-            file_content_unit_hrefs: list[str] = []
-
-            with PulpFileClient(config, pulp_file_repository) as file_client:
-                click.echo(f"Resolving file repository: {pulp_file_repository}")
-                file_repo_href = file_client.resolve_repository(
-                    pulp_file_repository
-                )
-                if ctx.verbose:
-                    click.echo(f"  -> file repository: {file_repo_href}")
-
-                for file_path in sorted(build.security_metadata_dir.rglob("*")):
-                    if not file_path.is_file():
-                        continue
-                    sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-                    relative_path = file_path.name
-                    if ctx.verbose:
-                        click.echo(
-                            f"Uploading security metadata: {relative_path}"
+            if file_client and file_repo_href:
+                try:
+                    for file_path in security_metadata_files:
+                        sha256 = hashlib.sha256(
+                            file_path.read_bytes()
+                        ).hexdigest()
+                        file_client.upload_content(
+                            file_path=file_path,
+                            relative_path=file_path.name,
+                            sha256=sha256,
+                            repository_href=file_repo_href,
                         )
-                    content_unit = file_client.upload_content(
-                        file_path=file_path,
-                        relative_path=relative_path,
-                        sha256=sha256,
-                        repository_href=file_repo_href,
-                    )
-                    file_content_unit_hrefs.append(content_unit.pulp_href)
-                    file_uploaded += 1
+                        file_uploaded += 1
 
-                if file_uploaded > 0:
-                    if ctx.verbose:
-                        click.echo("Creating publication for file repository")
-                    pub_href = file_client.create_publication(file_repo_href)
-                    if ctx.verbose:
-                        click.echo(f"  -> publication: {pub_href}")
+                    if file_uploaded > 0:
+                        pub_href = file_client.create_publication(file_repo_href)
+                        dist_href = file_client.resolve_distribution(
+                            pulp_file_repository
+                        )
+                        file_client.update_distribution(dist_href, pub_href)
+                except PulpError as e:
+                    raise click.ClickException(
+                        "Required OSV publication did not complete."
+                    ) from e
 
-                    dist_href = file_client.resolve_distribution(
-                        pulp_file_repository
-                    )
-                    if ctx.verbose:
-                        click.echo(f"  -> distribution: {dist_href}")
-
-                    file_client.update_distribution(dist_href, pub_href)
-                    if ctx.verbose:
-                        click.echo("  -> distribution updated")
-
+        if file_uploaded:
             click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
-        elif build.security_metadata_dir and not pulp_file_repository:
-            raise click.UsageError(
-                "--pulp-file-repository is required when security "
-                "metadata is present."
-            )
 
         publish_result = PublishResult(
             pulp_url=pulp_url,
@@ -461,7 +567,6 @@ def publish(
         if ctx.verbose:
             click.echo(f"Publish result saved: {publish_result_path}")
 
-        # Write Tekton results
         write_tekton_result(
             ctx.tekton_results_dir, "ARTIFACTS_UPLOADED", str(uploaded)
         )
