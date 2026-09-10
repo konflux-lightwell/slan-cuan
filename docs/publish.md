@@ -11,6 +11,12 @@ Upload Maven artifacts to a Pulp repository for distribution via `packages.redha
 5. Uploads each artifact to Pulp via the Maven deploy endpoint
 6. Saves `publish-result.json` with upload summary
 
+If extracted GAV index data lists vulnerability IDs (`vulns`), or generated
+security metadata files are present, `--pulp-file-repository` is required and
+is resolved before Maven content is uploaded or its repository is modified.
+A clean GAV index with no generated OSV files does not require a File
+repository.
+
 When `--pulp-domain` is set, the deploy URL includes the domain segment (`/pulp/maven/{domain}/{distribution}/{path}`). When not set, it uses the standard path (`/pulp/maven/{distribution}/{path}`).
 
 The artifact directory must be the output of the `extract` stage, containing a valid `extract-result.json`.

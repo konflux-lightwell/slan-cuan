@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from slan_cuan.cli import main
@@ -68,6 +69,7 @@ def create_test_artifact_dir(
     *,
     include_metadata: bool = False,
     include_security_metadata: bool = False,
+    gav_index_vulns: list[str] | None = None,
 ) -> Path:
     """Create a directory that mimics the extract stage output."""
     deliverable_dir = base_dir / "TEST-build-output"
@@ -90,12 +92,29 @@ def create_test_artifact_dir(
         )
         (metadata_dir / "maven-metadata.xml").write_text("<metadata/>")
 
+    vulns = gav_index_vulns if gav_index_vulns is not None else []
     security_metadata_dir = None
     if include_security_metadata:
         sec_dir = deliverable_dir / "security_metadata"
         sec_dir.mkdir(parents=True, exist_ok=True)
-        (sec_dir / "gav-index.osv.json").write_text("[]")
+        metadata_vulns = vulns or ["CVE-2026-1234"]
+        (sec_dir / "gav-index.osv.json").write_text(
+            json.dumps(
+                {
+                    "id": "OSV-1",
+                    "aliases": metadata_vulns,
+                    "affected": [{"package": {"name": "example"}}],
+                }
+            )
+        )
+        vulns = metadata_vulns
         security_metadata_dir = "TEST-build-output/security_metadata"
+
+    attachments_dir = base_dir / "attachments"
+    attachments_dir.mkdir()
+    gav_index = attachments_dir / "gav-index.json"
+    gav_index.write_text(json.dumps({"vulns": vulns}))
+    attachment_files = [str(gav_index.relative_to(base_dir))]
 
     # Create extract-result.json
     extract_result = {
@@ -112,6 +131,7 @@ def create_test_artifact_dir(
         "files": [],
         "extracted_at": "2026-06-22T12:00:00Z",
         "security_metadata_dir": security_metadata_dir,
+        "attachment_files": attachment_files,
     }
     (base_dir / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
@@ -432,6 +452,10 @@ def test_publish_routes_metadata_checksums(
         "files": [],
         "extracted_at": "2026-06-29T12:00:00Z",
     }
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    (attachments_dir / "gav-index.json").write_text('{"vulns": []}')
+    extract_result["attachment_files"] = ["attachments/gav-index.json"]
     (tmp_path / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
@@ -1220,6 +1244,10 @@ def test_publish_verbose_diagnoses_missing_deliverable(tmp_path: Path) -> None:
         "files": [],
         "extracted_at": "2026-06-22T12:00:00Z",
     }
+    attachments_dir = artifact_dir / "attachments"
+    attachments_dir.mkdir()
+    (attachments_dir / "gav-index.json").write_text('{"vulns": []}')
+    extract_result["attachment_files"] = ["attachments/gav-index.json"]
     (artifact_dir / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
@@ -1266,6 +1294,10 @@ def test_publish_verbose_diagnoses_file_deliverable(tmp_path: Path) -> None:
         "files": [],
         "extracted_at": "2026-06-22T12:00:00Z",
     }
+    attachments_dir = artifact_dir / "attachments"
+    attachments_dir.mkdir()
+    (attachments_dir / "gav-index.json").write_text('{"vulns": []}')
+    extract_result["attachment_files"] = ["attachments/gav-index.json"]
     (artifact_dir / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
@@ -1313,6 +1345,10 @@ def test_publish_verbose_diagnoses_missing_repo_dir(tmp_path: Path) -> None:
         "files": [],
         "extracted_at": "2026-06-22T12:00:00Z",
     }
+    attachments_dir = artifact_dir / "attachments"
+    attachments_dir.mkdir()
+    (attachments_dir / "gav-index.json").write_text('{"vulns": []}')
+    extract_result["attachment_files"] = ["attachments/gav-index.json"]
     (artifact_dir / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
@@ -1409,6 +1445,10 @@ def test_publish_labels_with_none_digest(
         "files": [],
         "extracted_at": "2026-06-22T12:00:00Z",
     }
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    (attachments_dir / "gav-index.json").write_text('{"vulns": []}')
+    extract_result["attachment_files"] = ["attachments/gav-index.json"]
     (tmp_path / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
@@ -2033,6 +2073,10 @@ def test_publish_default_allows_missing_sbom(tmp_path: Path) -> None:
         "files": [],
         "extracted_at": "2026-07-06T12:00:00Z",
     }
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    (attachments_dir / "gav-index.json").write_text('{"vulns": []}')
+    extract_result["attachment_files"] = ["attachments/gav-index.json"]
     (tmp_path / "extract-result.json").write_text(
         json.dumps(extract_result, indent=2)
     )
@@ -2383,3 +2427,273 @@ def test_publish_whitespace_file_repo_treated_as_absent(
 
     assert result.exit_code != 0
     assert "pulp-file-repository" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_requires_file_repo_when_gav_index_lists_vulnerabilities(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Vulnerability IDs require a File repository before OSV generation."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        gav_index_vulns=["CVE-2026-1234"],
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "pulp-file-repository" in result.output
+    mock_maven_cls.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_preflights_file_repo_before_maven_mutation(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """An unresolvable required File repo prevents Maven uploads."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        gav_index_vulns=["CVE-2026-1234"],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    mock_file.resolve_repository.side_effect = PulpError(
+        message="File repository 'test-file-repo' not found",
+        status_code=404,
+        response_body="",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "test-file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert (
+        "Unable to verify the required OSV publication repository"
+        in result.output
+    )
+    assert "test-file-repo" not in result.output
+    mock_file.resolve_repository.assert_called_once_with("test-file-repo")
+    mock_maven.upload_content.assert_not_called()
+    mock_maven.modify_repository.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_skips_file_repo_for_clean_gav_index_without_osv_files(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """A clean index with no generated OSV files does not need a File repo."""
+    artifact_dir = create_test_artifact_dir(tmp_path, gav_index_vulns=[])
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("index_contents", "expected_error"),
+    [
+        ("not json", "Unable to parse the required GAV index"),
+        (json.dumps({"vulns": "CVE-2026-1234"}), "invalid vulnerability data"),
+        (json.dumps({"vulns": [None]}), "invalid vulnerability data"),
+    ],
+)
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_fails_closed_for_invalid_gav_index(
+    mock_maven_cls: Mock,
+    tmp_path: Path,
+    index_contents: str,
+    expected_error: str,
+) -> None:
+    """Invalid security input cannot be treated as a clean release."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    (artifact_dir / "attachments" / "gav-index.json").write_text(index_contents)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert expected_error in result.output
+    mock_maven_cls.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_fails_closed_when_gav_index_attachment_is_missing(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """A missing declared GAV index prevents Maven-only publication."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    (artifact_dir / "attachments" / "gav-index.json").unlink()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unable to verify the required GAV index attachment" in result.output
+    mock_maven_cls.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_rejects_arbitrary_security_metadata(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Security metadata must be valid OSV/VEX, not merely an arbitrary file."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    metadata_file = (
+        artifact_dir / "TEST-build-output/security_metadata/gav-index.osv.json"
+    )
+    metadata_file.write_text('{"not": "security metadata"}')
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "not OSV or VEX JSON" in result.output
+    mock_maven_cls.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_rejects_vulnerable_index_without_osv_metadata(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Vulnerability claims must be backed by generated OSV before upload."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, gav_index_vulns=["CVE-2026-1234"]
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "no generated OSV metadata" in result.output
+    mock_maven_cls.assert_not_called()
