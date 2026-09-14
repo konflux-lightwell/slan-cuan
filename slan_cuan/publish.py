@@ -21,6 +21,7 @@ from slan_cuan.models import (
     PublishResult,
 )
 from slan_cuan.pulp import (
+    TASK_POLL_TIMEOUT_SECONDS,
     ContentUnit,
     PulpConfig,
     PulpError,
@@ -302,6 +303,14 @@ def _upload_one(
     default=None,
     help="Pulp File repository name for security metadata upload.",
 )
+@click.option(
+    "--pulp-task-timeout",
+    envvar="SLAN_CUAN_PUBLISH_PULP_TASK_TIMEOUT",
+    type=click.FloatRange(min=1.0),
+    default=TASK_POLL_TIMEOUT_SECONDS,
+    show_default=True,
+    help="Maximum time in seconds to wait for asynchronous Pulp tasks.",
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -318,6 +327,7 @@ def publish(
     upload_workers: int,
     require_supply_chain_metadata: bool,
     pulp_file_repository: str | None,
+    pulp_task_timeout: float,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     pulp_file_repository = (
@@ -432,6 +442,7 @@ def publish(
             password=pulp_password,
             client_cert=pulp_client_cert,
             client_key=pulp_client_key,
+            task_timeout=pulp_task_timeout,
             verbose=ctx.verbose,
         )
 
@@ -449,6 +460,7 @@ def publish(
             if pulp_client_key:
                 click.echo(f"Client key: {pulp_client_key}")
             click.echo(f"Upload workers: {upload_workers}")
+            click.echo(f"Task timeout: {pulp_task_timeout}s")
 
         uploaded = 0
         skipped = 0

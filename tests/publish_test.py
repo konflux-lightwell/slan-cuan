@@ -1070,6 +1070,81 @@ def test_publish_with_domain(mock_client_cls: Mock, tmp_path: Path) -> None:
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_with_custom_task_timeout(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With --pulp-task-timeout, PulpConfig.task_timeout is set."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-task-timeout",
+            "3600",
+        ],
+    )
+
+    assert result.exit_code == 0
+    config = mock_client_cls.call_args[0][0]
+    assert config.task_timeout == 3600.0
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_with_task_timeout_envvar(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With task timeout envvar, PulpConfig.task_timeout is set."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+        env={"SLAN_CUAN_PUBLISH_PULP_TASK_TIMEOUT": "2400"},
+    )
+
+    assert result.exit_code == 0
+    config = mock_client_cls.call_args[0][0]
+    assert config.task_timeout == 2400.0
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
 def test_publish_verbose_with_domain(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import ssl
 import time
 from dataclasses import dataclass
@@ -41,8 +42,12 @@ FILE_DISTRIBUTION_API_PATH_TEMPLATE = (
 )
 
 # Task polling configuration
-TASK_POLL_INTERVAL_SECONDS = 2.0
-TASK_POLL_TIMEOUT_SECONDS = 600.0
+TASK_POLL_INITIAL_INTERVAL_SECONDS = 2.0
+TASK_POLL_MAX_INTERVAL_SECONDS = 15.0
+TASK_POLL_BACKOFF_FACTOR = 1.5
+TASK_POLL_JITTER_FACTOR = 0.2
+TASK_POLL_TIMEOUT_SECONDS = 1800.0
+TASK_CANCEL_TIMEOUT_SECONDS = 15.0
 
 # HTTP client and error handling constants
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -65,6 +70,7 @@ class PulpConfig:
     password: str | None = None
     client_cert: Path | None = None
     client_key: Path | None = None
+    task_timeout: float = TASK_POLL_TIMEOUT_SECONDS
     verbose: bool = False
 
 
@@ -97,6 +103,22 @@ def _validate_auth(config: PulpConfig) -> None:
                 status_code=0,
                 response_body="",
             )
+
+
+def _validate_config(config: PulpConfig) -> None:
+    """Validate connection and operational config fields.
+
+    Raises:
+        PulpError: If required credentials or parameters are invalid.
+
+    """
+    if config.task_timeout <= 0:
+        raise PulpError(
+            f"task_timeout must be positive, got {config.task_timeout}",
+            status_code=0,
+            response_body="",
+        )
+    _validate_auth(config)
 
 
 @dataclass(frozen=True)
@@ -144,7 +166,7 @@ class _PulpClientBase:
         """Initialize with connection config and target distribution."""
         self._config = config
         self._distribution = distribution
-        _validate_auth(config)
+        _validate_config(config)
 
         base_url = config.base_url
         if not base_url.startswith(("http://", "https://")):
@@ -239,37 +261,121 @@ class _PulpClientBase:
 
         return response
 
+    def cancel_task(self, task_href: str) -> str:
+        """Attempt to cancel a Pulp task.
+
+        Sends a PATCH request setting the task state to 'canceled' using a
+        short cancellation timeout (TASK_CANCEL_TIMEOUT_SECONDS).
+
+        Args:
+            task_href: The task href to cancel.
+
+        Returns:
+            A descriptive string of the cancellation outcome.
+
+        """
+        try:
+            response = self._request(
+                "PATCH",
+                task_href,
+                "Task cancel",
+                timeout=TASK_CANCEL_TIMEOUT_SECONDS,
+                json={"state": "canceled"},
+            )
+            if response.status_code in (200, 202):
+                return "cancellation requested in Pulp"
+            return f"cancellation returned HTTP {response.status_code}"
+        except PulpError as e:
+            if e.status_code == 409:
+                return (
+                    "cancellation returned 409 Conflict "
+                    "(task may have already finished or canceled)"
+                )
+            if self._config.verbose:
+                click.echo(f"  Failed to cancel task {task_href}: {e}")
+            msg = f"HTTP {e.status_code}" if e.status_code else str(e)
+            return f"cancellation attempt failed: {msg}"
+        except Exception as e:
+            if self._config.verbose:
+                click.echo(f"  Failed to cancel task {task_href}: {e}")
+            return f"cancellation attempt failed: {e}"
+
+    def _handle_timeout(
+        self,
+        task_href: str,
+        timeout: float,
+        state: str,
+        response_text: str,
+    ) -> None:
+        """Handle timeout by attempting cancellation and raising PulpError."""
+        canceled_note = ""
+        if state not in ("completed", "failed", "canceled"):
+            outcome = self.cancel_task(task_href)
+            canceled_note = f" ({outcome})"
+        msg = (
+            f"Task polling timed out after {timeout}s "
+            f"(state: {state}){canceled_note}"
+        )
+        raise PulpError(
+            msg,
+            status_code=0,
+            response_body=response_text,
+        )
+
     def poll_task(
         self,
         task_href: str,
-        timeout: float = TASK_POLL_TIMEOUT_SECONDS,
-        interval: float = TASK_POLL_INTERVAL_SECONDS,
+        timeout: float | None = None,
     ) -> dict[str, object]:
         """Poll a Pulp task until completion or timeout.
 
+        Applies exponential backoff with random jitter between poll attempts.
+        If timeout is exceeded, attempts to cancel the task in Pulp before
+        raising PulpError.
+
         Args:
             task_href: The task href returned from an async operation.
-            timeout: Maximum time to wait in seconds.
-            interval: Seconds to sleep between polls.
+            timeout: Maximum time to wait in seconds (defaults to
+                config.task_timeout).
 
         Returns:
             The completed task response as a dict.
 
         Raises:
             PulpError: If the task fails, is canceled, or times out.
+            ValueError: If timeout is not positive.
 
         """
-        start = time.time()
+        if timeout is None:
+            timeout = self._config.task_timeout
+        if timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
+
+        start = time.monotonic()
+        deadline = start + timeout
+        current_interval = TASK_POLL_INITIAL_INTERVAL_SECONDS
+        state = ""
+        last_response_text = ""
+
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._handle_timeout(
+                    task_href, timeout, state, last_response_text
+                )
+
+            req_timeout = min(DEFAULT_TIMEOUT_SECONDS, max(1.0, remaining))
             response = self._request(
                 "GET",
                 task_href,
                 "Task polling",
+                timeout=req_timeout,
             )
+            last_response_text = response.text
 
             try:
                 task_data = parse_json_dict(response, "Task", PulpError)
-                state = task_data.get("state", "")
+                state = str(task_data.get("state", ""))
                 if state == "completed":
                     if self._config.verbose:
                         created = task_data.get("created_resources", [])
@@ -280,10 +386,16 @@ class _PulpClientBase:
                     return task_data
                 if state in ("failed", "canceled"):
                     error_details = task_data.get("error", {})
-                    error_msg = str(error_details.get("description", state))
-                    traceback_str = str(
-                        error_details.get("traceback", "")
-                    ).strip()
+                    error_msg = str(
+                        error_details.get("description", state)
+                        if isinstance(error_details, dict)
+                        else state
+                    )
+                    traceback_str = (
+                        str(error_details.get("traceback", "")).strip()
+                        if isinstance(error_details, dict)
+                        else ""
+                    )
                     parts = [f"Task {state}: {error_msg}"]
                     if traceback_str:
                         parts.append(f"Traceback:\n{traceback_str}")
@@ -301,14 +413,24 @@ class _PulpClientBase:
                     response_body=response.text,
                 ) from e
 
-            if time.time() - start > timeout:
-                raise PulpError(
-                    f"Task polling timed out after {timeout}s (state: {state})",
-                    status_code=0,
-                    response_body=response.text,
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._handle_timeout(
+                    task_href, timeout, state, last_response_text
                 )
 
-            time.sleep(interval)
+            jitter = current_interval * TASK_POLL_JITTER_FACTOR
+            sleep_time = random.uniform(
+                max(0.1, current_interval - jitter),
+                current_interval + jitter,
+            )
+            sleep_time = min(sleep_time, remaining)
+            time.sleep(sleep_time)
+
+            current_interval = min(
+                TASK_POLL_MAX_INTERVAL_SECONDS,
+                current_interval * TASK_POLL_BACKOFF_FACTOR,
+            )
 
     def modify_repository(
         self,

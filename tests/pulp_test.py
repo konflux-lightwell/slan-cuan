@@ -1199,6 +1199,8 @@ class TestPollTask:
         """Use very short timeout, verify PulpError with 'timed out'."""
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "PATCH":
+                return httpx.Response(200, json={"state": "canceled"})
             return httpx.Response(200, json={"state": "running"})
 
         transport = httpx.MockTransport(handler)
@@ -1217,10 +1219,232 @@ class TestPollTask:
             client.poll_task(
                 "/api/v3/tasks/task-uuid/",
                 timeout=0.01,
-                interval=0.005,
             )
 
         assert "timed out" in exc_info.value.message
+        assert "(cancellation requested in Pulp)" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout_cancels_task_in_pulp(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Verify PATCH with state=canceled is sent on timeout."""
+        patch_called = False
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal patch_called
+            if request.method == "PATCH":
+                patch_called = True
+                assert request.url.path == "/api/v3/tasks/task-uuid/"
+                data = json.loads(request.read())
+                assert data == {"state": "canceled"}
+                return httpx.Response(200, json={"state": "canceled"})
+            return httpx.Response(200, json={"state": "waiting"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task(
+                "/api/v3/tasks/task-uuid/",
+                timeout=0.01,
+            )
+
+        assert patch_called is True
+        assert "timed out" in exc_info.value.message
+        assert "(cancellation requested in Pulp)" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_backoff_and_jitter(self, mock_sleep: Mock) -> None:
+        """Verify backoff increases sleep duration with jitter within range."""
+        polls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal polls
+            polls += 1
+            if polls < 4:
+                return httpx.Response(200, json={"state": "waiting"})
+            return httpx.Response(
+                200, json={"state": "completed", "created_resources": []}
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert mock_sleep.call_count == 3
+        sleep_durations = [call.args[0] for call in mock_sleep.call_args_list]
+        # Attempt 1: base 2.0, jitter 0.2 (0.4) -> [1.6, 2.4]
+        assert 1.59 <= sleep_durations[0] <= 2.41
+        # Attempt 2: base 3.0, jitter 0.2 (0.6) -> [2.4, 3.6]
+        assert 2.39 <= sleep_durations[1] <= 3.61
+        # Attempt 3: base 4.5, jitter 0.2 (0.9) -> [3.6, 5.4]
+        assert 3.59 <= sleep_durations[2] <= 5.41
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout_cancellation_conflict_409(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Pulp 409 Conflict during cancel is reported in timeout error."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "PATCH":
+                return httpx.Response(409, text="Task already finished")
+            return httpx.Response(200, json={"state": "running"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task(
+                "/api/v3/tasks/task-uuid/",
+                timeout=0.01,
+            )
+
+        assert "timed out" in exc_info.value.message
+        assert "409 Conflict" in exc_info.value.message
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout_cancellation_error_500(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Pulp 500 error during cancel is safely recorded without crashing."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "PATCH":
+                return httpx.Response(500, text="Internal Server Error")
+            return httpx.Response(200, json={"state": "running"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task(
+                "/api/v3/tasks/task-uuid/",
+                timeout=0.01,
+            )
+
+        assert "timed out" in exc_info.value.message
+        assert "cancellation attempt failed: HTTP 500" in exc_info.value.message
+
+    def test_cancel_task_short_timeout(self) -> None:
+        """cancel_task uses short dedicated timeout."""
+        captured_timeout = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_timeout
+            captured_timeout = request.extensions.get("timeout", {}).get("read")
+            return httpx.Response(200, json={"state": "canceled"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        outcome = client.cancel_task("/api/v3/tasks/task-uuid/")
+        assert outcome == "cancellation requested in Pulp"
+        assert captured_timeout == 15.0
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_canceling_state_is_nonterminal(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Task in 'canceling' state is polled until completed or canceled."""
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(200, json={"state": "canceling"})
+            return httpx.Response(200, json={"state": "canceled", "error": {}})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task("/api/v3/tasks/task-uuid/")
+
+        assert calls == 2
+        assert "Task canceled" in exc_info.value.message
+
+    def test_poll_task_parameter_validation(self) -> None:
+        """poll_task validates input timeout fail-fast."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+
+        with pytest.raises(ValueError, match="timeout must be positive"):
+            client.poll_task("/api/v3/tasks/x/", timeout=0)
+
+    def test_pulp_config_invalid_task_timeout(self) -> None:
+        """PulpConfig validates task_timeout > 0."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            task_timeout=0,
+        )
+        with pytest.raises(PulpError, match="task_timeout must be positive"):
+            PulpMavenClient(config, "test-dist")
 
 
 class TestModifyRepository:
