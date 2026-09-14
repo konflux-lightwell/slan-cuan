@@ -77,6 +77,10 @@ spec:
       description: Pulp File repository name for security metadata (OSV/VEX) upload.
       type: string
       default: ""
+    - name: PULP_TASK_TIMEOUT
+      description: Maximum time in seconds to wait for asynchronous Pulp tasks.
+      type: string
+      default: "1800"
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -185,6 +189,8 @@ spec:
           value: $(params.REQUIRE_SUPPLY_CHAIN_METADATA)
         - name: SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY
           value: $(params.PULP_FILE_REPOSITORY)
+        - name: SLAN_CUAN_PUBLISH_PULP_TASK_TIMEOUT
+          value: $(params.PULP_TASK_TIMEOUT)
         - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
           valueFrom:
             secretKeyRef:
