@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 import click
@@ -17,6 +19,22 @@ TASK_POLL_BACKOFF_FACTOR = 1.5
 TASK_POLL_JITTER_FACTOR = 0.2
 TASK_POLL_TIMEOUT_SECONDS = 1800.0
 DEFAULT_TIMEOUT_SECONDS = 300.0
+
+
+class BlockerLookupStatus(str, Enum):
+    """Outcome of attempting to identify a task blocking a waiting task."""
+
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class BlockerLookup:
+    """Blocker identity and confidence for timeout decisions."""
+
+    href: str | None
+    status: BlockerLookupStatus
 
 
 def _utc_timestamp() -> str:
@@ -62,13 +80,13 @@ class PulpTaskPoller:
 
         self.current_interval = TASK_POLL_INITIAL_INTERVAL_SECONDS
         self.current_state = ""
-        self.current_waiting_on: str | None = None
+        self.current_waiting_on: BlockerLookup | None = None
         self.last_response_text = ""
 
     def _transition_to(
         self,
         new_state: str,
-        new_waiting_on: str | None,
+        new_waiting_on: BlockerLookup | None,
         text: str,
     ) -> None:
         self.current_state = new_state
@@ -86,7 +104,7 @@ class PulpTaskPoller:
 
     def _blocker_changed(
         self,
-        new_waiting_on: str,
+        new_waiting_on: BlockerLookup,
         text: str,
     ) -> None:
         old = self.current_waiting_on
@@ -98,7 +116,8 @@ class PulpTaskPoller:
         if self._client._config.verbose:
             click.echo(
                 f"[{_utc_timestamp()}]  Pulp task {self.task_href} "
-                f"waiting blocker changed: {old} -> {new_waiting_on}; "
+                f"waiting blocker changed: {old.href if old else None} "
+                f"-> {new_waiting_on.href}; "
                 f"resetting wait deadline for {self.timeout}s"
             )
 
@@ -172,6 +191,9 @@ class PulpTaskPoller:
                     and fresh_data is not None
                     and self.current_waiting_on is not None
                     and fresh_waiting_on is not None
+                    and fresh_waiting_on.status != BlockerLookupStatus.UNKNOWN
+                    and self.current_waiting_on.status
+                    != BlockerLookupStatus.UNKNOWN
                     and fresh_waiting_on != self.current_waiting_on
                 ):
                     self._blocker_changed(fresh_waiting_on, fresh_text)
@@ -216,6 +238,9 @@ class PulpTaskPoller:
                     and new_state == "waiting"
                     and self.current_waiting_on is not None
                     and new_waiting_on is not None
+                    and new_waiting_on.status != BlockerLookupStatus.UNKNOWN
+                    and self.current_waiting_on.status
+                    != BlockerLookupStatus.UNKNOWN
                     and new_waiting_on != self.current_waiting_on
                 ):
                     self._blocker_changed(new_waiting_on, response.text)

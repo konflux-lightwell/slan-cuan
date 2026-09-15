@@ -2619,10 +2619,35 @@ class TestPulpFileClient:
             "parent_task": "/api/v3/tasks/parent-task/",
             "state": "waiting",
         }
-        assert (
-            client._find_blocking_task(task_data)
-            == "/api/v3/tasks/parent-task/"
+        result = client._find_blocking_task(task_data)
+        assert result.href == "/api/v3/tasks/parent-task/"
+        assert result.status.value == "found"
+
+    def test_find_blocking_task_unknown_on_lookup_failure(self) -> None:
+        """Lookup failures are distinct from a confirmed absent blocker."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
         )
+        client = PulpMavenClient(config, "test-dist")
+        task_data = {
+            "pulp_href": "/api/v3/tasks/my-task/",
+            "reserved_resources_record": ["/api/v3/repositories/maven/1/"],
+            "state": "waiting",
+        }
+        client._client = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(503, text="unavailable")
+            ),
+            base_url="https://pulp.example.com",
+        )
+
+        result = client._find_blocking_task(task_data)
+        assert result.href is None
+        assert result.status.value == "unknown"
 
     def test_find_blocking_task_running_resource_holder(self) -> None:
         """_find_blocking_task finds running task reserving the same resource."""
@@ -2658,10 +2683,35 @@ class TestPulpFileClient:
             "reserved_resources_record": ["/api/v3/repositories/maven/1/"],
             "state": "waiting",
         }
-        assert (
-            client._find_blocking_task(task_data)
-            == "/api/v3/tasks/running-blocker/"
+        result = client._find_blocking_task(task_data)
+        assert result.href == "/api/v3/tasks/running-blocker/"
+        assert result.status.value == "found"
+
+    def test_find_blocking_task_not_found_without_resources(self) -> None:
+        """A task without blocker resources confirms no blocker."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
         )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"results": []})
+            ),
+            base_url="https://pulp.example.com",
+        )
+
+        result = client._find_blocking_task(
+            {
+                "pulp_href": "/api/v3/tasks/my-task/",
+                "reserved_resources_record": ["/api/v3/repositories/maven/1/"],
+                "state": "waiting",
+            }
+        )
+        assert result.href is None
+        assert result.status.value == "not_found"
 
     def test_verbose_logging_includes_state_and_waiting_on(
         self, capsys: pytest.CaptureFixture[str]

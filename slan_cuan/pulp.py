@@ -20,7 +20,12 @@ from slan_cuan.http import (
     parse_json_dict,
     request,
 )
-from slan_cuan.pulp_tasks import TASK_POLL_TIMEOUT_SECONDS, PulpTaskPoller
+from slan_cuan.pulp_tasks import (
+    TASK_POLL_TIMEOUT_SECONDS,
+    BlockerLookup,
+    BlockerLookupStatus,
+    PulpTaskPoller,
+)
 
 # Content API URL path templates
 CONTENT_API_PATH_TEMPLATE = (
@@ -273,8 +278,10 @@ class _PulpClientBase:
                             details.append(f"state={state}")
                             if state == "waiting":
                                 waiting_on = self._find_blocking_task(data)
-                                if waiting_on:
-                                    details.append(f"waiting_on={waiting_on}")
+                                if waiting_on.href:
+                                    details.append(
+                                        f"waiting_on={waiting_on.href}"
+                                    )
             except Exception:
                 pass
             extra = f" [{', '.join(details)}]" if details else ""
@@ -326,7 +333,7 @@ class _PulpClientBase:
 
     def _find_blocking_task(
         self, task_data: dict[str, object] | None
-    ) -> str | None:
+    ) -> BlockerLookup:
         """Find the task that a waiting task is waiting on.
 
         Checks:
@@ -336,17 +343,23 @@ class _PulpClientBase:
            same resources.
 
         Returns:
-            The pulp_href of the blocking task, or None if none identified.
+            Blocker identity with FOUND, NOT_FOUND, or UNKNOWN status.
 
         """
         if not task_data or not isinstance(task_data, dict):
-            return None
+            return BlockerLookup(None, BlockerLookupStatus.UNKNOWN)
 
         if "_cached_waiting_on" in task_data:
             cached = task_data["_cached_waiting_on"]
-            return str(cached) if cached is not None else None
+            return BlockerLookup(
+                str(cached) if cached is not None else None,
+                BlockerLookupStatus(
+                    str(task_data.get("_cached_waiting_status", "unknown"))
+                ),
+            )
 
         blocker: str | None = None
+        lookup_failed = False
 
         # 1. Direct parent task
         parent = task_data.get("parent_task")
@@ -394,7 +407,7 @@ class _PulpClientBase:
                             ):
                                 blocker = str(candidate)
                 except Exception:
-                    pass
+                    lookup_failed = True
 
                 # If no running blocker found, check earlier waiting tasks
                 if not blocker:
@@ -429,10 +442,20 @@ class _PulpClientBase:
                                         blocker = str(candidate)
                                         break
                     except Exception:
-                        pass
+                        lookup_failed = True
 
+        status = (
+            BlockerLookupStatus.FOUND
+            if blocker is not None
+            else (
+                BlockerLookupStatus.UNKNOWN
+                if lookup_failed
+                else BlockerLookupStatus.NOT_FOUND
+            )
+        )
         task_data["_cached_waiting_on"] = blocker
-        return blocker
+        task_data["_cached_waiting_status"] = status.value
+        return BlockerLookup(blocker, status)
 
     def _handle_timeout(
         self,
@@ -440,7 +463,7 @@ class _PulpClientBase:
         timeout: float,
         state: str,
         response_text: str,
-        waiting_on: str | None = None,
+        waiting_on: BlockerLookup | None = None,
         is_total_timeout: bool = False,
     ) -> None:
         """Handle timeout by canceling if waiting and raising PulpError."""
@@ -451,8 +474,8 @@ class _PulpClientBase:
         elif state not in ("completed", "failed", "canceled"):
             canceled_note = f" (cancellation skipped: task state is {state})"
         state_str = state
-        if state == "waiting" and waiting_on:
-            state_str = f"waiting, waiting on: {waiting_on}"
+        if state == "waiting" and waiting_on and waiting_on.href:
+            state_str = f"waiting, waiting on: {waiting_on.href}"
         if is_total_timeout:
             prefix = (
                 f"Task polling exceeded maximum total wall-clock time "
