@@ -62,11 +62,6 @@ ENV PYTHONPATH="/opt/release-service-utils/helpers"
 ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
 ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 
-# Hack: We need to install python-qpid-proton==0.38.0 to avoid SLL Errors on AMPQ
-RUN microdnf install -y gcc gcc-c++ make cmake python3-devel openssl-devel cyrus-sasl-devel \
-    && python3 -m pip install --upgrade pip \
-    && pip3 install python-qpid-proton==0.38.0
-
 # Embed Tekton Task definitions
 COPY tekton/tasks/ /tekton/tasks/
 
