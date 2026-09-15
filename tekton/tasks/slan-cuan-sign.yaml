@@ -61,7 +61,7 @@ spec:
     - name: DIRECT_SIGN_TASK_GIT_REVISION
       description: The branch name for the git repo where the internal-request task is stored.
       type: string
-      default: b4b5e39b9479a9bfdc897e852e784d22fab1ef5b
+      default: c3f0ea4dbdb4f177e9f4347271b54ec0ee99273d
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
