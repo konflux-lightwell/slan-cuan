@@ -123,6 +123,7 @@ def _sign_directly(
     direct_sign_pipeline_name: str,
     direct_sign_task_git_url: str,
     direct_sign_task_git_revision: str,
+    direct_sign_verbose: bool,
     intention: str,
     sign_artifact_dir: str,
     tmp_dir_sign_url: str,
@@ -152,6 +153,7 @@ def _sign_directly(
         "keyname": signing_key,
         "ociStorage": sign_artifact_dir,
         "ignorePatterns": str(list(ignore_patterns)),
+        "verbose": str(direct_sign_verbose).lower(),
     }
     if registry_auth_file:
         params["registryAuthFile"] = str(registry_auth_file)
@@ -349,6 +351,13 @@ def _sign_directly(
     help="The Git branch to use for direct signing.",
 )
 @click.option(
+    "--direct-sign-verbose",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Enable verbose Kerberos diagnostics for direct signing.",
+)
+@click.option(
     "--direct-sign-task-ta-storage",
     type=str,
     default="",
@@ -399,6 +408,7 @@ def sign(
     direct_sign_pipeline_name: str,
     direct_sign_task_git_url: str,
     direct_sign_task_git_revision: str,
+    direct_sign_verbose: bool,
     direct_sign_task_ta_storage: str,
     direct_sign_task_ta_source_artifact: str,
     intention: str,
@@ -438,6 +448,7 @@ def sign(
                     direct_sign_pipeline_name=direct_sign_pipeline_name,
                     direct_sign_task_git_url=direct_sign_task_git_url,
                     direct_sign_task_git_revision=direct_sign_task_git_revision,
+                    direct_sign_verbose=direct_sign_verbose,
                     intention=intention,
                     sign_artifact_dir=direct_sign_task_ta_storage,
                     tmp_dir_sign_url=tmp_dir_sign_url,
