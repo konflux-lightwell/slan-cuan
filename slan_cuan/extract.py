@@ -11,6 +11,7 @@ from pathlib import Path
 
 import click
 
+from slan_cuan.archive import extract_zip_safely
 from slan_cuan.context import GlobalContext, write_tekton_result
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
@@ -266,19 +267,10 @@ def extract(
         if deliverable_file.is_file() and zipfile.is_zipfile(deliverable_file):
             if ctx.verbose:
                 click.echo(f"Extracting archive: {deliverable_file}")
-            with zipfile.ZipFile(deliverable_file, "r") as zf:
-                resolved_out = output_dir.resolve()
-                for member in zf.infolist():
-                    target_member_path = (output_dir / member.filename).resolve()
-                    if not (
-                        target_member_path == resolved_out
-                        or target_member_path.is_relative_to(resolved_out)
-                    ):
-                        raise click.ClickException(
-                            "Zip-slip path traversal attempt detected: " +
-                            member.filename
-                        )
-                zf.extractall(output_dir)
+            try:
+                extract_zip_safely(deliverable_file, output_dir)
+            except ValueError as e:
+                raise click.ClickException(str(e)) from e
             deliverable_name = deliverable_name.removesuffix(".zip")
             if ctx.verbose:
                 click.echo(f"Deliverable directory: {deliverable_name}")
