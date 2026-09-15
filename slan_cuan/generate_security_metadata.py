@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import socket
 import tempfile
 import time
 from pathlib import Path
@@ -23,7 +24,9 @@ _OSIDB_TOKEN_MAX_RETRIES = int(os.getenv("OSIDB_TOKEN_MAX_RETRIES", "3"))
 _OSIDB_TOKEN_RETRY_BACKOFF = float(os.getenv("OSIDB_TOKEN_RETRY_BACKOFF", "2.0"))
 
 
-def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
+def _get_osidb_auth_token(
+    api_url: str, principal: str, keytab: str, *, verbose: bool = False
+) -> str:
     # Lazy imports: these come from the optional "kerberos" extra and must not
     # break importing this module (and hence the CLI) when it is not installed.
     import requests
@@ -32,11 +35,30 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
 
     parsed = urlparse(api_url)
     token_url = f"{parsed.scheme}://{parsed.netloc}/auth/token"
+    if verbose:
+        click.echo(f"OSIDB token endpoint: {token_url}")
+        try:
+            addresses = sorted(
+                {
+                    item[4][0]
+                    for item in socket.getaddrinfo(
+                        parsed.hostname,
+                        parsed.port or 443,
+                        type=socket.SOCK_STREAM,
+                    )
+                }
+            )
+            click.echo(f"OSIDB resolved addresses: {addresses}")
+        except socket.gaierror as error:
+            click.echo(f"OSIDB DNS resolution failed: {error}")
 
     # Use a file-based ccache — keyring/API ccache backends are not
     # available in Konflux container environments.
     ccache_path = os.path.join(tempfile.gettempdir(), "osidb_krb5cc")
     os.environ["KRB5CCNAME"] = f"FILE:{ccache_path}"
+    if verbose:
+        os.environ["KRB5_TRACE"] = "/dev/stderr"
+        click.echo(f"Initializing Kerberos credentials for principal {principal}")
     KrbTicket.init(principal, keytab=keytab, ccache_name=ccache_path)
 
     session = requests.Session()
@@ -65,7 +87,8 @@ def _get_osidb_auth_token(api_url: str, principal: str, keytab: str) -> str:
             last_error = e
             click.echo(
                 f"OSIDB token request attempt {attempt}/"
-                f"{_OSIDB_TOKEN_MAX_RETRIES} failed: {e}"
+                f"{_OSIDB_TOKEN_MAX_RETRIES} failed "
+                f"({type(e).__name__}): {e}"
             )
             if attempt < _OSIDB_TOKEN_MAX_RETRIES:
                 time.sleep(_OSIDB_TOKEN_RETRY_BACKOFF * attempt)
@@ -155,7 +178,10 @@ def generate_security_metadata(
             f"with keytab file {osidb_keytab}"
         )
         auth_token = _get_osidb_auth_token(
-            osidb_api_url, osidb_kerberos_principal, osidb_keytab
+            osidb_api_url,
+            osidb_kerberos_principal,
+            osidb_keytab,
+            verbose=ctx.verbose,
         )
         # OsidbClient appends /osidb/api/v1/... paths itself, so pass only
         # the base URL (scheme + host) — not the full API path.
