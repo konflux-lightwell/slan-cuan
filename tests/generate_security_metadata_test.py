@@ -485,7 +485,9 @@ def test_valid_keytab_creates_osidb_client(
     assert result.exit_code == 0, result.output
     assert "Creating OSIDB client" in result.output
 
-    mock_get_token.assert_called_once_with(api_url, principal, str(keytab))
+    mock_get_token.assert_called_once_with(
+        api_url, principal, str(keytab), verbose=False
+    )
     mock_osidb_client_cls.assert_called_once_with(
         base_url="https://osidb.example.com", token="jwt-token-123"
     )
