@@ -921,6 +921,7 @@ def test_sign_direct_sign_custom_pipeline_options(
                 "gitlab.example.com/signing.git",
                 "--direct-sign-task-git-revision",
                 "release-v2",
+                "--direct-sign-verbose",
                 "--intention",
                 "staging",
             ],
@@ -933,6 +934,7 @@ def test_sign_direct_sign_custom_pipeline_options(
     params = call_kwargs.kwargs["params"]
     assert params["taskGitUrl"] == "gitlab.example.com/signing.git"
     assert params["taskGitRevision"] == "release-v2"
+    assert params["verbose"] == "true"
     labels = call_kwargs.kwargs["labels"]
     assert (
         labels["internal-services.appstudio.openshift.io/intention"] == "staging"
@@ -1007,6 +1009,7 @@ def test_sign_direct_sign_default_options(
         == "https://gitlab.cee.redhat.com/signing/signing.git"
     )
     assert params["taskGitRevision"] == "main"
+    assert params["verbose"] == "false"
     labels = call_kwargs.kwargs["labels"]
     assert (
         labels["internal-services.appstudio.openshift.io/intention"]
