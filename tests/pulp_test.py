@@ -1201,7 +1201,7 @@ class TestPollTask:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "PATCH":
                 return httpx.Response(200, json={"state": "canceled"})
-            return httpx.Response(200, json={"state": "running"})
+            return httpx.Response(200, json={"state": "waiting"})
 
         transport = httpx.MockTransport(handler)
         config = PulpConfig(
@@ -1309,7 +1309,7 @@ class TestPollTask:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "PATCH":
                 return httpx.Response(409, text="Task already finished")
-            return httpx.Response(200, json={"state": "running"})
+            return httpx.Response(200, json={"state": "waiting"})
 
         transport = httpx.MockTransport(handler)
         config = PulpConfig(
@@ -1341,7 +1341,7 @@ class TestPollTask:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "PATCH":
                 return httpx.Response(500, text="Internal Server Error")
-            return httpx.Response(200, json={"state": "running"})
+            return httpx.Response(200, json={"state": "waiting"})
 
         transport = httpx.MockTransport(handler)
         config = PulpConfig(
@@ -1388,6 +1388,124 @@ class TestPollTask:
         outcome = client.cancel_task("/api/v3/tasks/task-uuid/")
         assert outcome == "cancellation requested in Pulp"
         assert captured_timeout == 15.0
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout_status_check_completed(
+        self, mock_sleep: Mock
+    ) -> None:
+        """When timeout expires, fresh check finding completed returns cleanly."""
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(200, json={"state": "waiting"})
+            # Second call is the timeout re-check
+            return httpx.Response(
+                200,
+                json={
+                    "state": "completed",
+                    "created_resources": ["/api/v3/versions/1/"],
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.poll_task("/api/v3/tasks/task-uuid/", timeout=0.01)
+        assert result.get("state") == "completed"
+        assert result.get("created_resources") == ["/api/v3/versions/1/"]
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_resets_deadline_on_transition_to_running(
+        self, mock_sleep: Mock
+    ) -> None:
+        """When deadline expires, discovering running resets deadline."""
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # Initial poll: waiting
+                return httpx.Response(200, json={"state": "waiting"})
+            if calls == 2:
+                # Deadline check: transitioned to running -> deadline reset!
+                return httpx.Response(200, json={"state": "running"})
+            if calls == 3:
+                # Poll under new deadline: running
+                return httpx.Response(200, json={"state": "running"})
+            # Completes before second deadline expires
+            return httpx.Response(
+                200,
+                json={
+                    "state": "completed",
+                    "created_resources": ["/api/v3/versions/2/"],
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.poll_task("/api/v3/tasks/task-uuid/", timeout=0.01)
+        assert result.get("state") == "completed"
+        assert calls >= 4
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout_skips_cancellation_when_running(
+        self, mock_sleep: Mock
+    ) -> None:
+        """When timeout expires while running, cancellation is skipped."""
+        patch_called = False
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal patch_called
+            if request.method == "PATCH":
+                patch_called = True
+                return httpx.Response(200, json={"state": "canceled"})
+            return httpx.Response(200, json={"state": "running"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task("/api/v3/tasks/task-uuid/", timeout=0.01)
+
+        assert patch_called is False
+        assert "timed out" in exc_info.value.message
+        assert "(state: running)" in exc_info.value.message
+        assert (
+            "(cancellation skipped: task state is running)"
+            in exc_info.value.message
+        )
 
     @patch("slan_cuan.pulp.time.sleep")
     def test_poll_task_canceling_state_is_nonterminal(
@@ -2486,3 +2604,192 @@ class TestPulpFileClient:
         captured = capsys.readouterr()
         assert "Pulp request:" not in captured.out
         assert "Pulp response:" not in captured.out
+
+    def test_find_blocking_task_parent(self) -> None:
+        """_find_blocking_task identifies parent_task when present."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        task_data = {
+            "pulp_href": "/api/v3/tasks/child-task/",
+            "parent_task": "/api/v3/tasks/parent-task/",
+            "state": "waiting",
+        }
+        assert (
+            client._find_blocking_task(task_data)
+            == "/api/v3/tasks/parent-task/"
+        )
+
+    def test_find_blocking_task_running_resource_holder(self) -> None:
+        """_find_blocking_task finds running task reserving the same resource."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "tasks" in request.url.path:
+                assert "state=running" in str(request.url)
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {"pulp_href": "/api/v3/tasks/running-blocker/"}
+                        ]
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        task_data = {
+            "pulp_href": "/api/v3/tasks/my-task/",
+            "reserved_resources_record": ["/api/v3/repositories/maven/1/"],
+            "state": "waiting",
+        }
+        assert (
+            client._find_blocking_task(task_data)
+            == "/api/v3/tasks/running-blocker/"
+        )
+
+    def test_verbose_logging_includes_state_and_waiting_on(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Verbose response logging outputs state and waiting_on metadata."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/tasks/waiting-task/",
+                    "parent_task": "/api/v3/tasks/parent-blocker/",
+                    "state": "waiting",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+            verbose=True,
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client._request("GET", "/api/v3/tasks/waiting-task/", "Task status")
+        captured = capsys.readouterr()
+        assert "Pulp response: 200" in captured.out
+        assert "state=waiting" in captured.out
+        assert "waiting_on=/api/v3/tasks/parent-blocker/" in captured.out
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_resets_deadline_on_blocker_change(
+        self, mock_sleep: Mock
+    ) -> None:
+        """poll_task resets wait deadline when blocking task changes."""
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # First poll: waiting on blocker 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "pulp_href": "/api/v3/tasks/my-task/",
+                        "parent_task": "/api/v3/tasks/blocker-1/",
+                        "state": "waiting",
+                    },
+                )
+            if calls == 2:
+                # Deadline check: blocker changed to blocker 2 -> resets deadline!
+                return httpx.Response(
+                    200,
+                    json={
+                        "pulp_href": "/api/v3/tasks/my-task/",
+                        "parent_task": "/api/v3/tasks/blocker-2/",
+                        "state": "waiting",
+                    },
+                )
+            if calls == 3:
+                # Next poll under reset deadline: completed
+                return httpx.Response(
+                    200,
+                    json={
+                        "pulp_href": "/api/v3/tasks/my-task/",
+                        "state": "completed",
+                        "created_resources": [],
+                    },
+                )
+            return httpx.Response(200, json={"state": "completed"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.poll_task("/api/v3/tasks/my-task/", timeout=0.01)
+        assert result.get("state") == "completed"
+        assert calls >= 3
+
+    @patch("slan_cuan.pulp.time.sleep")
+    def test_poll_task_timeout_includes_waiting_on(
+        self, mock_sleep: Mock
+    ) -> None:
+        """poll_task timeout error mentions the blocking task."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "PATCH":
+                return httpx.Response(200, json={"state": "canceled"})
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/tasks/my-task/",
+                    "parent_task": "/api/v3/tasks/stuck-blocker/",
+                    "state": "waiting",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.poll_task("/api/v3/tasks/my-task/", timeout=0.01)
+
+        assert "waiting, waiting on: /api/v3/tasks/stuck-blocker/" in str(
+            exc_info.value
+        )
+        assert "cancellation requested in Pulp" in str(exc_info.value)
