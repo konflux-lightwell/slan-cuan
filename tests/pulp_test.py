@@ -1028,7 +1028,7 @@ class TestUploadMetadata:
 class TestPollTask:
     """Tests for poll_task() method."""
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_immediate_completion(self, mock_sleep: Mock) -> None:
         """Task returns 'completed' on first poll."""
 
@@ -1060,7 +1060,7 @@ class TestPollTask:
         assert result["state"] == "completed"
         mock_sleep.assert_not_called()
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_eventual_completion(self, mock_sleep: Mock) -> None:
         """First poll 'running', second poll 'completed'."""
         call_count = 0
@@ -1096,7 +1096,7 @@ class TestPollTask:
         assert call_count == 2
         mock_sleep.assert_called()
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_failed(self, mock_sleep: Mock) -> None:
         """Task returns 'failed' with error details, verify PulpError."""
 
@@ -1128,7 +1128,7 @@ class TestPollTask:
         assert "Content validation failed" in exc_info.value.message
         assert "/api/v3/tasks/task-uuid/" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_failed_with_traceback(self, mock_sleep: Mock) -> None:
         """Task failure includes traceback from Pulp error response."""
 
@@ -1166,7 +1166,7 @@ class TestPollTask:
         assert "duplicate key" in exc_info.value.message
         assert "/api/v3/tasks/task-uuid/" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_canceled(self, mock_sleep: Mock) -> None:
         """Task returns 'canceled', verify PulpError."""
 
@@ -1194,7 +1194,7 @@ class TestPollTask:
         assert "Task canceled" in exc_info.value.message
         assert "/api/v3/tasks/task-uuid/" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout(self, mock_sleep: Mock) -> None:
         """Use very short timeout, verify PulpError with 'timed out'."""
 
@@ -1224,7 +1224,7 @@ class TestPollTask:
         assert "timed out" in exc_info.value.message
         assert "(cancellation requested in Pulp)" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout_cancels_task_in_pulp(
         self, mock_sleep: Mock
     ) -> None:
@@ -1263,7 +1263,7 @@ class TestPollTask:
         assert "timed out" in exc_info.value.message
         assert "(cancellation requested in Pulp)" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_backoff_and_jitter(self, mock_sleep: Mock) -> None:
         """Verify backoff increases sleep duration with jitter within range."""
         polls = 0
@@ -1300,7 +1300,7 @@ class TestPollTask:
         # Attempt 3: base 4.5, jitter 0.2 (0.9) -> [3.6, 5.4]
         assert 3.59 <= sleep_durations[2] <= 5.41
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout_cancellation_conflict_409(
         self, mock_sleep: Mock
     ) -> None:
@@ -1332,7 +1332,7 @@ class TestPollTask:
         assert "timed out" in exc_info.value.message
         assert "409 Conflict" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout_cancellation_error_500(
         self, mock_sleep: Mock
     ) -> None:
@@ -1389,7 +1389,7 @@ class TestPollTask:
         assert outcome == "cancellation requested in Pulp"
         assert captured_timeout == 15.0
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout_status_check_completed(
         self, mock_sleep: Mock
     ) -> None:
@@ -1426,7 +1426,7 @@ class TestPollTask:
         assert result.get("state") == "completed"
         assert result.get("created_resources") == ["/api/v3/versions/1/"]
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_resets_deadline_on_transition_to_running(
         self, mock_sleep: Mock
     ) -> None:
@@ -1470,7 +1470,7 @@ class TestPollTask:
         assert result.get("state") == "completed"
         assert calls >= 4
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout_skips_cancellation_when_running(
         self, mock_sleep: Mock
     ) -> None:
@@ -1507,7 +1507,7 @@ class TestPollTask:
             in exc_info.value.message
         )
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_canceling_state_is_nonterminal(
         self, mock_sleep: Mock
     ) -> None:
@@ -1568,7 +1568,7 @@ class TestPollTask:
 class TestModifyRepository:
     """Tests for modify_repository() method."""
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_modify_repository_success(self, mock_sleep: Mock) -> None:
         """Mock 202 with task href, then completed task, verify ModifyResult."""
         call_count = 0
@@ -1648,7 +1648,7 @@ class TestModifyRepository:
         assert exc_info.value.status_code == 500
         assert "Repository modify failed" in exc_info.value.message
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_modify_repository_request_payload(self, mock_sleep: Mock) -> None:
         """Capture JSON body, verify add_content_units payload."""
         captured_payload = None
@@ -2246,7 +2246,7 @@ class TestPulpFileClient:
         assert "/api/pulp/mydom/api/v3/repositories/file/file/" in captured_url
         assert "name=my-file-repo" in captured_url
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_modify_repository_success(self, mock_sleep: Mock) -> None:
         """Modify adds content units and returns ModifyResult."""
         call_count = 0
@@ -2294,7 +2294,7 @@ class TestPulpFileClient:
         assert result.state == "completed"
         assert result.repository_version is not None
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_create_publication_success(self, mock_sleep: Mock) -> None:
         """Publication returns the created publication href."""
 
@@ -2458,7 +2458,7 @@ class TestPulpFileClient:
         assert "/api/pulp/mydom/api/v3/distributions/file/file/" in captured_url
         assert "name=my-file-repo" in captured_url
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_update_distribution_success(self, mock_sleep: Mock) -> None:
         """PATCH updates the distribution and polls the task."""
         captured_method: str | None = None
@@ -2698,7 +2698,7 @@ class TestPulpFileClient:
         assert "state=waiting" in captured.out
         assert "waiting_on=/api/v3/tasks/parent-blocker/" in captured.out
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_resets_deadline_on_blocker_change(
         self, mock_sleep: Mock
     ) -> None:
@@ -2756,7 +2756,7 @@ class TestPulpFileClient:
         assert result.get("state") == "completed"
         assert calls >= 3
 
-    @patch("slan_cuan.pulp.time.sleep")
+    @patch("slan_cuan.pulp_tasks.time.sleep")
     def test_poll_task_timeout_includes_waiting_on(
         self, mock_sleep: Mock
     ) -> None:
@@ -2793,3 +2793,108 @@ class TestPulpFileClient:
             exc_info.value
         )
         assert "cancellation requested in Pulp" in str(exc_info.value)
+
+    @patch("slan_cuan.pulp_tasks.time.sleep")
+    def test_poll_task_network_error_on_recheck_does_not_reset_deadline(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Network error on timeout status re-check does not extend deadline."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "PATCH":
+                return httpx.Response(200, json={"state": "canceled"})
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/tasks/my-task/",
+                    "parent_task": "/api/v3/tasks/blocker-1/",
+                    "state": "waiting",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with patch.object(
+            client,
+            "_check_task_status",
+            side_effect=PulpError("Connection refused", 0, ""),
+        ):
+            with pytest.raises(PulpError) as exc_info:
+                client.poll_task("/api/v3/tasks/my-task/", timeout=0.01)
+
+        assert "timed out after 0.01s" in str(exc_info.value)
+        assert "cancellation requested in Pulp" in str(exc_info.value)
+
+    @patch("slan_cuan.pulp_tasks.time.sleep")
+    def test_poll_task_exceeds_max_total_timeout(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Wall-clock ceiling terminates polling despite blocker changes."""
+        counter = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal counter
+            if request.method == "PATCH":
+                return httpx.Response(200, json={"state": "canceled"})
+            counter += 1
+            return httpx.Response(
+                200,
+                json={
+                    "pulp_href": "/api/v3/tasks/my-task/",
+                    "parent_task": f"/api/v3/tasks/churning-blocker-{counter}/",
+                    "state": "waiting",
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            # timeout=10s per blocker, but max_total_timeout=0.01s ceiling
+            client.poll_task(
+                "/api/v3/tasks/my-task/",
+                timeout=10.0,
+                max_total_timeout=0.01,
+            )
+
+        assert "exceeded maximum total wall-clock time of 0.01s" in str(
+            exc_info.value
+        )
+        assert "cancellation requested in Pulp" in str(exc_info.value)
+
+    def test_calculate_sleep_jitter_on_remaining_clamp(self) -> None:
+        """_calculate_sleep retains jitter when bounded by remaining time."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        from slan_cuan.pulp_tasks import PulpTaskPoller
+
+        poller = PulpTaskPoller(client, "/api/v3/tasks/t1/", timeout=60.0)
+        poller.current_interval = 20.0
+
+        samples = [poller._calculate_sleep(remaining=5.0) for _ in range(50)]
+        assert all(0.1 <= s <= 5.0 for s in samples)
+        # Verify samples are varied (jittered), not all identical to 5.0
+        assert len(set(samples)) > 1

@@ -311,6 +311,16 @@ def _upload_one(
     show_default=True,
     help="Maximum time in seconds to wait for asynchronous Pulp tasks.",
 )
+@click.option(
+    "--pulp-max-total-task-timeout",
+    envvar="SLAN_CUAN_PUBLISH_PULP_MAX_TOTAL_TASK_TIMEOUT",
+    type=click.FloatRange(min=1.0),
+    default=None,
+    help=(
+        "Absolute maximum time in seconds across all Pulp task state "
+        "and blocker timeout resets. Defaults to twice the task timeout."
+    ),
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -328,6 +338,7 @@ def publish(
     require_supply_chain_metadata: bool,
     pulp_file_repository: str | None,
     pulp_task_timeout: float,
+    pulp_max_total_task_timeout: float | None,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     pulp_file_repository = (
@@ -443,6 +454,7 @@ def publish(
             client_cert=pulp_client_cert,
             client_key=pulp_client_key,
             task_timeout=pulp_task_timeout,
+            max_total_task_timeout=pulp_max_total_task_timeout,
             verbose=ctx.verbose,
         )
 
@@ -461,6 +473,10 @@ def publish(
                 click.echo(f"Client key: {pulp_client_key}")
             click.echo(f"Upload workers: {upload_workers}")
             click.echo(f"Task timeout: {pulp_task_timeout}s")
+            max_timeout = pulp_max_total_task_timeout
+            if max_timeout is None:
+                max_timeout = 2.0 * pulp_task_timeout
+            click.echo(f"Maximum total task timeout: {max_timeout}s")
 
         uploaded = 0
         skipped = 0

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import ssl
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +20,7 @@ from slan_cuan.http import (
     parse_json_dict,
     request,
 )
+from slan_cuan.pulp_tasks import TASK_POLL_TIMEOUT_SECONDS, PulpTaskPoller
 
 # Content API URL path templates
 CONTENT_API_PATH_TEMPLATE = (
@@ -43,11 +42,6 @@ FILE_DISTRIBUTION_API_PATH_TEMPLATE = (
 )
 
 # Task polling configuration
-TASK_POLL_INITIAL_INTERVAL_SECONDS = 2.0
-TASK_POLL_MAX_INTERVAL_SECONDS = 15.0
-TASK_POLL_BACKOFF_FACTOR = 1.5
-TASK_POLL_JITTER_FACTOR = 0.2
-TASK_POLL_TIMEOUT_SECONDS = 1800.0
 TASK_CANCEL_TIMEOUT_SECONDS = 15.0
 
 
@@ -78,6 +72,7 @@ class PulpConfig:
     client_cert: Path | None = None
     client_key: Path | None = None
     task_timeout: float = TASK_POLL_TIMEOUT_SECONDS
+    max_total_task_timeout: float | None = None
     verbose: bool = False
 
 
@@ -270,15 +265,16 @@ class _PulpClientBase:
             try:
                 data = response.json()
                 if isinstance(data, dict):
-                    state = data.get("state")
-                    if state:
-                        details.append(f"state={state}")
-                        if state == "waiting":
-                            waiting_on = self._find_blocking_task(data)
-                            if waiting_on:
-                                details.append(f"waiting_on={waiting_on}")
-                    elif "task" in data:
+                    if "task" in data:
                         details.append(f"task={data['task']}")
+                    elif operation != "Blocker task lookup":
+                        state = data.get("state")
+                        if state:
+                            details.append(f"state={state}")
+                            if state == "waiting":
+                                waiting_on = self._find_blocking_task(data)
+                                if waiting_on:
+                                    details.append(f"waiting_on={waiting_on}")
             except Exception:
                 pass
             extra = f" [{', '.join(details)}]" if details else ""
@@ -376,26 +372,27 @@ class _PulpClientBase:
                 res_filter = ",".join(str(r) for r in resources)
 
                 try:
-                    res = self._client.get(
+                    res = self._request(
+                        "GET",
                         tasks_base,
+                        "Blocker task lookup",
                         params={
                             "reserved_resources__in": res_filter,
                             "state": "running",
                             "limit": 1,
                         },
-                        timeout=2.0,
+                        timeout=10.0,
                     )
-                    if res.status_code == 200:
-                        data = res.json()
-                        if isinstance(data, dict):
-                            results = data.get("results", [])
-                            if results and isinstance(results, list):
-                                candidate = results[0].get("pulp_href")
-                                if (
-                                    candidate
-                                    and candidate != current_task_href
-                                ):
-                                    blocker = str(candidate)
+                    data = res.json()
+                    if isinstance(data, dict):
+                        results = data.get("results", [])
+                        if results and isinstance(results, list):
+                            candidate = results[0].get("pulp_href")
+                            if (
+                                candidate
+                                and candidate != current_task_href
+                            ):
+                                blocker = str(candidate)
                 except Exception:
                     pass
 
@@ -412,24 +409,25 @@ class _PulpClientBase:
                         params["pulp_created__lt"] = pulp_created
 
                     try:
-                        res = self._client.get(
+                        res = self._request(
+                            "GET",
                             tasks_base,
+                            "Blocker task lookup",
                             params=params,
-                            timeout=2.0,
+                            timeout=10.0,
                         )
-                        if res.status_code == 200:
-                            data = res.json()
-                            if isinstance(data, dict):
-                                results = data.get("results", [])
-                                if results and isinstance(results, list):
-                                    for item in results:
-                                        candidate = item.get("pulp_href")
-                                        if (
-                                            candidate
-                                            and candidate != current_task_href
-                                        ):
-                                            blocker = str(candidate)
-                                            break
+                        data = res.json()
+                        if isinstance(data, dict):
+                            results = data.get("results", [])
+                            if results and isinstance(results, list):
+                                for item in results:
+                                    candidate = item.get("pulp_href")
+                                    if (
+                                        candidate
+                                        and candidate != current_task_href
+                                    ):
+                                        blocker = str(candidate)
+                                        break
                     except Exception:
                         pass
 
@@ -443,6 +441,7 @@ class _PulpClientBase:
         state: str,
         response_text: str,
         waiting_on: str | None = None,
+        is_total_timeout: bool = False,
     ) -> None:
         """Handle timeout by canceling if waiting and raising PulpError."""
         canceled_note = ""
@@ -454,10 +453,14 @@ class _PulpClientBase:
         state_str = state
         if state == "waiting" and waiting_on:
             state_str = f"waiting, waiting on: {waiting_on}"
-        msg = (
-            f"Task polling timed out after {timeout}s "
-            f"(state: {state_str}){canceled_note}"
-        )
+        if is_total_timeout:
+            prefix = (
+                f"Task polling exceeded maximum total wall-clock time "
+                f"of {timeout}s"
+            )
+        else:
+            prefix = f"Task polling timed out after {timeout}s"
+        msg = f"{prefix} (state: {state_str}){canceled_note}"
         raise PulpError(
             msg,
             status_code=0,
@@ -489,209 +492,39 @@ class _PulpClientBase:
         self,
         task_href: str,
         timeout: float | None = None,
+        max_total_timeout: float | None = None,
     ) -> dict[str, object]:
         """Poll a Pulp task until completion or timeout.
 
         Applies exponential backoff with random jitter between poll attempts.
-        If timeout is exceeded, attempts to cancel the task in Pulp before
-        raising PulpError.
+        Resets wait deadline on state transitions and blocker changes, subject
+        to an absolute total wall-clock ceiling. If timeout is exceeded,
+        attempts to cancel the task in Pulp before raising PulpError.
 
         Args:
             task_href: The task href returned from an async operation.
-            timeout: Maximum time to wait in seconds (defaults to
+            timeout: Maximum time to wait in seconds per state (defaults to
                 config.task_timeout).
+            max_total_timeout: Absolute maximum wall-clock time in seconds
+                across all state transitions. Defaults to 2 * timeout.
 
         Returns:
             The completed task response as a dict.
 
         Raises:
             PulpError: If the task fails, is canceled, or times out.
-            ValueError: If timeout is not positive.
+            ValueError: If timeout or max_total_timeout is not positive.
 
         """
-        if timeout is None:
-            timeout = self._config.task_timeout
-        if timeout <= 0:
-            raise ValueError(f"timeout must be positive, got {timeout}")
+        poller = PulpTaskPoller(
+            client=self,
+            task_href=task_href,
+            timeout=timeout,
+            max_total_timeout=max_total_timeout,
+            error_cls=PulpError,
+        )
+        return poller.poll()
 
-        start = time.monotonic()
-        deadline = start + timeout
-        current_interval = TASK_POLL_INITIAL_INTERVAL_SECONDS
-        current_state = ""
-        current_waiting_on: str | None = None
-        last_response_text = ""
-
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                # Double-check task status before timing out or canceling
-                req_timeout = min(DEFAULT_TIMEOUT_SECONDS, 10.0)
-                try:
-                    fresh_data, fresh_state, fresh_text = self._check_task_status(
-                        task_href, req_timeout
-                    )
-                except Exception:
-                    fresh_data, fresh_state, fresh_text = (
-                        None,
-                        current_state,
-                        last_response_text,
-                    )
-
-                if fresh_state == "completed" and fresh_data is not None:
-                    if self._config.verbose:
-                        created = fresh_data.get("created_resources", [])
-                        click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task completed: "
-                            f"{task_href} (created_resources={created})"
-                        )
-                    return fresh_data
-
-                fresh_waiting_on = (
-                    self._find_blocking_task(fresh_data)
-                    if fresh_state == "waiting" and fresh_data is not None
-                    else None
-                )
-
-                if current_state and fresh_state != current_state:
-                    current_state = fresh_state
-                    current_waiting_on = fresh_waiting_on
-                    last_response_text = fresh_text
-                    start = time.monotonic()
-                    deadline = start + timeout
-                    if self._config.verbose:
-                        click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task {task_href} "
-                            f"transitioned to '{fresh_state}'; "
-                            f"resetting wait deadline for {timeout}s"
-                        )
-                    continue
-
-                if (
-                    current_state == "waiting"
-                    and fresh_state == "waiting"
-                    and current_waiting_on is not None
-                    and fresh_waiting_on != current_waiting_on
-                ):
-                    current_waiting_on = fresh_waiting_on
-                    last_response_text = fresh_text
-                    start = time.monotonic()
-                    deadline = start + timeout
-                    if self._config.verbose:
-                        click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task {task_href} "
-                            f"waiting blocker changed: {current_waiting_on} "
-                            f"-> {fresh_waiting_on}; resetting wait deadline "
-                            f"for {timeout}s"
-                        )
-                    continue
-
-                self._handle_timeout(
-                    task_href,
-                    timeout,
-                    fresh_state,
-                    fresh_text,
-                    waiting_on=current_waiting_on,
-                )
-
-            req_timeout = min(DEFAULT_TIMEOUT_SECONDS, max(1.0, remaining))
-            response = self._request(
-                "GET",
-                task_href,
-                "Task polling",
-                timeout=req_timeout,
-            )
-            last_response_text = response.text
-
-            try:
-                task_data = parse_json_dict(response, "Task", PulpError)
-                new_state = str(task_data.get("state", ""))
-                new_waiting_on = (
-                    self._find_blocking_task(task_data)
-                    if new_state == "waiting"
-                    else None
-                )
-
-                if current_state and new_state != current_state:
-                    start = time.monotonic()
-                    deadline = start + timeout
-                    if self._config.verbose:
-                        click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task {task_href} "
-                            f"transitioned to '{new_state}'; "
-                            f"resetting wait deadline for {timeout}s"
-                        )
-                elif (
-                    current_state == "waiting"
-                    and new_state == "waiting"
-                    and current_waiting_on is not None
-                    and new_waiting_on != current_waiting_on
-                ):
-                    start = time.monotonic()
-                    deadline = start + timeout
-                    if self._config.verbose:
-                        click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task {task_href} "
-                            f"waiting blocker changed: {current_waiting_on} "
-                            f"-> {new_waiting_on}; resetting wait deadline "
-                            f"for {timeout}s"
-                        )
-
-                current_state = new_state
-                current_waiting_on = new_waiting_on
-
-                if new_state == "completed":
-                    if self._config.verbose:
-                        created = task_data.get("created_resources", [])
-                        click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task completed: "
-                            f"{task_href} (created_resources={created})"
-                        )
-                    return task_data
-                if new_state in ("failed", "canceled"):
-                    error_details = task_data.get("error", {})
-                    error_msg = str(
-                        error_details.get("description", new_state)
-                        if isinstance(error_details, dict)
-                        else new_state
-                    )
-                    traceback_str = (
-                        str(error_details.get("traceback", "")).strip()
-                        if isinstance(error_details, dict)
-                        else ""
-                    )
-                    parts = [f"Task {new_state}: {error_msg}"]
-                    if traceback_str:
-                        parts.append(f"Traceback:\n{traceback_str}")
-                    parts.append(f"Task: {task_href}")
-                    raise PulpError(
-                        "\n".join(parts),
-                        status_code=response.status_code,
-                        response_body=response.text,
-                    )
-
-            except (ValueError, KeyError) as e:
-                raise PulpError(
-                    f"Failed to parse task response: {e}",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                ) from e
-
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                continue
-
-            jitter = current_interval * TASK_POLL_JITTER_FACTOR
-            sleep_time = random.uniform(
-                max(0.1, current_interval - jitter),
-                current_interval + jitter,
-            )
-            sleep_time = min(sleep_time, remaining)
-            time.sleep(sleep_time)
-
-            current_interval = min(
-                TASK_POLL_MAX_INTERVAL_SECONDS,
-                current_interval * TASK_POLL_BACKOFF_FACTOR,
-            )
 
     def modify_repository(
         self,
