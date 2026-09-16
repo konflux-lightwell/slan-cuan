@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
@@ -58,6 +58,53 @@ def _utc_timestamp() -> str:
 # HTTP client and error handling constants
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
+
+def parse_custom_headers(raw: str | None) -> dict[str, str]:
+    r"""Parse custom HTTP headers delimited by CRLF or newline.
+
+    Supports:
+        - CRLF / newline-separated lines (e.g. 'Header1: val1\nHeader2: val2')
+        - Escaped literal newlines ('\n' or '\r\n')
+        - Both 'Header: Value' and 'Header=Value' syntax
+        - Single-line header definitions
+        - JSON object string fallback (e.g. '{"Header": "Value"}')
+
+    Args:
+        raw: Header string with newline/CRLF delimiters or JSON format.
+
+    Returns:
+        Dictionary mapping header names to header values.
+
+    """
+    if not raw or not raw.strip():
+        return {}
+    raw = raw.strip()
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {str(k).strip(): str(v).strip() for k, v in data.items()}
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Normalize real and escaped newlines (CRLF, LF, \r\n, \n)
+    normalized = (
+        raw.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n")
+    )
+    headers: dict[str, str] = {}
+    for line in normalized.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip()] = v.strip()
+        elif "=" in line:
+            k, v = line.split("=", 1)
+            headers[k.strip()] = v.strip()
+    return headers
+
+
 AUTH_TYPE_TBR: str = "tbr"
 AUTH_TYPE_CERT: str = "cert"
 AUTH_TYPES: frozenset[str] = frozenset({AUTH_TYPE_TBR, AUTH_TYPE_CERT})
@@ -78,6 +125,7 @@ class PulpConfig:
     client_key: Path | None = None
     task_timeout: float = TASK_POLL_TIMEOUT_SECONDS
     max_total_task_timeout: float | None = None
+    custom_headers: dict[str, str] = field(default_factory=dict)
     verbose: bool = False
 
 
@@ -232,6 +280,25 @@ class _PulpClientBase:
         """Send an HTTP request with optional verbose logging."""
         if self._config.verbose:
             details: list[str] = []
+            if "headers" in kwargs and kwargs["headers"]:
+                safe_headers = {
+                    k: (
+                        "***"
+                        if any(
+                            s in k.lower()
+                            for s in (
+                                "auth",
+                                "token",
+                                "key",
+                                "secret",
+                                "credential",
+                            )
+                        )
+                        else v
+                    )
+                    for k, v in kwargs["headers"].items()
+                }
+                details.append(f"headers={safe_headers}")
             if "params" in kwargs and kwargs["params"]:
                 details.append(f"params={kwargs['params']}")
             if "data" in kwargs and kwargs["data"]:
@@ -371,9 +438,7 @@ class _PulpClientBase:
             current_task_href = str(task_data.get("pulp_href") or "")
             if isinstance(resources, list) and resources:
                 if current_task_href and "/tasks/" in current_task_href:
-                    tasks_base = (
-                        current_task_href.split("/tasks/")[0] + "/tasks/"
-                    )
+                    tasks_base = current_task_href.split("/tasks/")[0] + "/tasks/"
                 else:
                     domain = self._config.domain
                     tasks_base = (
@@ -401,10 +466,7 @@ class _PulpClientBase:
                         results = data.get("results", [])
                         if results and isinstance(results, list):
                             candidate = results[0].get("pulp_href")
-                            if (
-                                candidate
-                                and candidate != current_task_href
-                            ):
+                            if candidate and candidate != current_task_href:
                                 blocker = str(candidate)
                 except Exception:
                     lookup_failed = True
@@ -478,8 +540,8 @@ class _PulpClientBase:
             state_str = f"waiting, waiting on: {waiting_on.href}"
         if is_total_timeout:
             prefix = (
-                f"Task polling exceeded maximum total wall-clock time "
-                f"of {timeout}s"
+                f"Task polling timed out: exceeded maximum total wall-clock "
+                f"time of {timeout}s"
             )
         else:
             prefix = f"Task polling timed out after {timeout}s"
@@ -548,7 +610,6 @@ class _PulpClientBase:
         )
         return poller.poll()
 
-
     def modify_repository(
         self,
         repository_href: str,
@@ -575,6 +636,7 @@ class _PulpClientBase:
             url,
             "Repository modify",
             json=payload,
+            headers=self._config.custom_headers or None,
         )
 
         try:

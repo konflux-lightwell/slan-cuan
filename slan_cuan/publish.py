@@ -27,6 +27,7 @@ from slan_cuan.pulp import (
     PulpError,
     PulpFileClient,
     PulpMavenClient,
+    parse_custom_headers,
 )
 
 _DIAG_MAX_ENTRIES = 50
@@ -321,6 +322,15 @@ def _upload_one(
         "and blocker timeout resets. Defaults to twice the task timeout."
     ),
 )
+@click.option(
+    "--pulp-custom-headers",
+    envvar="SLAN_CUAN_PUBLISH_PULP_CUSTOM_HEADERS",
+    default="",
+    help=(
+        "Custom HTTP headers to send on repository modify "
+        "(CRLF/newline-delimited 'Key: Value' or JSON)."
+    ),
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -339,6 +349,7 @@ def publish(
     pulp_file_repository: str | None,
     pulp_task_timeout: float,
     pulp_max_total_task_timeout: float | None,
+    pulp_custom_headers: str,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     pulp_file_repository = (
@@ -455,6 +466,7 @@ def publish(
             client_key=pulp_client_key,
             task_timeout=pulp_task_timeout,
             max_total_task_timeout=pulp_max_total_task_timeout,
+            custom_headers=parse_custom_headers(pulp_custom_headers),
             verbose=ctx.verbose,
         )
 
@@ -471,6 +483,8 @@ def publish(
                 click.echo(f"Client certificate: {pulp_client_cert}")
             if pulp_client_key:
                 click.echo(f"Client key: {pulp_client_key}")
+            if config.custom_headers:
+                click.echo(f"Custom headers: {config.custom_headers}")
             click.echo(f"Upload workers: {upload_workers}")
             click.echo(f"Task timeout: {pulp_task_timeout}s")
             max_timeout = pulp_max_total_task_timeout

@@ -87,6 +87,12 @@ spec:
         blocker timeout resets. Defaults to twice PULP_TASK_TIMEOUT.
       type: string
       default: ""
+    - name: PULP_CUSTOM_HEADERS
+      description: |
+        Custom HTTP headers to send on repository modify requests
+        (CRLF/newline-delimited 'Key: Value' lines or JSON object).
+      type: string
+      default: ""
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -199,6 +205,8 @@ spec:
           value: $(params.PULP_TASK_TIMEOUT)
         - name: SLAN_CUAN_PUBLISH_PULP_MAX_TOTAL_TASK_TIMEOUT
           value: $(params.PULP_MAX_TOTAL_TASK_TIMEOUT)
+        - name: SLAN_CUAN_PUBLISH_PULP_CUSTOM_HEADERS
+          value: $(params.PULP_CUSTOM_HEADERS)
         - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
           valueFrom:
             secretKeyRef:

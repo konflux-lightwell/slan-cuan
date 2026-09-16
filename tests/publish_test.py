@@ -2772,3 +2772,82 @@ def test_publish_rejects_vulnerable_index_without_osv_metadata(
     assert result.exit_code != 0
     assert "no generated OSV metadata" in result.output
     mock_maven_cls.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_with_custom_headers_cli(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With --pulp-custom-headers, headers are passed to PulpConfig."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-custom-headers",
+            "X-TASK-DIAGNOSTICS: pyinstrument,memory\nCorrelation-ID: cid-123",
+        ],
+    )
+
+    assert result.exit_code == 0
+    config = mock_client_cls.call_args[0][0]
+    assert config.custom_headers == {
+        "X-TASK-DIAGNOSTICS": "pyinstrument,memory",
+        "Correlation-ID": "cid-123",
+    }
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_with_custom_headers_envvar(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """With custom headers envvar, headers are parsed and passed to PulpConfig."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    _setup_client_mock(mock_client)
+
+    runner = CliRunner()
+    headers_json = json.dumps({"X-TASK-DIAGNOSTICS": "memray"})
+    result = runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+        env={"SLAN_CUAN_PUBLISH_PULP_CUSTOM_HEADERS": headers_json},
+    )
+
+    assert result.exit_code == 0
+    config = mock_client_cls.call_args[0][0]
+    assert config.custom_headers == {"X-TASK-DIAGNOSTICS": "memray"}

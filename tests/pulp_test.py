@@ -19,6 +19,7 @@ from slan_cuan.pulp import (
     PulpFileClient,
     PulpMavenClient,
     _validate_auth,
+    parse_custom_headers,
 )
 
 
@@ -2849,6 +2850,7 @@ class TestPulpFileClient:
         self, mock_sleep: Mock
     ) -> None:
         """Network error on timeout status re-check does not extend deadline."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "PATCH":
                 return httpx.Response(200, json={"state": "canceled"})
@@ -2885,9 +2887,7 @@ class TestPulpFileClient:
         assert "cancellation requested in Pulp" in str(exc_info.value)
 
     @patch("slan_cuan.pulp_tasks.time.sleep")
-    def test_poll_task_exceeds_max_total_timeout(
-        self, mock_sleep: Mock
-    ) -> None:
+    def test_poll_task_exceeds_max_total_timeout(self, mock_sleep: Mock) -> None:
         """Wall-clock ceiling terminates polling despite blocker changes."""
         counter = 0
 
@@ -2948,3 +2948,172 @@ class TestPulpFileClient:
         assert all(0.1 <= s <= 5.0 for s in samples)
         # Verify samples are varied (jittered), not all identical to 5.0
         assert len(set(samples)) > 1
+
+
+class TestCustomHeaders:
+    """Tests for custom HTTP headers and profiling support."""
+
+    def test_parse_custom_headers_empty(self) -> None:
+        """Empty, None, or whitespace returns empty dict."""
+        assert parse_custom_headers(None) == {}
+        assert parse_custom_headers("") == {}
+        assert parse_custom_headers("   ") == {}
+
+    def test_parse_custom_headers_crlf_and_newlines(self) -> None:
+        """CRLF and newline delimiters preserve spaces and commas in values."""
+        raw = (
+            "# Comment line\r\n"
+            "X-TASK-DIAGNOSTICS: pyinstrument,memory\r\n"
+            "Authorization: Bearer my secret token; version=1\n"
+            "Correlation-ID=test-123\n"
+        )
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "pyinstrument,memory",
+            "Authorization": "Bearer my secret token; version=1",
+            "Correlation-ID": "test-123",
+        }
+
+    def test_parse_custom_headers_escaped_newlines(self) -> None:
+        r"""Literal escaped \n and \r\n in strings are supported."""
+        raw = "X-Foo: bar\\r\\nX-Baz: qux,123; test\\nCorrelation-ID=cid"
+        assert parse_custom_headers(raw) == {
+            "X-Foo": "bar",
+            "X-Baz": "qux,123; test",
+            "Correlation-ID": "cid",
+        }
+
+    def test_parse_custom_headers_colon_style(self) -> None:
+        """Single-line HTTP-style Key: Value is supported."""
+        raw = "X-TASK-DIAGNOSTICS: pyinstrument,memory"
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "pyinstrument,memory",
+        }
+
+    def test_parse_custom_headers_json(self) -> None:
+        """Valid JSON objects are parsed into dict."""
+        raw = '{"X-TASK-DIAGNOSTICS": "memray", "Correlation-ID": "cid-789"}'
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "memray",
+            "Correlation-ID": "cid-789",
+        }
+
+    def test_parse_custom_headers_single_line_equals(self) -> None:
+        """Single-line Key=Value is supported."""
+        raw = "X-TASK-DIAGNOSTICS=pyinstrument,memory"
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "pyinstrument,memory"
+        }
+
+    def test_modify_repository_sends_custom_headers(self) -> None:
+        """modify_repository attaches custom_headers to the POST request."""
+        captured_headers: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_headers
+            if request.method == "POST" and "modify" in request.url.path:
+                captured_headers = dict(request.headers)
+                return httpx.Response(
+                    200, json={"task": "/api/v3/tasks/modify-uuid/"}
+                )
+            if request.method == "GET" and "modify-uuid" in request.url.path:
+                return httpx.Response(
+                    200,
+                    json={
+                        "state": "completed",
+                        "created_resources": ["/api/v3/versions/1/"],
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            custom_headers={"X-TASK-DIAGNOSTICS": "pyinstrument"},
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.modify_repository(
+            "/api/v3/repositories/maven/maven/uuid/",
+            ["/api/v3/content/maven/artifact/1/"],
+        )
+
+        assert result.repository_version == "/api/v3/versions/1/"
+        assert captured_headers.get("x-task-diagnostics") == "pyinstrument"
+
+    def test_poll_task_logs_profile_artifact_nested(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """poll_task logs profiler links from nested structures."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "state": "completed",
+                    "created_resources": [],
+                    "extra_data": {
+                        "pyinstrument_profile": "/pulp/nested/profile.html"
+                    },
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            custom_headers={"X-TASK-DIAGNOSTICS": "pyinstrument"},
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        task_data = client.poll_task("/api/v3/tasks/task-uuid/")
+        assert task_data["state"] == "completed"
+
+        captured = capsys.readouterr()
+        assert (
+            "Pulp task profile (pyinstrument_profile): /pulp/nested/profile.html"
+            in captured.out
+        )
+
+    def test_request_logging_sanitizes_sensitive_headers(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Verbose request logging sanitizes sensitive header values."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            verbose=True,
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client._request(
+            "GET",
+            "/api/v3/status/",
+            "Status",
+            headers={"Authorization": "Bearer secret123", "X-Custom": "public"},
+        )
+
+        captured = capsys.readouterr()
+        assert "Authorization': '***'" in captured.out
+        assert "secret123" not in captured.out
+        assert "X-Custom': 'public'" in captured.out
