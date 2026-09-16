@@ -621,6 +621,40 @@ def test_publish_pulp_error_handling(
 
 
 @patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_503_is_reported_and_skipped(
+    mock_client_cls: Mock, tmp_path: Path
+) -> None:
+    """A recoverable upload 503 is reported while other artifacts continue."""
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    mock_client = _make_ctx_mock()
+    mock_client_cls.return_value = mock_client
+    mock_client.upload_content.side_effect = PulpError(
+        message="Metadata upload failed", status_code=503, response_body=""
+    )
+    mock_client.resolve_repository.return_value = _REPO_HREF
+    mock_client.modify_repository.return_value = ModifyResult(
+        task_href="/task/1/",
+        state="completed",
+        repository_version="v1",
+        content_units_added=0,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["publish", "--pulp-url", "https://pulp.example.com",
+         "--pulp-repository", "test-repo", "--artifact-dir", str(artifact_dir),
+         "--pulp-domain", "lightwell", "--pulp-username", "testuser",
+         "--pulp-password", "testpass"],
+    )
+
+    assert result.exit_code == 0
+    assert "recoverable HTTP 503" in result.output
+    assert "skipping" not in result.output
+    assert "0 artifact(s) uploaded" in result.output
+
+
+@patch("slan_cuan.publish.PulpMavenClient")
 def test_publish_pulp_error_includes_response_body(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:

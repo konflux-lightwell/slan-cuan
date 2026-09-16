@@ -543,7 +543,18 @@ def publish(
                 }
 
                 for future in as_completed(future_to_artifact):
-                    content_unit = future.result()
+                    artifact = future_to_artifact[future]
+                    try:
+                        content_unit = future.result()
+                    except PulpError as e:
+                        if e.status_code != 503:
+                            raise
+                        click.echo(
+                            f"Warning: Pulp returned recoverable HTTP 503 for "
+                            f"{artifact.relative_path}; continuing with the "
+                            "publish loop."
+                        )
+                        continue
                     content_unit_hrefs.append(content_unit.pulp_href)
                     uploaded += 1
 
