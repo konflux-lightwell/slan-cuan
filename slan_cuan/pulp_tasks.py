@@ -83,6 +83,39 @@ class PulpTaskPoller:
         self.current_waiting_on: BlockerLookup | None = None
         self.last_response_text = ""
 
+    def _log_task_profile(self, task_data: dict[str, object]) -> None:
+        """Log profiling artifacts if configured or verbose."""
+        cfg = self._client._config
+        if not (cfg.verbose or cfg.custom_headers):
+            return
+
+        # Check top-level keys as well as nested extra_data or profile dicts
+        sources = [task_data]
+        for nested_key in (
+            "extra_data",
+            "profile_artifacts",
+            "profile_artifact_urls",
+        ):
+            nested = task_data.get(nested_key)
+            if isinstance(nested, dict):
+                sources.append(nested)
+
+        logged = set()
+        for src in sources:
+            for key in (
+                "profile_artifact",
+                "pyinstrument_profile",
+                "memory_profile",
+                "memray_profile",
+                "profiling_artifact",
+            ):
+                val = src.get(key)
+                if val and key not in logged:
+                    logged.add(key)
+                    click.echo(
+                        f"[{_utc_timestamp()}]  Pulp task profile ({key}): {val}"
+                    )
+
     def _transition_to(
         self,
         new_state: str,
@@ -166,6 +199,7 @@ class PulpTaskPoller:
                             f"[{_utc_timestamp()}]  Pulp task completed: "
                             f"{self.task_href} (created_resources={created})"
                         )
+                    self._log_task_profile(fresh_data)
                     return fresh_data
 
                 fresh_waiting_on = (
@@ -179,9 +213,7 @@ class PulpTaskPoller:
                     and self.current_state
                     and fresh_state != self.current_state
                 ):
-                    self._transition_to(
-                        fresh_state, fresh_waiting_on, fresh_text
-                    )
+                    self._transition_to(fresh_state, fresh_waiting_on, fresh_text)
                     continue
 
                 if (
@@ -230,9 +262,7 @@ class PulpTaskPoller:
                 )
 
                 if self.current_state and new_state != self.current_state:
-                    self._transition_to(
-                        new_state, new_waiting_on, response.text
-                    )
+                    self._transition_to(new_state, new_waiting_on, response.text)
                 elif (
                     self.current_state == "waiting"
                     and new_state == "waiting"
@@ -255,6 +285,7 @@ class PulpTaskPoller:
                             f"[{_utc_timestamp()}]  Pulp task completed: "
                             f"{self.task_href} (created_resources={created})"
                         )
+                    self._log_task_profile(task_data)
                     return task_data
                 if new_state in ("failed", "canceled"):
                     error_details = task_data.get("error", {})
@@ -299,4 +330,3 @@ class PulpTaskPoller:
                 TASK_POLL_MAX_INTERVAL_SECONDS,
                 self.current_interval * TASK_POLL_BACKOFF_FACTOR,
             )
-
