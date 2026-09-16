@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import ssl
-import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -20,6 +19,12 @@ from slan_cuan.http import (
     create_ssl_context,
     parse_json_dict,
     request,
+)
+from slan_cuan.pulp_tasks import (
+    TASK_POLL_TIMEOUT_SECONDS,
+    BlockerLookup,
+    BlockerLookupStatus,
+    PulpTaskPoller,
 )
 
 # Content API URL path templates
@@ -42,12 +47,13 @@ FILE_DISTRIBUTION_API_PATH_TEMPLATE = (
 )
 
 # Task polling configuration
-TASK_POLL_INITIAL_INTERVAL_SECONDS = 2.0
-TASK_POLL_MAX_INTERVAL_SECONDS = 15.0
-TASK_POLL_BACKOFF_FACTOR = 1.5
-TASK_POLL_JITTER_FACTOR = 0.2
-TASK_POLL_TIMEOUT_SECONDS = 1800.0
 TASK_CANCEL_TIMEOUT_SECONDS = 15.0
+
+
+def _utc_timestamp() -> str:
+    """Return current UTC timestamp in ISO-8601 format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 # HTTP client and error handling constants
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -71,6 +77,7 @@ class PulpConfig:
     client_cert: Path | None = None
     client_key: Path | None = None
     task_timeout: float = TASK_POLL_TIMEOUT_SECONDS
+    max_total_task_timeout: float | None = None
     verbose: bool = False
 
 
@@ -245,7 +252,9 @@ class _PulpClientBase:
             if "files" in kwargs and kwargs["files"]:
                 details.append(f"files={list(kwargs['files'].keys())}")
             payload_str = f" [{', '.join(details)}]" if details else ""
-            click.echo(f"  Pulp request: {method} {url}{payload_str}")
+            click.echo(
+                f"[{_utc_timestamp()}]  Pulp request: {method} {url}{payload_str}"
+            )
 
         response = request(
             self._client,
@@ -257,7 +266,29 @@ class _PulpClientBase:
         )
 
         if self._config.verbose:
-            click.echo(f"  Pulp response: {response.status_code}")
+            details = []
+            try:
+                data = response.json()
+                if isinstance(data, dict):
+                    if "task" in data:
+                        details.append(f"task={data['task']}")
+                    elif operation != "Blocker task lookup":
+                        state = data.get("state")
+                        if state:
+                            details.append(f"state={state}")
+                            if state == "waiting":
+                                waiting_on = self._find_blocking_task(data)
+                                if waiting_on.href:
+                                    details.append(
+                                        f"waiting_on={waiting_on.href}"
+                                    )
+            except Exception:
+                pass
+            extra = f" [{', '.join(details)}]" if details else ""
+            click.echo(
+                f"[{_utc_timestamp()}]  Pulp response: "
+                f"{response.status_code}{extra}"
+            )
 
         return response
 
@@ -300,137 +331,223 @@ class _PulpClientBase:
                 click.echo(f"  Failed to cancel task {task_href}: {e}")
             return f"cancellation attempt failed: {e}"
 
+    def _find_blocking_task(
+        self, task_data: dict[str, object] | None
+    ) -> BlockerLookup:
+        """Find the task that a waiting task is waiting on.
+
+        Checks:
+        1. Explicit parent task if set on task_data.
+        2. Any active (running) task reserving the same resources.
+        3. An earlier task in 'waiting' state that is ahead in queue for the
+           same resources.
+
+        Returns:
+            Blocker identity with FOUND, NOT_FOUND, or UNKNOWN status.
+
+        """
+        if not task_data or not isinstance(task_data, dict):
+            return BlockerLookup(None, BlockerLookupStatus.UNKNOWN)
+
+        if "_cached_waiting_on" in task_data:
+            cached = task_data["_cached_waiting_on"]
+            return BlockerLookup(
+                str(cached) if cached is not None else None,
+                BlockerLookupStatus(
+                    str(task_data.get("_cached_waiting_status", "unknown"))
+                ),
+            )
+
+        blocker: str | None = None
+        lookup_failed = False
+
+        # 1. Direct parent task
+        parent = task_data.get("parent_task")
+        if parent and isinstance(parent, str):
+            blocker = parent
+        else:
+            # 2. Check reserved resources
+            resources = task_data.get("reserved_resources_record")
+            current_task_href = str(task_data.get("pulp_href") or "")
+            if isinstance(resources, list) and resources:
+                if current_task_href and "/tasks/" in current_task_href:
+                    tasks_base = (
+                        current_task_href.split("/tasks/")[0] + "/tasks/"
+                    )
+                else:
+                    domain = self._config.domain
+                    tasks_base = (
+                        f"/api/pulp/{domain}/api/v3/tasks/"
+                        if domain
+                        else "/api/v3/tasks/"
+                    )
+
+                res_filter = ",".join(str(r) for r in resources)
+
+                try:
+                    res = self._request(
+                        "GET",
+                        tasks_base,
+                        "Blocker task lookup",
+                        params={
+                            "reserved_resources__in": res_filter,
+                            "state": "running",
+                            "limit": 1,
+                        },
+                        timeout=10.0,
+                    )
+                    data = res.json()
+                    if isinstance(data, dict):
+                        results = data.get("results", [])
+                        if results and isinstance(results, list):
+                            candidate = results[0].get("pulp_href")
+                            if (
+                                candidate
+                                and candidate != current_task_href
+                            ):
+                                blocker = str(candidate)
+                except Exception:
+                    lookup_failed = True
+
+                # If no running blocker found, check earlier waiting tasks
+                if not blocker:
+                    pulp_created = task_data.get("pulp_created")
+                    params: dict[str, Any] = {
+                        "reserved_resources__in": res_filter,
+                        "state": "waiting",
+                        "ordering": "pulp_created",
+                        "limit": 2,
+                    }
+                    if pulp_created and isinstance(pulp_created, str):
+                        params["pulp_created__lt"] = pulp_created
+
+                    try:
+                        res = self._request(
+                            "GET",
+                            tasks_base,
+                            "Blocker task lookup",
+                            params=params,
+                            timeout=10.0,
+                        )
+                        data = res.json()
+                        if isinstance(data, dict):
+                            results = data.get("results", [])
+                            if results and isinstance(results, list):
+                                for item in results:
+                                    candidate = item.get("pulp_href")
+                                    if (
+                                        candidate
+                                        and candidate != current_task_href
+                                    ):
+                                        blocker = str(candidate)
+                                        break
+                    except Exception:
+                        lookup_failed = True
+
+        status = (
+            BlockerLookupStatus.FOUND
+            if blocker is not None
+            else (
+                BlockerLookupStatus.UNKNOWN
+                if lookup_failed
+                else BlockerLookupStatus.NOT_FOUND
+            )
+        )
+        task_data["_cached_waiting_on"] = blocker
+        task_data["_cached_waiting_status"] = status.value
+        return BlockerLookup(blocker, status)
+
     def _handle_timeout(
         self,
         task_href: str,
         timeout: float,
         state: str,
         response_text: str,
+        waiting_on: BlockerLookup | None = None,
+        is_total_timeout: bool = False,
     ) -> None:
-        """Handle timeout by attempting cancellation and raising PulpError."""
+        """Handle timeout by canceling if waiting and raising PulpError."""
         canceled_note = ""
-        if state not in ("completed", "failed", "canceled"):
+        if state == "waiting":
             outcome = self.cancel_task(task_href)
             canceled_note = f" ({outcome})"
-        msg = (
-            f"Task polling timed out after {timeout}s "
-            f"(state: {state}){canceled_note}"
-        )
+        elif state not in ("completed", "failed", "canceled"):
+            canceled_note = f" (cancellation skipped: task state is {state})"
+        state_str = state
+        if state == "waiting" and waiting_on and waiting_on.href:
+            state_str = f"waiting, waiting on: {waiting_on.href}"
+        if is_total_timeout:
+            prefix = (
+                f"Task polling exceeded maximum total wall-clock time "
+                f"of {timeout}s"
+            )
+        else:
+            prefix = f"Task polling timed out after {timeout}s"
+        msg = f"{prefix} (state: {state_str}){canceled_note}"
         raise PulpError(
             msg,
             status_code=0,
             response_body=response_text,
         )
 
+    def _check_task_status(
+        self,
+        task_href: str,
+        req_timeout: float,
+    ) -> tuple[dict[str, object], str, str]:
+        """Fetch and parse current task status.
+
+        Returns:
+            Tuple of (task_data, state, raw_response_text).
+
+        """
+        response = self._request(
+            "GET",
+            task_href,
+            "Task polling",
+            timeout=req_timeout,
+        )
+        task_data = parse_json_dict(response, "Task", PulpError)
+        state = str(task_data.get("state", ""))
+        return task_data, state, response.text
+
     def poll_task(
         self,
         task_href: str,
         timeout: float | None = None,
+        max_total_timeout: float | None = None,
     ) -> dict[str, object]:
         """Poll a Pulp task until completion or timeout.
 
         Applies exponential backoff with random jitter between poll attempts.
-        If timeout is exceeded, attempts to cancel the task in Pulp before
-        raising PulpError.
+        Resets wait deadline on state transitions and blocker changes, subject
+        to an absolute total wall-clock ceiling. If timeout is exceeded,
+        attempts to cancel the task in Pulp before raising PulpError.
 
         Args:
             task_href: The task href returned from an async operation.
-            timeout: Maximum time to wait in seconds (defaults to
+            timeout: Maximum time to wait in seconds per state (defaults to
                 config.task_timeout).
+            max_total_timeout: Absolute maximum wall-clock time in seconds
+                across all state transitions. Defaults to 2 * timeout.
 
         Returns:
             The completed task response as a dict.
 
         Raises:
             PulpError: If the task fails, is canceled, or times out.
-            ValueError: If timeout is not positive.
+            ValueError: If timeout or max_total_timeout is not positive.
 
         """
-        if timeout is None:
-            timeout = self._config.task_timeout
-        if timeout <= 0:
-            raise ValueError(f"timeout must be positive, got {timeout}")
+        poller = PulpTaskPoller(
+            client=self,
+            task_href=task_href,
+            timeout=timeout,
+            max_total_timeout=max_total_timeout,
+            error_cls=PulpError,
+        )
+        return poller.poll()
 
-        start = time.monotonic()
-        deadline = start + timeout
-        current_interval = TASK_POLL_INITIAL_INTERVAL_SECONDS
-        state = ""
-        last_response_text = ""
-
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._handle_timeout(
-                    task_href, timeout, state, last_response_text
-                )
-
-            req_timeout = min(DEFAULT_TIMEOUT_SECONDS, max(1.0, remaining))
-            response = self._request(
-                "GET",
-                task_href,
-                "Task polling",
-                timeout=req_timeout,
-            )
-            last_response_text = response.text
-
-            try:
-                task_data = parse_json_dict(response, "Task", PulpError)
-                state = str(task_data.get("state", ""))
-                if state == "completed":
-                    if self._config.verbose:
-                        created = task_data.get("created_resources", [])
-                        click.echo(
-                            f"  Pulp task completed: {task_href} "
-                            f"(created_resources={created})"
-                        )
-                    return task_data
-                if state in ("failed", "canceled"):
-                    error_details = task_data.get("error", {})
-                    error_msg = str(
-                        error_details.get("description", state)
-                        if isinstance(error_details, dict)
-                        else state
-                    )
-                    traceback_str = (
-                        str(error_details.get("traceback", "")).strip()
-                        if isinstance(error_details, dict)
-                        else ""
-                    )
-                    parts = [f"Task {state}: {error_msg}"]
-                    if traceback_str:
-                        parts.append(f"Traceback:\n{traceback_str}")
-                    parts.append(f"Task: {task_href}")
-                    raise PulpError(
-                        "\n".join(parts),
-                        status_code=response.status_code,
-                        response_body=response.text,
-                    )
-
-            except (ValueError, KeyError) as e:
-                raise PulpError(
-                    f"Failed to parse task response: {e}",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                ) from e
-
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._handle_timeout(
-                    task_href, timeout, state, last_response_text
-                )
-
-            jitter = current_interval * TASK_POLL_JITTER_FACTOR
-            sleep_time = random.uniform(
-                max(0.1, current_interval - jitter),
-                current_interval + jitter,
-            )
-            sleep_time = min(sleep_time, remaining)
-            time.sleep(sleep_time)
-
-            current_interval = min(
-                TASK_POLL_MAX_INTERVAL_SECONDS,
-                current_interval * TASK_POLL_BACKOFF_FACTOR,
-            )
 
     def modify_repository(
         self,
@@ -464,7 +581,7 @@ class _PulpClientBase:
             response_data = parse_json_dict(response, "Modify", PulpError)
             task_href = str(response_data["task"])
             if self._config.verbose:
-                click.echo(f"  Pulp task queued: {task_href}")
+                click.echo(f"[{_utc_timestamp()}]  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse modify response: {e}",
@@ -804,7 +921,9 @@ class PulpFileClient(_PulpClientBase):
             if "task" in response_data:
                 task_href = str(response_data["task"])
                 if self._config.verbose:
-                    click.echo(f"  Pulp task queued: {task_href}")
+                    click.echo(
+                        f"[{_utc_timestamp()}]  Pulp task queued: {task_href}"
+                    )
                 task_data = self.poll_task(task_href)
                 created = task_data.get("created_resources", [])
                 if not isinstance(created, list) or not created:
@@ -876,7 +995,7 @@ class PulpFileClient(_PulpClientBase):
             response_data = parse_json_dict(response, "Publication", PulpError)
             task_href = str(response_data["task"])
             if self._config.verbose:
-                click.echo(f"  Pulp task queued: {task_href}")
+                click.echo(f"[{_utc_timestamp()}]  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse publication response: {e}",
@@ -974,7 +1093,7 @@ class PulpFileClient(_PulpClientBase):
             )
             task_href = str(response_data["task"])
             if self._config.verbose:
-                click.echo(f"  Pulp task queued: {task_href}")
+                click.echo(f"[{_utc_timestamp()}]  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse distribution update response: {e}",

@@ -81,6 +81,12 @@ spec:
       description: Maximum time in seconds to wait for asynchronous Pulp tasks.
       type: string
       default: "1800"
+    - name: PULP_MAX_TOTAL_TASK_TIMEOUT
+      description: >-
+        Absolute maximum time in seconds across all Pulp task state and
+        blocker timeout resets. Defaults to twice PULP_TASK_TIMEOUT.
+      type: string
+      default: ""
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
@@ -191,6 +197,8 @@ spec:
           value: $(params.PULP_FILE_REPOSITORY)
         - name: SLAN_CUAN_PUBLISH_PULP_TASK_TIMEOUT
           value: $(params.PULP_TASK_TIMEOUT)
+        - name: SLAN_CUAN_PUBLISH_PULP_MAX_TOTAL_TASK_TIMEOUT
+          value: $(params.PULP_MAX_TOTAL_TASK_TIMEOUT)
         - name: SLAN_CUAN_PUBLISH_PULP_USERNAME
           valueFrom:
             secretKeyRef:
