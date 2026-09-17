@@ -185,11 +185,13 @@ def _classify_osv_source(file_path: Path) -> str | None:
     if not isinstance(record, dict):
         return None
 
-    source = (
-        record.get("database_specific", {}).get("lightwell", {}).get("source")
-        if isinstance(record.get("database_specific"), dict)
+    database_specific = record.get("database_specific")
+    lightwell = (
+        database_specific.get("lightwell")
+        if isinstance(database_specific, dict)
         else None
     )
+    source = lightwell.get("source") if isinstance(lightwell, dict) else None
     if source in ("pnc-build", "novel-pipeline"):
         return source
 
