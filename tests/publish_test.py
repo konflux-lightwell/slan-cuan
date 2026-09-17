@@ -70,6 +70,7 @@ def create_test_artifact_dir(
     include_metadata: bool = False,
     include_security_metadata: bool = False,
     gav_index_vulns: list[str] | None = None,
+    osv_records: list[tuple[str, str]] | None = None,
 ) -> Path:
     """Create a directory that mimics the extract stage output."""
     deliverable_dir = base_dir / "TEST-build-output"
@@ -97,16 +98,36 @@ def create_test_artifact_dir(
     if include_security_metadata:
         sec_dir = deliverable_dir / "security_metadata"
         sec_dir.mkdir(parents=True, exist_ok=True)
-        metadata_vulns = vulns or ["CVE-2026-1234"]
-        (sec_dir / "gav-index.osv.json").write_text(
-            json.dumps(
-                {
-                    "id": "OSV-1",
-                    "aliases": metadata_vulns,
-                    "affected": [{"package": {"name": "example"}}],
-                }
+        if osv_records is not None:
+            # (cve_id, source) -> one OSV file per record, matching gav-index.
+            aliases = []
+            for cve_id, source in osv_records:
+                osv_id = f"x_RHLW-{cve_id}-1.0.0"
+                (sec_dir / f"{osv_id}.json").write_text(
+                    json.dumps(
+                        {
+                            "id": osv_id,
+                            "aliases": [cve_id],
+                            "affected": [{"package": {"name": "example"}}],
+                            "database_specific": {
+                                "lightwell": {"source": source}
+                            },
+                        }
+                    )
+                )
+                aliases.append(cve_id)
+            metadata_vulns = aliases
+        else:
+            metadata_vulns = vulns or ["CVE-2026-1234"]
+            (sec_dir / "gav-index.osv.json").write_text(
+                json.dumps(
+                    {
+                        "id": "OSV-1",
+                        "aliases": metadata_vulns,
+                        "affected": [{"package": {"name": "example"}}],
+                    }
+                )
             )
-        )
         vulns = metadata_vulns
         security_metadata_dir = "TEST-build-output/security_metadata"
 
@@ -2632,7 +2653,10 @@ def test_publish_preflights_file_repo_before_maven_mutation(
         "Unable to verify the required OSV publication repository"
         in result.output
     )
-    assert "test-file-repo" not in result.output
+    # The raw Pulp error message must not leak; the repo name may still
+    # appear via the (unrelated) unrecognized-repo type-filtering warning,
+    # since "test-file-repo" matches neither the backport nor novel pattern.
+    assert "File repository 'test-file-repo' not found" not in result.output
     mock_file.resolve_repository.assert_called_once_with("test-file-repo")
     mock_maven.upload_content.assert_not_called()
     mock_maven.modify_repository.assert_not_called()
@@ -2964,3 +2988,207 @@ def test_classify_osv_source_unclassifiable(tmp_path: Path) -> None:
     f = tmp_path / "mystery.json"
     f.write_text(json.dumps({"id": "not-an-osv-id"}))
     assert _classify_osv_source(f) is None
+
+
+def _setup_file_client(mock_file: Mock) -> None:
+    """Configure mock file client with upload/publication/distribution."""
+    mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
+    mock_file.resolve_repository.return_value = _FILE_REPO_HREF
+    mock_file.modify_repository.return_value = _FILE_MODIFY_RESULT
+    mock_file.create_publication.return_value = _FILE_PUB_HREF
+    mock_file.resolve_distribution.return_value = _FILE_DIST_HREF
+    mock_file.update_distribution.return_value = None
+
+
+def _run_publish_with_file_repo(artifact_dir: Path, file_repo: str) -> object:
+    """Invoke the publish command against a Pulp File repository."""
+    runner = CliRunner()
+    return runner.invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            file_repo,
+        ],
+    )
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_novel_repo_skips_cve_records(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """Novel repo keeps x_RHLW-LW-* and warns-and-skips x_RHLW-CVE-*."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = _run_publish_with_file_repo(artifact_dir, "osv-java-novel")
+
+    assert result.exit_code == 0, result.output
+    # Only the novel record uploaded.
+    assert mock_file.upload_content.call_count == 1
+    uploaded_name = mock_file.upload_content.call_args.kwargs["relative_path"]
+    assert uploaded_name.startswith("x_RHLW-LW-")
+    assert "Warning: skipping OSV record x_RHLW-CVE-2025-48924" in result.output
+    assert "Security metadata: 1 file(s) uploaded" in result.output
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_backport_repo_skips_novel_records(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """Backport repo keeps x_RHLW-CVE-* and warns-and-skips x_RHLW-LW-*."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = _run_publish_with_file_repo(artifact_dir, "osv-java-backport")
+
+    assert result.exit_code == 0, result.output
+    assert mock_file.upload_content.call_count == 1
+    uploaded_name = mock_file.upload_content.call_args.kwargs["relative_path"]
+    assert uploaded_name.startswith("x_RHLW-CVE-")
+    assert "Warning: skipping OSV record x_RHLW-LW-2026-0087" in result.output
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_unrecognized_repo_uploads_all(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """Unrecognized repo name uploads every record (legacy) with a warning."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = _run_publish_with_file_repo(artifact_dir, "some-other-file-repo")
+
+    assert result.exit_code == 0, result.output
+    assert mock_file.upload_content.call_count == 2
+    assert "not a recognized" in result.output
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_all_records_skipped_no_publication(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """When every record is filtered out, no publication/distribution runs."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[("CVE-2025-48924", "pnc-build")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    # Novel repo, only a CVE record present -> all skipped.
+    result = _run_publish_with_file_repo(artifact_dir, "osv-java-novel")
+
+    assert result.exit_code == 0, result.output
+    assert mock_file.upload_content.call_count == 0
+    mock_file.create_publication.assert_not_called()
+    mock_file.update_distribution.assert_not_called()
+
+
+@patch("slan_cuan.publish.PulpFileClient")
+@patch("slan_cuan.publish.PulpMavenClient")
+def test_publish_writes_security_metadata_skipped_tekton_result(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """SECURITY_METADATA_SKIPPED Tekton result reflects the filtered count."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    results_dir = tmp_path / "tekton-results"
+    results_dir.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv-java-novel",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (results_dir / "SECURITY_METADATA_SKIPPED").read_text() == "1"
+    assert (results_dir / "SECURITY_METADATA_UPLOADED").read_text() == "1"

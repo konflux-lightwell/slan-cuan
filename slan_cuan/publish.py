@@ -477,6 +477,40 @@ def publish(
                 "--pulp-file-repository is required for OSV publication."
             )
 
+        expected_source = (
+            _expected_source_for_repo(pulp_file_repository)
+            if pulp_file_repository
+            else None
+        )
+        if not security_metadata_files or expected_source is None:
+            uploadable_metadata = security_metadata_files
+            skipped_metadata: tuple[Path, ...] = ()
+            if security_metadata_files and pulp_file_repository:
+                click.echo(
+                    f"Warning: OSV repository '{pulp_file_repository}' is not "
+                    f"a recognized backport/novel repository; uploading all "
+                    f"{len(security_metadata_files)} record(s) without type "
+                    f"filtering."
+                )
+        else:
+            kept: list[Path] = []
+            dropped: list[Path] = []
+            for metadata_file in security_metadata_files:
+                record_source = _classify_osv_source(metadata_file)
+                if record_source == expected_source:
+                    kept.append(metadata_file)
+                else:
+                    dropped.append(metadata_file)
+                    click.echo(
+                        f"Warning: skipping OSV record {metadata_file.name} "
+                        f"(source={record_source or 'unknown'}); it does not "
+                        f"belong in the {expected_source} repository "
+                        f"'{pulp_file_repository}'."
+                    )
+            uploadable_metadata = tuple(kept)
+            skipped_metadata = tuple(dropped)
+        file_skipped = len(skipped_metadata)
+
         if ctx.dry_run:
             click.echo(f"Distribution: {pulp_repository}")
             click.echo(f"Pulp URL: {pulp_url}")
@@ -486,12 +520,16 @@ def publish(
             click.echo(f"Upload workers: {upload_workers}")
             for artifact in build.artifacts:
                 click.echo(f"  {artifact.relative_path}")
-            if security_metadata_files:
+            if uploadable_metadata:
                 click.echo(
-                    f"Security metadata: {len(security_metadata_files)} file(s)"
+                    f"Security metadata: {len(uploadable_metadata)} file(s)"
                 )
-                for f in security_metadata_files:
+                for f in uploadable_metadata:
                     click.echo(f"  {f.name}")
+            if file_skipped:
+                click.echo(
+                    f"Security metadata skipped (wrong type): {file_skipped}"
+                )
             click.echo(
                 f"\ndry-run: would upload "
                 f"{len(build.artifacts)} artifact(s) "
@@ -640,7 +678,7 @@ def publish(
 
             if file_client and file_repo_href:
                 try:
-                    for file_path in security_metadata_files:
+                    for file_path in uploadable_metadata:
                         sha256 = hashlib.sha256(
                             file_path.read_bytes()
                         ).hexdigest()
@@ -678,6 +716,7 @@ def publish(
             pulp_labels=pulp_labels,
             file_repository=pulp_file_repository if file_uploaded else None,
             security_metadata_uploaded=file_uploaded,
+            security_metadata_skipped=file_skipped,
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
@@ -708,6 +747,11 @@ def publish(
             ctx.tekton_results_dir,
             "SECURITY_METADATA_UPLOADED",
             str(file_uploaded),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "SECURITY_METADATA_SKIPPED",
+            str(file_skipped),
         )
 
         click.echo(
