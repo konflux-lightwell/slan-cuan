@@ -1329,3 +1329,25 @@ class TestPublishResult:
         assert loaded.pulp_labels is None
         assert loaded.pulp_url == "https://pulp.example.com"
         assert loaded.artifacts_uploaded == 5
+
+    def test_publish_result_round_trips_security_metadata_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        """save() and from_file() round-trip security_metadata_skipped."""
+        from slan_cuan.models import PublishResult
+
+        result = PublishResult(
+            pulp_url="https://pulp.example.com",
+            distribution="test-repo",
+            artifacts_uploaded=1,
+            artifacts_skipped=0,
+            coordinates=(),
+            published_at="2026-09-17T00:00:00+00:00",
+            security_metadata_uploaded=2,
+            security_metadata_skipped=3,
+        )
+        path = tmp_path / "publish-result.json"
+        result.save(path)
+
+        reloaded = PublishResult.from_file(path)
+        assert reloaded.security_metadata_skipped == 3
