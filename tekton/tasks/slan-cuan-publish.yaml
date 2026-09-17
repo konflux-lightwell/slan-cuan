@@ -139,6 +139,10 @@ spec:
         OCI reference) attached to each Pulp content unit.
     - name: SECURITY_METADATA_UPLOADED
       description: Number of security metadata files uploaded to the Pulp File repository.
+    - name: SECURITY_METADATA_SKIPPED
+      description: >-
+        Number of security metadata files skipped because their OSV record type
+        did not match the target Pulp File repository.
   stepTemplate:
     volumeMounts:
       - mountPath: /var/workdir
