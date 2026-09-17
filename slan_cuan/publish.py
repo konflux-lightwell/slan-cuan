@@ -147,6 +147,15 @@ def _expected_source_for_repo(repo_name: str) -> str | None:
     Returns ``"pnc-build"`` for backport repos, ``"novel-pipeline"`` for novel
     repos, or ``None`` when the name matches neither (routing is then skipped
     and all records upload, preserving legacy behavior).
+
+    NOTE: this inference is name-based by design (it keeps the single
+    ``--pulp-file-repository`` interface with no new params/catalog/RPA
+    changes). It therefore depends on the repo name carrying the
+    ``backport``/``novel`` keyword. A future rename that drops the keyword
+    would fall back to the unrecognized-repo path (upload-all + a warning),
+    silently disabling filtering rather than erroring. This is safe for the
+    current inventory (``osv-java-backport``/``osv-java-novel``); revisit if
+    the naming scheme changes.
     """
     lowered = repo_name.lower()
     if "backport" in lowered:
@@ -495,6 +504,16 @@ def publish(
                     f"filtering."
                 )
         else:
+            # Mismatched records are dropped (warned, not errored) under the
+            # disjoint-repo model: each record type is published to its own
+            # stream by the RPA that owns it. A CVE OSV belongs to the backport
+            # stream, which publishes it independently; the copy riding along a
+            # novel-only release is therefore either redundant (already in the
+            # backport repo) or an orphan pointing at an artifact absent from
+            # the novel repo. Neither justifies writing it here, so a
+            # novel-only release that carried CVE backports correctly drops
+            # them rather than failing. (RPA composition ensuring CVEs reach
+            # the backport stream is out of scope for this task.)
             kept: list[Path] = []
             dropped: list[Path] = []
             for metadata_file in security_metadata_files:
