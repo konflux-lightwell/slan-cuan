@@ -138,6 +138,70 @@ def _load_security_metadata(
         )
 
 
+_OSV_ID_PREFIX = "x_RHLW-"
+
+
+def _expected_source_for_repo(repo_name: str) -> str | None:
+    """Infer the OSV record source a repo accepts from its name.
+
+    Returns ``"pnc-build"`` for backport repos, ``"novel-pipeline"`` for novel
+    repos, or ``None`` when the name matches neither (routing is then skipped
+    and all records upload, preserving legacy behavior).
+    """
+    lowered = repo_name.lower()
+    if "backport" in lowered:
+        return "pnc-build"
+    if "novel" in lowered:
+        return "novel-pipeline"
+    return None
+
+
+def _source_from_osv_id(osv_id: str) -> str | None:
+    """Classify an OSV id by its vulnerability-id prefix.
+
+    The id is ``x_RHLW-{cve_id}-{base_ver}``; strip the ``x_RHLW-`` prefix
+    first so the ``LW`` inside ``RHLW`` is never mistaken for a novel record.
+    """
+    if not osv_id.startswith(_OSV_ID_PREFIX):
+        return None
+    remainder = osv_id[len(_OSV_ID_PREFIX) :]
+    if remainder.startswith("CVE-"):
+        return "pnc-build"
+    if remainder.startswith("LW-"):
+        return "novel-pipeline"
+    return None
+
+
+def _classify_osv_source(file_path: Path) -> str | None:
+    """Determine an OSV record's source: authoritative field, then id prefix.
+
+    Returns ``"pnc-build"``, ``"novel-pipeline"``, or ``None`` when the record
+    cannot be classified (malformed, non-OSV, or an unrecognized id).
+    """
+    try:
+        record = json.loads(file_path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+
+    source = (
+        record.get("database_specific", {}).get("lightwell", {}).get("source")
+        if isinstance(record.get("database_specific"), dict)
+        else None
+    )
+    if source in ("pnc-build", "novel-pipeline"):
+        return source
+
+    osv_id = record.get("id")
+    if isinstance(osv_id, str) and osv_id:
+        by_id = _source_from_osv_id(osv_id)
+        if by_id is not None:
+            return by_id
+
+    return _source_from_osv_id(file_path.stem)
+
+
 def _list_entries(path: Path, recursive: bool = False) -> None:
     """List directory contents for diagnostics, capped."""
     try:
