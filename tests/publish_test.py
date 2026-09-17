@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from slan_cuan.cli import main
 from slan_cuan.pulp import ContentUnit, FileContentUnit, ModifyResult, PulpError
@@ -2990,6 +2990,15 @@ def test_classify_osv_source_unclassifiable(tmp_path: Path) -> None:
     assert _classify_osv_source(f) is None
 
 
+def test_classify_osv_source_non_dict_lightwell_is_none(tmp_path: Path) -> None:
+    """A non-dict ``lightwell`` value returns None, not AttributeError."""
+    from slan_cuan.publish import _classify_osv_source
+
+    f = tmp_path / "malformed.json"
+    f.write_text(json.dumps({"database_specific": {"lightwell": "oops"}}))
+    assert _classify_osv_source(f) is None
+
+
 def _setup_file_client(mock_file: Mock) -> None:
     """Configure mock file client with upload/publication/distribution."""
     mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
@@ -3000,7 +3009,7 @@ def _setup_file_client(mock_file: Mock) -> None:
     mock_file.update_distribution.return_value = None
 
 
-def _run_publish_with_file_repo(artifact_dir: Path, file_repo: str) -> object:
+def _run_publish_with_file_repo(artifact_dir: Path, file_repo: str) -> Result:
     """Invoke the publish command against a Pulp File repository."""
     runner = CliRunner()
     return runner.invoke(
