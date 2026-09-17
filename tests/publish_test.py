@@ -642,10 +642,21 @@ def test_publish_503_is_reported_and_skipped(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["publish", "--pulp-url", "https://pulp.example.com",
-         "--pulp-repository", "test-repo", "--artifact-dir", str(artifact_dir),
-         "--pulp-domain", "lightwell", "--pulp-username", "testuser",
-         "--pulp-password", "testpass"],
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
     )
 
     assert result.exit_code == 0
@@ -2885,3 +2896,71 @@ def test_publish_with_custom_headers_envvar(
     assert result.exit_code == 0
     config = mock_client_cls.call_args[0][0]
     assert config.custom_headers == {"X-TASK-DIAGNOSTICS": "memray"}
+
+
+def test_expected_source_for_repo_backport() -> None:
+    """Backport repo names map to the pnc-build source."""
+    from slan_cuan.publish import _expected_source_for_repo
+
+    assert _expected_source_for_repo("osv-java-backport") == "pnc-build"
+
+
+def test_expected_source_for_repo_novel() -> None:
+    """Novel repo names map to the novel-pipeline source."""
+    from slan_cuan.publish import _expected_source_for_repo
+
+    assert _expected_source_for_repo("osv-java-novel") == "novel-pipeline"
+
+
+def test_expected_source_for_repo_unrecognized() -> None:
+    """Unrecognized repo names return None (routing skipped)."""
+    from slan_cuan.publish import _expected_source_for_repo
+
+    assert _expected_source_for_repo("some-other-repo") is None
+
+
+def test_classify_osv_source_reads_source_field(tmp_path: Path) -> None:
+    """The authoritative database_specific.lightwell.source field wins."""
+    from slan_cuan.publish import _classify_osv_source
+
+    f = tmp_path / "x_RHLW-CVE-2025-48924-3.17.0.json"
+    f.write_text(
+        json.dumps(
+            {
+                "id": "x_RHLW-CVE-2025-48924-3.17.0",
+                "database_specific": {"lightwell": {"source": "pnc-build"}},
+            }
+        )
+    )
+    assert _classify_osv_source(f) == "pnc-build"
+
+
+def test_classify_osv_source_falls_back_to_id_prefix(tmp_path: Path) -> None:
+    """Without a source field, the id prefix drives classification.
+
+    Note the id contains "x_RHLW-" whose "LW" must not be mistaken for a
+    novel record.
+    """
+    from slan_cuan.publish import _classify_osv_source
+
+    f = tmp_path / "x_RHLW-CVE-2025-48924-3.17.0.json"
+    f.write_text(json.dumps({"id": "x_RHLW-CVE-2025-48924-3.17.0"}))
+    assert _classify_osv_source(f) == "pnc-build"
+
+
+def test_classify_osv_source_novel_id_prefix(tmp_path: Path) -> None:
+    """An LW- id prefix classifies as novel-pipeline."""
+    from slan_cuan.publish import _classify_osv_source
+
+    f = tmp_path / "x_RHLW-LW-2026-0087-4.5.12.json"
+    f.write_text(json.dumps({"id": "x_RHLW-LW-2026-0087-4.5.12"}))
+    assert _classify_osv_source(f) == "novel-pipeline"
+
+
+def test_classify_osv_source_unclassifiable(tmp_path: Path) -> None:
+    """A record with no recognizable id prefix is unclassifiable."""
+    from slan_cuan.publish import _classify_osv_source
+
+    f = tmp_path / "mystery.json"
+    f.write_text(json.dumps({"id": "not-an-osv-id"}))
+    assert _classify_osv_source(f) is None
