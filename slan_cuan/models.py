@@ -575,6 +575,7 @@ class PublishResult:
     pulp_labels: dict[str, str] | None = None
     file_repository: str | None = None
     security_metadata_uploaded: int = 0
+    security_metadata_skipped: int = 0
 
     def to_json(self) -> str:
         """Serialize to JSON string."""
@@ -612,6 +613,7 @@ class PublishResult:
         pulp_labels = data.get("pulp_labels")
         file_repository = data.get("file_repository")
         security_metadata_uploaded = data.get("security_metadata_uploaded", 0)
+        security_metadata_skipped = data.get("security_metadata_skipped", 0)
 
         return cls(
             pulp_url=data["pulp_url"],
@@ -625,6 +627,7 @@ class PublishResult:
             pulp_labels=pulp_labels,
             file_repository=file_repository,
             security_metadata_uploaded=security_metadata_uploaded,
+            security_metadata_skipped=security_metadata_skipped,
         )
 
 
