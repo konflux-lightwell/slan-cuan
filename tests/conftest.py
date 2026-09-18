@@ -3,14 +3,21 @@
 import sys
 from unittest.mock import MagicMock
 
-# Stub the novabucks package before any slan_cuan module is imported, so that
-# ``from novabucks.utils.logs import setup_logging`` and similar imports resolve
-# without the private dependency being installed.
-_novabucks = MagicMock()
-sys.modules.setdefault("novabucks", _novabucks)
-sys.modules.setdefault("novabucks.utils", _novabucks.utils)
-sys.modules.setdefault("novabucks.utils.logs", _novabucks.utils.logs)
-sys.modules.setdefault("novabucks.workflows", _novabucks.workflows)
+if "requests" not in sys.modules:
+    try:
+        import requests  # noqa: F401
+    except ImportError:
+        _requests = MagicMock()
+
+        class _RequestException(Exception):
+            pass
+
+        class _ConnectionError(_RequestException):
+            pass
+
+        _requests.exceptions.RequestException = _RequestException
+        _requests.exceptions.ConnectionError = _ConnectionError
+        sys.modules["requests"] = _requests
 
 _krbticket = MagicMock()
 sys.modules.setdefault("krbticket", _krbticket)

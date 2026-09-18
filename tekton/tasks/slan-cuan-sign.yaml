@@ -7,27 +7,20 @@ metadata:
     app.kubernetes.io/version: "0.1"
   annotations:
     tekton.dev/categories: Security
-    tekton.dev/displayName: "slan-cuan: Sign Artifacts (RADAS)"
+    tekton.dev/displayName: "slan-cuan: Sign Artifacts"
     tekton.dev/pipelines.minVersion: "0.50.0"
     tekton.dev/platforms: "linux/amd64"
     tekton.dev/tags: "release,maven,sign,security"
 spec:
   description: >-
-    Sign Java artifacts using RADAS (Red Hat Artifact Digital Authentication Service).
+    Sign Java artifacts using Konflux middleware-signing pipeline.
   params:
     - name: SIGN_REPO_URL
       description: Pullspec of image containing Maven repository.
       type: string
     - name: SIGNING_KEY
-      description: Signing key name for RADAS.
+      description: Signing key name.
       type: string
-    - name: RADAS_UMB_HOST
-      description: Host of the RADAS UMB service.
-      type: string
-    - name: RADAS_RECEIVER_TIMEOUT
-      description: Timeout for the RADAS receiver.
-      type: string
-      default: "3600"
     - name: REQUESTER_ID
       description: Requester identity for signing operations.
       type: string
@@ -49,7 +42,7 @@ spec:
     - name: DIRECT_SIGN
       description: Whether to sign the repository directly via internal-request pipeline.
       type: string
-      default: "false"
+      default: "true"
     - name: DIRECT_SIGN_PIPELINE_NAME
       description: The name of the internal-request pipeline to use for signing.
       type: string
@@ -101,17 +94,12 @@ spec:
     volumeMounts:
       - mountPath: /var/workdir
         name: workdir
-      - mountPath: /var/run/secrets/radas
-        name: mrrc-signing-ca-prod
       - name: trusted-ca
         mountPath: /mnt/trusted-ca
         readOnly: true
     securityContext:
       runAsNonRoot: true
       readOnlyRootFilesystem: false
-    # env:
-    #   - name: REQUESTS_CA_BUNDLE
-    #     value: /etc/pki/tls/cert.pem
   steps:
     - name: use-trusted-artifact
       ref:
@@ -147,28 +135,6 @@ spec:
           value: $(params.SIGNING_KEY)
         - name: SLAN_CUAN_SIGN_OUTPUT_PATH
           value: /var/workdir/signed
-        - name: SLAN_CUAN_RADAS_UMB_HOST
-          value: $(params.RADAS_UMB_HOST)
-        - name: SLAN_CUAN_RADAS_RESULT_QUEUE
-          valueFrom:
-            secretKeyRef:
-              name: lightwell-radas-certificates
-              key: result_queue
-        - name: SLAN_CUAN_RADAS_REQUEST_CHANNEL
-          valueFrom:
-            secretKeyRef:
-              name: lightwell-radas-certificates
-              key: request_channel
-        - name: SLAN_CUAN_RADAS_CLIENT_CA
-          value: /var/run/secrets/radas/mrrc-signing.crt
-        - name: SLAN_CUAN_RADAS_CLIENT_KEY
-          value: /var/run/secrets/radas/mrrc-signing-key.pem
-        - name: SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE
-          value: /var/run/secrets/radas/mrrc-signing-key.password
-        - name: SLAN_CUAN_RADAS_ROOT_CA
-          value: /etc/pki/tls/certs/ca-bundle.crt
-        - name: SLAN_CUAN_RADAS_RECEIVER_TIMEOUT
-          value: $(params.RADAS_RECEIVER_TIMEOUT)
         - name: SLAN_CUAN_SIGN_REQUESTER_ID
           value: $(params.REQUESTER_ID)
         - name: SLAN_CUAN_SIGN_ZIP_ROOT_PATH
@@ -223,12 +189,6 @@ spec:
   volumes:
     - name: workdir
       emptyDir: {}
-    - name: radas-certificates
-      secret:
-        secretName: lightwell-radas-certificates
-    - name: mrrc-signing-ca-prod
-      secret:
-        secretName: mrrc-signing-ca-prod
     - name: registry-auth
       secret:
         secretName: $(params.REGISTRY_AUTH_SECRET)
