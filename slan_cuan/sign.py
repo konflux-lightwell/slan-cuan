@@ -11,7 +11,7 @@ import shutil
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import click
 from novabucks.utils.logs import set_logging
@@ -145,14 +145,17 @@ def _sign_directly(
     click.echo(f"  - result_path: {sign_artifact_dir}")
     click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
 
-    params: dict[str, str] = {
+    params: dict[str, Any] = {
         "taskGitUrl": direct_sign_task_git_url,
         "taskGitRevision": direct_sign_task_git_revision,
         "sourceDataArtifact": repo_url,
         "onbehalfof": requester_id,
         "keyname": signing_key,
         "ociStorage": sign_artifact_dir,
-        "ignorePatterns": str(list(ignore_patterns)),
+        # The middleware-signing pipeline expects an "exclude" array param, not
+        # "ignorePatterns" (which it does not define) nor a stringified list.
+        # InternalRequest params support JSON arrays, so pass the real list.
+        "exclude": list(ignore_patterns),
         "verbose": str(direct_sign_verbose).lower(),
     }
     if registry_auth_file:
