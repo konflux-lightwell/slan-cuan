@@ -1018,6 +1018,89 @@ def test_sign_direct_sign_default_options(
     assert call_kwargs.kwargs["service_account"] == "signing-pipeline-sa"
 
 
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_forwards_ignore_patterns_as_exclude_array(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_create_ir: Mock,
+    mock_sign_individual: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """Ignore patterns reach middleware-signing as an ``exclude`` array.
+
+    Regression test for LWLP-1892: the InternalRequest previously sent a
+    stringified list under the key ``ignorePatterns``, which the
+    ``middleware-signing`` pipeline does not define — so the value was silently
+    dropped and ``exclude`` defaulted to ``[]``. The param must be named
+    ``exclude`` and carry a real JSON array.
+    """
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    mock_create_ir.return_value = "middleware-signing-abc123"
+    mock_fetch_results.return_value = {
+        "sourceDataArtifact": (
+            "oci:quay.io/konflux-ci/trusted-artifacts"
+            "@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        ),
+    }
+
+    def blob_fetch_side_effect(reference, output_file, **kwargs):
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = b'{"signed": true}'
+            info = tarfile.TarInfo(name="results.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        Path(output_file).write_bytes(buf.getvalue())
+
+    mock_blob_fetch.side_effect = blob_fetch_side_effect
+
+    sign_url_dir = tmp_path / "sign_url"
+    sign_url_dir.mkdir()
+
+    sign_work_dir = tmp_path / "sign_work"
+    sign_work_dir.mkdir()
+
+    with patch(
+        "slan_cuan.sign.tempfile.TemporaryDirectory",
+        side_effect=[_fake_tmpdir(sign_url_dir), _fake_tmpdir(sign_work_dir)],
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            _base_sign_args(output_path, repo_path)
+            + [
+                "--direct-sign",
+                "--ignore-patterns",
+                ".*\\.md5$",
+                "--ignore-patterns",
+                ".*\\.sha1$",
+            ],
+        )
+
+    assert result.exit_code == 0
+
+    params = mock_create_ir.call_args.kwargs["params"]
+    # The wrong (old) key must be gone.
+    assert "ignorePatterns" not in params
+    # A real list, not a stringified one — InternalRequest serializes it as a
+    # JSON array, which is what the pipeline's ``exclude`` array param expects.
+    assert isinstance(params["exclude"], list)
+    assert params["exclude"] == [".*\\.md5$", ".*\\.sha1$"]
+
+
 @patch("internal_request.create")
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
