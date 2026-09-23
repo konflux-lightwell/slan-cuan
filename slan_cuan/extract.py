@@ -279,6 +279,12 @@ def extract(
                             member.filename
                         )
                 zf.extractall(output_dir)
+            # Drop the now-redundant archive: its contents live in the
+            # extracted tree, and leaving the zip in the Trusted Artifact
+            # forces the downstream sign-middleware task to re-extract a
+            # second copy of the (uncompressed) tree, evicting the signing pod
+            # on large deliverables (LWLP-1892).
+            deliverable_file.unlink()
             deliverable_name = deliverable_name.removesuffix(".zip")
             if ctx.verbose:
                 click.echo(f"Deliverable directory: {deliverable_name}")
