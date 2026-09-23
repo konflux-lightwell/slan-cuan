@@ -60,7 +60,7 @@ spec:
     - name: DIRECT_SIGN_TASK_GIT_REVISION
       description: The branch name for the git repo where the internal-request task is stored.
       type: string
-      default: c3f0ea4dbdb4f177e9f4347271b54ec0ee99273d
+      default: 3cfc79a610df1b71addc1bb376128e0e59e742a4
     - name: DIRECT_SIGN_VERBOSE
       description: Enable verbose Kerberos diagnostics for direct signing.
       type: string
