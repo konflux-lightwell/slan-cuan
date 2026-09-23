@@ -54,6 +54,8 @@ def _base_sign_args(
         "/keys/signing.key",
         "--output-path",
         str(output_path),
+        "--requester-id",
+        "testuser",
         *_RADAS_ARGS,
     ]
 
@@ -370,6 +372,54 @@ def test_sign_custom_options(
     assert individual_kwargs["product_key"] == "custom-product"
 
 
+def test_sign_missing_requester_id_fails(tmp_path: Path) -> None:
+    """Invoking sign without --requester-id fails."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+    args = [
+        "sign",
+        "--repo-url",
+        "quay.io/someorg/maven:latest",
+        "--repo-path",
+        repo_path,
+        "--signing-key",
+        "/keys/signing.key",
+        "--output-path",
+        str(output_path),
+        *_RADAS_ARGS,
+    ]
+    runner = CliRunner()
+    result = runner.invoke(main, args)
+    assert result.exit_code != 0
+    assert "Missing option '--requester-id'" in result.output
+
+
+def test_sign_empty_requester_id_fails(tmp_path: Path) -> None:
+    """Invoking sign with an empty --requester-id fails."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+    args = [
+        "sign",
+        "--repo-url",
+        "quay.io/someorg/maven:latest",
+        "--repo-path",
+        repo_path,
+        "--signing-key",
+        "/keys/signing.key",
+        "--output-path",
+        str(output_path),
+        "--requester-id",
+        "   ",
+        *_RADAS_ARGS,
+    ]
+    runner = CliRunner()
+    result = runner.invoke(main, args)
+    assert result.exit_code != 0
+    assert "The --requester-id option cannot be empty" in result.output
+
+
 @patch("slan_cuan.sign.sign_individual_artifacts_workflow")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
 @patch("slan_cuan.sign.set_logging")
@@ -524,6 +574,7 @@ def test_sign_radas_options_from_env_vars(
             str(output_path),
         ],
         env={
+            "SLAN_CUAN_SIGN_REQUESTER_ID": "testuser",
             "SLAN_CUAN_RADAS_UMB_HOST": "umb.example.com",
             "SLAN_CUAN_RADAS_RESULT_QUEUE": "42",
             "SLAN_CUAN_RADAS_REQUEST_CHANNEL": "test-channel",

@@ -27,7 +27,7 @@ The command delegates to `novabucks` workflows for the actual RADAS interaction.
 | `--radas-client-key-pass-file` | -- | string | Yes | -- | Path to the file containing the RADAS client key password |
 | `--radas-root-ca` | -- | string | Yes | -- | Path to the RADAS root CA certificate |
 | `--radas-receiver-timeout` | -- | int | No | `3600` | Timeout for the RADAS receiver (seconds) |
-| `--requester-id` | `-r` | string | No | `slan-cuan@redhat.com` | Requester identity for the signature |
+| `--requester-id` | `-r` | string | Yes | -- | Requester identity for the signature |
 | `--zip-root-path` | `-z` | string | No | `repository` | Root of the Maven repository tree inside the ZIP file |
 | `--product-key` | `-b` | string | No | `slan-cuan` | Product key for metadata generation |
 | `--ignore-patterns` | `-i` | string (multiple) | No | -- | Regex patterns to exclude files from signing |
