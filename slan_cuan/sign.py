@@ -300,7 +300,7 @@ def _sign_directly(
 @click.option(
     "--requester-id",
     "-r",
-    default="slan-cuan@redhat.com",
+    required=True,
     type=str,
     help="The requester ID to use for the signature.",
 )
@@ -422,6 +422,9 @@ def sign(
     intention: str,
 ) -> None:
     """Sign Maven artifacts on RADAS or directly via internal-request."""
+    requester_id = (requester_id or "").strip()
+    if not requester_id:
+        raise click.UsageError("The --requester-id option cannot be empty.")
     try:
         # Fall back to the extracted directory when the zip was already unpacked
         # by the extract command (newer PNC images deliver a zip that extract

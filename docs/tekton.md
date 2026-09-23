@@ -144,7 +144,7 @@ All Tasks automatically set `SLAN_CUAN_TEKTON_RESULTS_DIR=$(step.results)` to en
 | -- | `SLAN_CUAN_RADAS_CLIENT_KEY_PASS_FILE` | `--radas-client-key-pass-file` |
 | -- | `SLAN_CUAN_RADAS_ROOT_CA` | `--radas-root-ca` |
 | `RADAS_RECEIVER_TIMEOUT` | `SLAN_CUAN_RADAS_RECEIVER_TIMEOUT` | `--radas-receiver-timeout` |
-| `SIGN_REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
+| `REQUESTER_ID` | `SLAN_CUAN_SIGN_REQUESTER_ID` | `--requester-id` |
 | `SIGN_ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
 | `SIGN_PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
 | `SIGN_IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |

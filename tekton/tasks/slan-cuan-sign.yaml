@@ -31,7 +31,6 @@ spec:
     - name: REQUESTER_ID
       description: Requester identity for signing operations.
       type: string
-      default: "slan-cuan@redhat.com"
     - name: ZIP_ROOT_PATH
       description: Root of Maven repo tree inside ZIP.
       type: string
