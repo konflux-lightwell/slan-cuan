@@ -143,16 +143,16 @@ def _sign_directly(
     click.echo(f"  - requester: {requester_id}")
     click.echo(f"  - sign_key: {signing_key}")
     click.echo(f"  - result_path: {sign_artifact_dir}")
-    # ignore_patterns is not forwarded to the direct-sign InternalRequest.
+    # Forward ignore_patterns to middleware-signing as a JSON-encoded string.
     # An InternalRequest's spec.params is map[string]string (see the CRD's
-    # Params field), so an array-valued "exclude" param is rejected by the schema
-    # at kubectl-create time, and the release-service controller would coerce any
-    # string value to a Tekton string param, which the array-typed "exclude"
-    # pipeline param then rejects. The middleware-signing pipeline owns the
-    # exclude defaults instead (LWLP-1958).
-    click.echo(
-        f"  - ignore_patterns (pipeline default applies): {list(ignore_patterns)}"
-    )
+    # Params field), and the internal-services controller coerces every param
+    # to a Tekton *string* param, so an array value can never survive this path.
+    # middleware-signing's "exclude" param is now typed `string` and json.loads
+    # it back into a list on the signing side (signing!155), so a JSON-encoded
+    # string round-trips cleanly through both the map[string]string schema and
+    # Tekton's param-type check (LWLP-1958).
+    exclude_json = json.dumps(list(ignore_patterns))
+    click.echo(f"  - exclude (JSON): {exclude_json}")
 
     params: dict[str, str] = {
         "taskGitUrl": direct_sign_task_git_url,
@@ -161,6 +161,7 @@ def _sign_directly(
         "onbehalfof": requester_id,
         "keyname": signing_key,
         "ociStorage": sign_artifact_dir,
+        "exclude": exclude_json,
         "verbose": str(direct_sign_verbose).lower(),
     }
     if registry_auth_file:
