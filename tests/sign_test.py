@@ -1075,7 +1075,7 @@ def test_sign_direct_sign_default_options(
 @patch("internal_request.create")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
 @patch("slan_cuan.sign.set_logging")
-def test_sign_direct_sign_ir_params_are_all_strings(
+def test_sign_direct_sign_forwards_exclude_as_json_string(
     mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_create_ir: Mock,
@@ -1084,15 +1084,17 @@ def test_sign_direct_sign_ir_params_are_all_strings(
     mock_blob_fetch: Mock,
     tmp_path: Path,
 ) -> None:
-    """The direct-sign InternalRequest never carries an array-valued param.
+    """Ignore patterns reach middleware-signing as a JSON-encoded string.
 
     Regression test for LWLP-1958: an InternalRequest's ``spec.params`` is
-    ``map[string]string`` in the CRD, so any array-valued param (e.g. sending
-    ignore patterns as an ``exclude`` list) is rejected by the schema at
-    ``kubectl create`` time. Ignore patterns are therefore *not* forwarded on
-    this path — the ``middleware-signing`` pipeline owns the ``exclude``
-    defaults. Assert every param value is a plain string and neither the old
-    ``ignorePatterns`` key nor an ``exclude`` key is sent.
+    ``map[string]string`` in the CRD and the internal-services controller
+    coerces every param to a Tekton *string*, so an array value can never
+    survive this path (it fails either the CRD schema at ``kubectl create`` or
+    Tekton's param-type check). ``middleware-signing``'s ``exclude`` param is
+    typed ``string`` and ``json.loads`` it back into a list on the signing side
+    (signing!155), so the patterns must be forwarded as a JSON-encoded string.
+    Assert every param value is a plain string, the old ``ignorePatterns`` key
+    is gone, and ``exclude`` is valid JSON decoding to the patterns.
     """
     output_path = tmp_path / "output"
     output_path.mkdir()
@@ -1146,12 +1148,15 @@ def test_sign_direct_sign_ir_params_are_all_strings(
     assert result.exit_code == 0
 
     params = mock_create_ir.call_args.kwargs["params"]
-    # Neither the old wrong key nor an array-valued exclude is forwarded.
+    # The old wrong key must be gone.
     assert "ignorePatterns" not in params
-    assert "exclude" not in params
     # spec.params is map[string]string: every value must be a plain string,
     # otherwise kubectl create rejects the InternalRequest manifest.
     assert all(isinstance(v, str) for v in params.values()), params
+    # exclude is a JSON-encoded string that decodes to the patterns, matching
+    # what middleware-signing's json.loads expects.
+    assert isinstance(params["exclude"], str)
+    assert json.loads(params["exclude"]) == [".*\\.md5$", ".*\\.sha1$"]
 
 
 @patch("internal_request.create")
