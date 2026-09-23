@@ -1024,7 +1024,7 @@ def test_sign_direct_sign_default_options(
 @patch("internal_request.create")
 @patch("slan_cuan.sign.sign_in_radas_workflow")
 @patch("slan_cuan.sign.set_logging")
-def test_sign_direct_sign_forwards_ignore_patterns_as_exclude_array(
+def test_sign_direct_sign_ir_params_are_all_strings(
     mock_set_logging: Mock,
     mock_sign_radas: Mock,
     mock_create_ir: Mock,
@@ -1033,13 +1033,15 @@ def test_sign_direct_sign_forwards_ignore_patterns_as_exclude_array(
     mock_blob_fetch: Mock,
     tmp_path: Path,
 ) -> None:
-    """Ignore patterns reach middleware-signing as an ``exclude`` array.
+    """The direct-sign InternalRequest never carries an array-valued param.
 
-    Regression test for LWLP-1892: the InternalRequest previously sent a
-    stringified list under the key ``ignorePatterns``, which the
-    ``middleware-signing`` pipeline does not define — so the value was silently
-    dropped and ``exclude`` defaulted to ``[]``. The param must be named
-    ``exclude`` and carry a real JSON array.
+    Regression test for LWLP-1958: an InternalRequest's ``spec.params`` is
+    ``map[string]string`` in the CRD, so any array-valued param (e.g. sending
+    ignore patterns as an ``exclude`` list) is rejected by the schema at
+    ``kubectl create`` time. Ignore patterns are therefore *not* forwarded on
+    this path — the ``middleware-signing`` pipeline owns the ``exclude``
+    defaults. Assert every param value is a plain string and neither the old
+    ``ignorePatterns`` key nor an ``exclude`` key is sent.
     """
     output_path = tmp_path / "output"
     output_path.mkdir()
@@ -1093,12 +1095,12 @@ def test_sign_direct_sign_forwards_ignore_patterns_as_exclude_array(
     assert result.exit_code == 0
 
     params = mock_create_ir.call_args.kwargs["params"]
-    # The wrong (old) key must be gone.
+    # Neither the old wrong key nor an array-valued exclude is forwarded.
     assert "ignorePatterns" not in params
-    # A real list, not a stringified one — InternalRequest serializes it as a
-    # JSON array, which is what the pipeline's ``exclude`` array param expects.
-    assert isinstance(params["exclude"], list)
-    assert params["exclude"] == [".*\\.md5$", ".*\\.sha1$"]
+    assert "exclude" not in params
+    # spec.params is map[string]string: every value must be a plain string,
+    # otherwise kubectl create rejects the InternalRequest manifest.
+    assert all(isinstance(v, str) for v in params.values()), params
 
 
 @patch("internal_request.create")

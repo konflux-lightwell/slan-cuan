@@ -11,7 +11,7 @@ import shutil
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
 import click
 from novabucks.utils.logs import set_logging
@@ -143,19 +143,24 @@ def _sign_directly(
     click.echo(f"  - requester: {requester_id}")
     click.echo(f"  - sign_key: {signing_key}")
     click.echo(f"  - result_path: {sign_artifact_dir}")
-    click.echo(f"  - ignore_patterns: {list(ignore_patterns)}")
+    # ignore_patterns is not forwarded to the direct-sign InternalRequest.
+    # An InternalRequest's spec.params is map[string]string (see the CRD's
+    # Params field), so an array-valued "exclude" param is rejected by the schema
+    # at kubectl-create time, and the release-service controller would coerce any
+    # string value to a Tekton string param, which the array-typed "exclude"
+    # pipeline param then rejects. The middleware-signing pipeline owns the
+    # exclude defaults instead (LWLP-1958).
+    click.echo(
+        f"  - ignore_patterns (pipeline default applies): {list(ignore_patterns)}"
+    )
 
-    params: dict[str, Any] = {
+    params: dict[str, str] = {
         "taskGitUrl": direct_sign_task_git_url,
         "taskGitRevision": direct_sign_task_git_revision,
         "sourceDataArtifact": repo_url,
         "onbehalfof": requester_id,
         "keyname": signing_key,
         "ociStorage": sign_artifact_dir,
-        # The middleware-signing pipeline expects an "exclude" array param, not
-        # "ignorePatterns" (which it does not define) nor a stringified list.
-        # InternalRequest params support JSON arrays, so pass the real list.
-        "exclude": list(ignore_patterns),
         "verbose": str(direct_sign_verbose).lower(),
     }
     if registry_auth_file:
