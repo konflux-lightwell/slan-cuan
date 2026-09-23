@@ -167,8 +167,17 @@ def generate_security_metadata(
         )
         return
 
+    click.echo(f"Processing {index_full_path} to generate OSV and VEX...")
+    with open(index_full_path, "r") as f:
+        index_data = json.load(f)
+
+    vulns = index_data.get("vulns", [])
     osidb_client = None
-    if osidb_keytab and Path(osidb_keytab).is_file():
+    if not vulns:
+        click.echo(
+            "No vulnerabilities found in index, skipping OSIDB client setup."
+        )
+    elif osidb_keytab and Path(osidb_keytab).is_file():
         # Lazy import: fath_cuan.osidb only exists in newer fath-cuan and is
         # only needed when a keytab is supplied.
         from fath_cuan.osidb import OsidbClient
@@ -193,10 +202,6 @@ def generate_security_metadata(
             raise click.Abort()
     else:
         click.echo("No OSIDB keytab file found, skipping OSIDB fetching.")
-
-    click.echo(f"Processing {index_full_path} to generate OSV and VEX...")
-    with open(index_full_path, "r") as f:
-        index_data = json.load(f)
 
     osv_records = process_osv(index_data, osidb_client=osidb_client)
     output_dir.mkdir(parents=True, exist_ok=True)

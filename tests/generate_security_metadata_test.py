@@ -49,6 +49,7 @@ def _create_index_file(directory: Path, name: str = "gav-index.json") -> Path:
     """Write a minimal build-index JSON file into *directory*."""
     data = {
         "buildId": "12345",
+        "vulns": ["CVE-2024-1234"],
         "artifacts": [
             {
                 "groupId": "org.example",
@@ -436,6 +437,48 @@ def test_nonexistent_keytab_skips_osidb(
         json.loads((index_dir / "gav-index.json").read_text()),
         osidb_client=None,
     )
+
+
+@patch("fath_cuan.osidb.OsidbClient")
+@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_empty_vulnerabilities_skip_osidb_with_valid_keytab(
+    mock_process_osv: Mock,
+    mock_get_token: Mock,
+    mock_osidb_client_cls: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Validated builds skip OSIDB even when a keytab is available."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    index_path = _create_index_file(index_dir)
+    index_data = json.loads(index_path.read_text())
+    index_data["vulns"] = []
+    index_path.write_text(json.dumps(index_data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+    keytab = tmp_path / "test.keytab"
+    keytab.write_text("fake-keytab")
+    mock_process_osv.return_value = fake_osv_records
+
+    result = _invoke(
+        CliRunner(),
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        osidb_keytab=keytab,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "No vulnerabilities found in index" in result.output
+    mock_get_token.assert_not_called()
+    mock_osidb_client_cls.assert_not_called()
+    mock_process_osv.assert_called_once_with(index_data, osidb_client=None)
 
 
 @patch("fath_cuan.osidb.OsidbClient")
