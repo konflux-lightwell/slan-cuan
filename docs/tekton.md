@@ -148,6 +148,19 @@ All Tasks automatically set `SLAN_CUAN_TEKTON_RESULTS_DIR=$(step.results)` to en
 | `SIGN_ZIP_ROOT_PATH` | `SLAN_CUAN_SIGN_ZIP_ROOT_PATH` | `--zip-root-path` |
 | `SIGN_PRODUCT_KEY` | `SLAN_CUAN_SIGN_PRODUCT_KEY` | `--product-key` |
 | `SIGN_IGNORE_PATTERNS` | `SLAN_CUAN_SIGN_IGNORE_PATTERNS` | `--ignore-patterns` |
+| `REGISTRY_AUTH_SECRET` | `SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE` | `--registry-auth-file` |
+| `DIRECT_SIGN` | `SLAN_CUAN_SIGN_DIRECT_SIGN` | `--direct-sign` |
+| `DIRECT_SIGN_PIPELINE_NAME` | `SLAN_CUAN_SIGN_DIRECT_SIGN_PIPELINE_NAME` | `--direct-sign-pipeline-name` |
+| `DIRECT_SIGN_TASK_GIT_URL` | `SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_URL` | `--direct-sign-task-git-url` |
+| `DIRECT_SIGN_TASK_GIT_REVISION` | `SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_GIT_REVISION` | `--direct-sign-task-git-revision` |
+| `DIRECT_SIGN_VERBOSE` | `SLAN_CUAN_SIGN_DIRECT_SIGN_VERBOSE` | `--direct-sign-verbose` |
+| `ociStorage` | `SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_STORAGE` | `--direct-sign-task-ta-storage` |
+| -- | `SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT_FILE` | `--direct-sign-task-ta-source-artifact-file` |
+
+For direct signing, `SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT_FILE` is
+wired to a fixed in-pod path (`/var/workdir/direct-sign-sourceDataArtifact`)
+written by the `create-direct-sign-input-trusted-artifact` step, not to a task
+parameter. See [Direct Signing](sign.md#direct-signing).
 
 **Results:** None
 
