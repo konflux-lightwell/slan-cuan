@@ -131,12 +131,72 @@ spec:
           value: $(params.orasOptions)
         - name: caCertPath
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    # Direct signing only needs the repository ZIP. Keep the original TA
+    # untouched for the normal signing flow and stage a filtered copy for the
+    # middleware-signing InternalRequest.
+    - name: stage-direct-sign-input
+      when:
+        - input: $(params.DIRECT_SIGN)
+          operator: in
+          values: ["true"]
+      image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        input=/var/workdir/extracted/build-output.zip
+        output_dir=/var/workdir/direct-sign-input
+        if [ ! -f "$input" ]; then
+          echo "Direct signing requires $input" >&2
+          exit 1
+        fi
+        mkdir -p "$output_dir"
+        cp "$input" "$output_dir/build-output.zip"
+    - name: create-direct-sign-input-trusted-artifact
+      when:
+        - input: $(params.DIRECT_SIGN)
+          operator: in
+          values: ["true"]
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: /var/workdir/direct-sign-input
+        # Keep this outside workDir so the pullspec file itself is not added
+        # to the reduced TA. The direct-sign run step reads this hand-off
+        # file and exports the resulting pullspec to the CLI.
+        - name: sourceDataArtifact
+          value: /var/workdir/direct-sign-sourceDataArtifact
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
-      args:
-        - --verbose
-        - sign
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        if [ "$(params.DIRECT_SIGN)" = "true" ]; then
+          direct_sign_source_artifact=
+          IFS= read -r direct_sign_source_artifact \
+            < /var/workdir/direct-sign-sourceDataArtifact || :
+          if [ -z "$direct_sign_source_artifact" ]; then
+            echo "The direct-sign input TA did not produce a pullspec" >&2
+            exit 1
+          fi
+          export "SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT=$direct_sign_source_artifact"
+        fi
+        exec slan-cuan sign
       env:
         - name: SLAN_CUAN_SIGN_REPO_URL
           value: $(params.SIGN_REPO_URL)
@@ -186,8 +246,6 @@ spec:
           value: $(params.DIRECT_SIGN_VERBOSE)
         - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_STORAGE
           value: $(params.ociStorage)
-        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT
-          value: $(params.sourceDataArtifact)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
           value: $(params.IGNORE_PATTERNS)
         - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE
