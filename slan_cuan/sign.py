@@ -114,6 +114,34 @@ def _sign_in_radas(
     )
 
 
+def _resolve_direct_sign_source_artifact(
+    source_artifact: str,
+    source_artifact_file: Path | None,
+) -> str:
+    """Resolve the direct-sign trusted-artifact pullspec.
+
+    The middleware-signing input TA is created by an earlier Tekton step that
+    writes its pullspec to a file. Reading that file here lets the sign task
+    hand off the pullspec without inline shell in the run step. When no file is
+    given, fall back to the value passed directly (the pre-existing behaviour).
+    """
+    if source_artifact_file is None:
+        return source_artifact
+    try:
+        content = source_artifact_file.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise click.UsageError(
+            f"Could not read --direct-sign-task-ta-source-artifact-file "
+            f"{source_artifact_file}: {exc}"
+        ) from exc
+    if not content:
+        raise click.UsageError(
+            f"--direct-sign-task-ta-source-artifact-file {source_artifact_file} "
+            "is empty; expected a trusted-artifact pullspec"
+        )
+    return content
+
+
 def _sign_directly(
     repo_url: str,
     signing_key: str,
@@ -387,6 +415,18 @@ def _sign_directly(
     ),
 )
 @click.option(
+    "--direct-sign-task-ta-source-artifact-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Path to a file containing the sourceDataArtifact pullspec for the "
+        "direct-sign trusted artifact. Takes precedence over "
+        "--direct-sign-task-ta-source-artifact when set. Lets the Tekton task "
+        "hand off the reduced-TA pullspec written by an earlier step without "
+        "inline shell in the run step."
+    ),
+)
+@click.option(
     "--intention",
     default="production",
     type=str,
@@ -420,6 +460,7 @@ def sign(
     direct_sign_verbose: bool,
     direct_sign_task_ta_storage: str,
     direct_sign_task_ta_source_artifact: str,
+    direct_sign_task_ta_source_artifact_file: Path | None,
     intention: str,
 ) -> None:
     """Sign Maven artifacts on RADAS or directly via internal-request."""
@@ -451,8 +492,12 @@ def sign(
                 click.echo(
                     "Signing the repository directly via internal-request..."
                 )
+                source_artifact = _resolve_direct_sign_source_artifact(
+                    direct_sign_task_ta_source_artifact,
+                    direct_sign_task_ta_source_artifact_file,
+                )
                 _sign_directly(
-                    repo_url=direct_sign_task_ta_source_artifact,
+                    repo_url=source_artifact,
                     signing_key=signing_key,
                     requester_id=requester_id,
                     ignore_patterns=ignore_patterns,

@@ -1186,3 +1186,108 @@ def test_sign_without_direct_sign_uses_radas(
     assert result.exit_code == 0
     mock_sign_radas.assert_called_once()
     mock_create_ir.assert_not_called()
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("slan_cuan.sign.sign_individual_artifacts_workflow")
+@patch("internal_request.create")
+@patch("slan_cuan.sign.sign_in_radas_workflow")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_reads_source_artifact_from_file(
+    mock_set_logging: Mock,
+    mock_sign_radas: Mock,
+    mock_create_ir: Mock,
+    mock_sign_individual: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """The TA pullspec is read from the hand-off file and wins over the flag."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    pullspec = (
+        "oci:quay.io/konflux-ci/trusted-artifacts"
+        "@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+    )
+    artifact_file = tmp_path / "direct-sign-sourceDataArtifact"
+    artifact_file.write_text(pullspec + "\n")
+
+    mock_create_ir.return_value = "middleware-signing-abc123"
+    mock_fetch_results.return_value = {"sourceDataArtifact": pullspec}
+
+    def blob_fetch_side_effect(reference, output_file, **kwargs):
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = b'{"signed": true}'
+            info = tarfile.TarInfo(name="results.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        Path(output_file).write_bytes(buf.getvalue())
+
+    mock_blob_fetch.side_effect = blob_fetch_side_effect
+
+    sign_url_dir = tmp_path / "sign_url"
+    sign_url_dir.mkdir()
+    sign_work_dir = tmp_path / "sign_work"
+    sign_work_dir.mkdir()
+
+    with patch(
+        "slan_cuan.sign.tempfile.TemporaryDirectory",
+        side_effect=[_fake_tmpdir(sign_url_dir), _fake_tmpdir(sign_work_dir)],
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            _base_sign_args(output_path, repo_path)
+            + [
+                "--direct-sign",
+                "--direct-sign-task-ta-source-artifact",
+                "oci:should-be-ignored",
+                "--direct-sign-task-ta-source-artifact-file",
+                str(artifact_file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create_ir.assert_called_once()
+    # The file's content becomes the IR's sourceDataArtifact, overriding the
+    # inline --direct-sign-task-ta-source-artifact value.
+    params = mock_create_ir.call_args.kwargs["params"]
+    assert params["sourceDataArtifact"] == pullspec
+
+
+@patch("slan_cuan.sign._sign_directly")
+@patch("slan_cuan.sign.set_logging")
+def test_sign_direct_sign_source_artifact_file_empty_errors(
+    mock_set_logging: Mock,
+    mock_sign_directly: Mock,
+    tmp_path: Path,
+) -> None:
+    """An empty hand-off file is a usage error, not a silent empty pullspec."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    artifact_file = tmp_path / "direct-sign-sourceDataArtifact"
+    artifact_file.write_text("   \n")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        _base_sign_args(output_path, repo_path)
+        + [
+            "--direct-sign",
+            "--direct-sign-task-ta-source-artifact-file",
+            str(artifact_file),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "is empty" in result.output
+    mock_sign_directly.assert_not_called()
