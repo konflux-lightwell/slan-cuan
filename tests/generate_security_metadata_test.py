@@ -94,6 +94,7 @@ def _invoke(
     osidb_keytab=None,
     osidb_kerberos_principal="user@REALM",
     osidb_api_url="https://osidb.example.com/api/v1",
+    advisory_id=None,
 ):
     args = [
         "--index-basedir",
@@ -111,6 +112,8 @@ def _invoke(
         args += ["--index-filename", index_filename]
     if osidb_keytab is not None:
         args += ["--osidb-keytab", str(osidb_keytab)]
+    if advisory_id is not None:
+        args += ["--advisory-id", advisory_id]
     return runner.invoke(generate_security_metadata, args, obj=ctx)
 
 
@@ -709,3 +712,96 @@ def test_get_osidb_auth_token_missing_access_key(
             "user@REALM",
             "/path/to/keytab",
         )
+
+
+# ---------------------------------------------------------------------------
+# Advisory ID injection tests
+# ---------------------------------------------------------------------------
+
+
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_advisory_id_injected(
+    mock_process_osv: Mock,
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """advisory_id appears in the dict passed to process_osv."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    mock_process_osv.return_value = [{"id": "RHLW-2026-00042", "affected": []}]
+
+    runner = CliRunner()
+    result = _invoke(
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        advisory_id="RHLW-2026-00042",
+    )
+    assert result.exit_code == 0, result.output
+    call_args = mock_process_osv.call_args
+    index_data = call_args[0][0]
+    assert index_data["advisory_id"] == "RHLW-2026-00042"
+
+
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_advisory_id_absent_no_injection(
+    mock_process_osv: Mock,
+    fake_osv_records: list[dict],
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Without --advisory-id, index data is unmodified."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    mock_process_osv.return_value = fake_osv_records
+
+    runner = CliRunner()
+    result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+    assert result.exit_code == 0, result.output
+    call_args = mock_process_osv.call_args
+    index_data = call_args[0][0]
+    assert "advisory_id" not in index_data
+
+
+@patch("slan_cuan.generate_security_metadata.process_osv")
+def test_output_filename_uses_advisory_id(
+    mock_process_osv: Mock,
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """Output file is named RHLW-2026-00042.json."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    mock_process_osv.return_value = [{"id": "RHLW-2026-00042", "affected": []}]
+
+    runner = CliRunner()
+    result = _invoke(
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        advisory_id="RHLW-2026-00042",
+    )
+    assert result.exit_code == 0, result.output
+    assert (output_dir / "RHLW-2026-00042.json").exists()

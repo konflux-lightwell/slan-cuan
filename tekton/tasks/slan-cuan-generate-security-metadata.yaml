@@ -22,6 +22,10 @@ spec:
       description: The filename of the build index JSON file relative to the base directory.
       type: string
       default: "gav-index.json"
+    - name: ADVISORY_ID
+      description: Optional advisory ID (e.g. RHLW-2026-00042) for per-release OSV records.
+      type: string
+      default: ""
     - name: WORKDIR
       description: The directory to work in, which is the extracted directory.
       type: string
@@ -121,6 +125,8 @@ spec:
           value: $(params.INDEX_BASEDIR)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_INDEX_FILENAME
           value: $(params.INDEX_FILENAME)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_ADVISORY_ID
+          value: $(params.ADVISORY_ID)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OUTPUT_DIR
           value: $(params.OUTPUT_DIR)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_WORKDIR
