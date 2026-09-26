@@ -142,6 +142,15 @@ def _get_osidb_auth_token(
     help="The directory to output the attestations to.",
 )
 @click.option(
+    "--advisory-id",
+    type=str,
+    default="",
+    show_default=True,
+    help=(
+        "Optional advisory ID (e.g. RHLW-2026-00042) for per-release OSV records."
+    ),
+)
+@click.option(
     "--workdir",
     type=click.Path(path_type=Path),
     required=True,
@@ -156,6 +165,7 @@ def generate_security_metadata(
     osidb_keytab: str,
     osidb_kerberos_principal: str,
     output_dir: Path,
+    advisory_id: str,
     workdir: Path,
 ) -> None:
     """Generate the OSV and VEX attestations for a given build index."""
@@ -202,6 +212,9 @@ def generate_security_metadata(
             raise click.Abort()
     else:
         click.echo("No OSIDB keytab file found, skipping OSIDB fetching.")
+
+    if advisory_id:
+        index_data["advisory_id"] = advisory_id
 
     osv_records = process_osv(index_data, osidb_client=osidb_client)
     output_dir.mkdir(parents=True, exist_ok=True)
