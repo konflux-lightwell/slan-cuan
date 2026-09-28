@@ -40,7 +40,7 @@ spec:
     - name: OSIDB_KERBEROS_KEYTAB_PATH
       description: The path to the Kerberos keytab file for the OSIDB API.
       type: string
-      default: /var/run/secrets/osidb-keytab/keytab
+      default: /var/run/secrets/osidb-keytab
     - name: OSIDB_KERBEROS_PRINCIPAL
       description: The Kerberos principal for the OSIDB API.
       type: string
