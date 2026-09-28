@@ -104,10 +104,11 @@ def _load_security_metadata(
 
         osv_id = record.get("id")
         affected = record.get("affected")
-        aliases = record.get("aliases", [])
-        upstream = record.get("upstream", [])
+        aliases = record.get("aliases") or []
+        upstream = record.get("upstream") or []
         has_vuln_ids = (
             isinstance(aliases, list)
+            and bool(aliases)
             and all(isinstance(a, str) and a.strip() for a in aliases)
         ) or (
             isinstance(upstream, list)
@@ -129,7 +130,6 @@ def _load_security_metadata(
                 "Generated security metadata is not OSV or VEX JSON."
             )
         if is_osv:
-            upstream = record.get("upstream", [])
             osv_vulnerability_ids.update((osv_id, *aliases, *upstream))
 
     if vulns and not osv_vulnerability_ids:
@@ -139,10 +139,8 @@ def _load_security_metadata(
             "Generated security metadata does not match the clean GAV index."
         )
 
-    if any(
-        not any(vulnerability in osv_id for osv_id in osv_vulnerability_ids)
-        for vulnerability in vulns
-    ):
+    uncovered = set(vulns) - osv_vulnerability_ids
+    if uncovered:
         raise ValueError(
             "Generated OSV metadata does not cover all GAV index vulnerabilities."
         )
