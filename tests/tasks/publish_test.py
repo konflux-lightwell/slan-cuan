@@ -3266,7 +3266,9 @@ def _new_format_record(
                     "lightwell": {
                         "source": source,
                         "backport_base_version": "1.0.0",
-                        "remediated_version": "1.0.0.rhlw-00001",
+                        "upstream_base": "1.0.0",
+                        "upstream_purl": "pkg:maven/org.example/artifact@1.0.0",
+                        "remediation_build": "rhlw-00001",
                         "repository_url": "https://packages.redhat.com/lightwell/java/remediated/",
                     }
                 },
