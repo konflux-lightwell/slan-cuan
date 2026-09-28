@@ -1,0 +1,173 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-generate-security-metadata-from-snapshot
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Build
+    tekton.dev/displayName: "slan-cuan: Generate Security Metadata for a Snapshot"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,generate-security-metadata,osv,snapshot"
+spec:
+  description: >-
+    Generate OSV security metadata for every component image in a snapshot.
+    For each component image, the build-index OCI referrer is discovered and
+    pulled, then OSV records are generated (with optional OSIDB enrichment),
+    reusing a single OSIDB client across all component images.
+  params:
+    - name: SNAPSHOT_PATH
+      description: Path to the reduced snapshot spec JSON listing component images.
+      type: string
+    - name: WORKDIR
+      description: Working directory beneath which build-index artifacts are pulled.
+      type: string
+      default: /var/workdir
+    - name: OUTPUT_DIR
+      description: The directory to output the OSV documents to.
+      type: string
+      default: $(params.WORKDIR)/security_metadata
+    - name: BUILD_INDEX_MEDIA_TYPE
+      description: OCI artifact type used to discover the build-index referrer.
+      type: string
+      default: application/vnd.lightwell.build-index.v1+json
+    - name: OSIDB_API_URL
+      description: The URL of the OSIDB API to use for authentication on OSIDB.
+      type: string
+      default: ""
+    - name: OSIDB_KERBEROS_KEYTAB_PATH
+      description: The path to the Kerberos keytab file for the OSIDB API.
+      type: string
+      default: /var/run/secrets/osidb-keytab/keytab
+    - name: OSIDB_KERBEROS_PRINCIPAL
+      description: The Kerberos principal for the OSIDB API.
+      type: string
+      default: ""
+    - name: sourceDataArtifact
+      description: Trusted Artifact URI of the snapshot and build sources.
+      type: string
+    - name: ociStorage
+      description: The OCI repository where the Trusted Artifact is stored.
+      type: string
+      default: "empty"
+    - name: ociArtifactExpiresAfter
+      description: Expiration date for the trusted artifact in the OCI repository.
+      type: string
+      default: "1d"
+    - name: orasOptions
+      description: oras options to pass to Trusted Artifacts calls.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: "trusted-ca"
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: "ca-bundle.crt"
+    - name: catalogGitUrl
+      description: The url to the git repo where the release-service-catalog stepactions are stored.
+      type: string
+      default: https://github.com/arewm/release-service-catalog.git
+    - name: catalogGitRevision
+      description: The revision in the catalogGitUrl repo to be used.
+      type: string
+      default: lightwell-pipeline
+  results:
+    - name: SECURITY_METADATA_DIR
+      description: Name of the directory where the OSV documents are stored.
+    - name: sourceDataArtifact
+      description: Trusted Artifact URI of the data directory.
+      type: string
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+      - name: trusted-ca
+        mountPath: /mnt/trusted-ca
+        readOnly: true
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+  steps:
+    - name: use-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: $(params.WORKDIR)
+        - name: sourceDataArtifact
+          value: $(params.sourceDataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
+      args:
+        - --verbose
+        - generate-security-metadata-from-snapshot
+      volumeMounts:
+        - mountPath: /var/run/secrets/osidb-keytab
+          name: osidb-keytab-secret
+          readOnly: true
+      env:
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_SNAPSHOT_PATH
+          value: $(params.WORKDIR)/$(params.SNAPSHOT_PATH)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_WORKDIR
+          value: $(params.WORKDIR)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_OUTPUT_DIR
+          value: $(params.OUTPUT_DIR)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_BUILD_INDEX_MEDIA_TYPE
+          value: $(params.BUILD_INDEX_MEDIA_TYPE)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_OSIDB_KEYTAB
+          value: $(params.OSIDB_KERBEROS_KEYTAB_PATH)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_OSIDB_KERBEROS_PRINCIPAL
+          value: $(params.OSIDB_KERBEROS_PRINCIPAL)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_FROM_SNAPSHOT_OSIDB_API_URL
+          value: $(params.OSIDB_API_URL)
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: /tekton/results
+    - name: create-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: $(params.WORKDIR)
+        - name: sourceDataArtifact
+          value: $(results.sourceDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: osidb-keytab-secret
+      secret:
+        secretName: lightwell-osidb-keytab
+        optional: true
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        optional: true

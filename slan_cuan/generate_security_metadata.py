@@ -9,13 +9,22 @@ import socket
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import click
 from fath_cuan.workflow import process_osv
 
+from slan_cuan import oci
 from slan_cuan.context import GlobalContext, write_tekton_result
-from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult
+from slan_cuan.models import (
+    EXTRACT_RESULT_FILENAME,
+    ExtractResult,
+    ImageReference,
+)
+
+if TYPE_CHECKING:
+    from fath_cuan.osidb import OsidbClient
 
 _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
     os.getenv("OSIDB_TOKEN_REQUEST_TIMEOUT", "10.0")
@@ -226,3 +235,225 @@ def generate_security_metadata(
         str(output_dir),
     )
     click.echo("Security metadata generation completed successfully.")
+
+
+def _build_osidb_client(
+    osidb_api_url: str,
+    osidb_keytab: str,
+    osidb_kerberos_principal: str,
+    *,
+    verbose: bool = False,
+) -> OsidbClient | None:
+    """Build an OSIDB client, or None when no keytab is available.
+
+    Unlike the per-index command, this does not gate on the presence of
+    vulnerabilities in an index: the snapshot command builds the client
+    once, up front, before any index has been read.
+    """
+    if not (osidb_keytab and Path(osidb_keytab).is_file()):
+        click.echo("No OSIDB keytab file found, skipping OSIDB fetching.")
+        return None
+
+    # Lazy import: fath_cuan.osidb only exists in newer fath-cuan and is
+    # only needed when a keytab is supplied.
+    from fath_cuan.osidb import OsidbClient
+
+    click.echo(
+        f"Creating OSIDB client on {osidb_api_url} "
+        f"with keytab file {osidb_keytab}"
+    )
+    auth_token = _get_osidb_auth_token(
+        osidb_api_url,
+        osidb_kerberos_principal,
+        osidb_keytab,
+        verbose=verbose,
+    )
+    # OsidbClient appends /osidb/api/v1/... paths itself, so pass only the
+    # base URL (scheme + host) — not the full API path.
+    _parsed = urlparse(osidb_api_url)
+    osidb_base_url = f"{_parsed.scheme}://{_parsed.netloc}"
+    osidb_client = OsidbClient(base_url=osidb_base_url, token=auth_token)
+    if not osidb_client.available:
+        click.echo("Failed to create OSIDB client, exiting.")
+        raise click.Abort()
+    return osidb_client
+
+
+def _generate_osv_for_index(
+    index_full_path: Path,
+    output_dir: Path,
+    osidb_client: OsidbClient | None,
+) -> int:
+    """Generate OSV records for a single build index; return the count.
+
+    Writes one JSON file per record to output_dir. Unlike the per-index
+    command, this does not touch extract-result.json — the snapshot flow
+    (e.g. the calunga Python pipeline) has no such file.
+    """
+    click.echo(f"Processing {index_full_path} to generate OSV...")
+    with open(index_full_path, "r") as f:
+        index_data = json.load(f)
+
+    osv_records = process_osv(index_data, osidb_client=osidb_client)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for record in osv_records:
+        osv_output_path = output_dir / f"{record['id']}.json"
+        click.echo(f"Writing OSV record to {osv_output_path}")
+        with open(osv_output_path, "w") as f:
+            json.dump(record, f, indent=2)
+        count += 1
+    return count
+
+
+@click.command(name="generate-security-metadata-from-snapshot")
+@click.option(
+    "--snapshot-path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to the reduced snapshot spec JSON listing component images.",
+)
+@click.option(
+    "--workdir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Working directory beneath which build-index artifacts are pulled.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="The directory to output the OSV documents to.",
+)
+@click.option(
+    "--build-index-media-type",
+    type=str,
+    default="application/vnd.lightwell.build-index.v1+json",
+    show_default=True,
+    help="OCI artifact type used to discover the build-index referrer.",
+)
+@click.option(
+    "--index-basedir",
+    type=str,
+    default="build-index",
+    show_default=True,
+    help="Directory (under workdir) the build index is pulled into.",
+)
+@click.option(
+    "--index-filename",
+    type=str,
+    default="build-index.json",
+    show_default=True,
+    help="Filename of the build index within the index base directory.",
+)
+@click.option(
+    "--osidb-api-url",
+    type=str,
+    default="",
+    show_default=True,
+    help="The URL of the OSIDB API to use for authentication on OSIDB.",
+)
+@click.option(
+    "--osidb-keytab",
+    type=str,
+    default="",
+    show_default=True,
+    help="The path to the OSIDB keytab file to use for OSIDB auth.",
+)
+@click.option(
+    "--osidb-kerberos-principal",
+    type=str,
+    default="",
+    show_default=True,
+    help="The Kerberos principal to use for authentication on OSIDB.",
+)
+@click.option(
+    "--registry-config",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional oras registry auth file for discover/pull.",
+)
+@click.pass_obj
+def generate_security_metadata_from_snapshot(
+    ctx: GlobalContext,
+    snapshot_path: Path,
+    workdir: Path,
+    output_dir: Path,
+    build_index_media_type: str,
+    index_basedir: str,
+    index_filename: str,
+    osidb_api_url: str,
+    osidb_keytab: str,
+    osidb_kerberos_principal: str,
+    registry_config: Path | None,
+) -> None:
+    """Generate OSV metadata for every component image in a snapshot.
+
+    For each component image, the build-index OCI referrer is discovered
+    and pulled, then OSV records are generated. A single OSIDB client is
+    built up front and reused across every component image.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    index_dir = workdir / index_basedir
+    index_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(snapshot_path, "r") as f:
+        snapshot = json.load(f)
+    images = [c["containerImage"] for c in snapshot.get("components", [])]
+
+    osidb_client = _build_osidb_client(
+        osidb_api_url,
+        osidb_keytab,
+        osidb_kerberos_principal,
+        verbose=ctx.verbose,
+    )
+
+    referrer_count = 0
+    for image in images:
+        image_ref = ImageReference.parse(image)
+        click.echo(f"Discovering build-index referrer on {image_ref}")
+        referrers = oci.discover(
+            image,
+            build_index_media_type,
+            auth_file=registry_config,
+            verbose=ctx.verbose,
+        )
+        if not referrers:
+            click.echo(f"No build-index referrer on {image_ref}; skipping.")
+            continue
+
+        referrer_count += 1
+        referrer = ImageReference(
+            registry=image_ref.registry,
+            repository=image_ref.repository,
+            tag=None,
+            digest=referrers[0]["digest"],
+        )
+        oci.pull(
+            referrer,
+            index_dir,
+            auth_file=registry_config,
+            verbose=ctx.verbose,
+        )
+        _generate_osv_for_index(
+            index_dir / index_filename, output_dir, osidb_client
+        )
+
+    if referrer_count == 0:
+        click.echo(
+            "WARNING: no build-index referrer found on ANY component image.",
+            err=True,
+        )
+        click.echo(
+            "WARNING: verify the build-side 'fath-cuan index create "
+            "--attach-to' step ran and attached a referrer of type "
+            f"{build_index_media_type}.",
+            err=True,
+        )
+
+    write_tekton_result(
+        ctx.tekton_results_dir,
+        "SECURITY_METADATA_DIR",
+        str(output_dir),
+    )
+    click.echo(f"Generated OSV metadata for {referrer_count} component(s).")
