@@ -3256,8 +3256,34 @@ def _new_format_record(
     return {
         "id": advisory_id,
         "upstream": upstream or ["CVE-2024-25710"],
-        "affected": [{"package": {"name": "example"}}],
-        "database_specific": {"lightwell": {"source": source}},
+        "affected": [
+            {
+                "package": {
+                    "ecosystem": "Maven",
+                    "name": "example",
+                },
+                "database_specific": {
+                    "lightwell": {
+                        "source": source,
+                        "backport_base_version": "1.0.0",
+                        "remediated_version": "1.0.0.rhlw-00001",
+                        "repository_url": "https://packages.redhat.com/lightwell/java/remediated/",
+                    }
+                },
+            },
+            {
+                "package": {
+                    "ecosystem": "Red Hat Lightwell:Maven",
+                    "name": "example",
+                },
+            },
+        ],
+        "database_specific": {
+            "lightwell": {
+                "csaf_advisory": f"https://packages.redhat.com/lightwell/advisories/{advisory_id}.json",
+                "cwe_ids": [],
+            }
+        },
     }
 
 
@@ -3295,6 +3321,16 @@ def test_classify_source_new_id(tmp_path: Path) -> None:
     path = tmp_path / "RHLW-2026-00042.json"
     path.write_text(json.dumps(rec))
     assert _classify_osv_source(path) == "pnc-build"
+
+
+def test_classify_source_new_format_novel(tmp_path: Path) -> None:
+    """Novel advisory record classified via affected-level source."""
+    from slan_cuan.publish import _classify_osv_source
+
+    rec = _new_format_record(source="novel-pipeline")
+    path = tmp_path / "RHLW-2026-00042.json"
+    path.write_text(json.dumps(rec))
+    assert _classify_osv_source(path) == "novel-pipeline"
 
 
 def test_mixed_old_new_records(tmp_path: Path) -> None:

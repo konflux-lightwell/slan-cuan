@@ -214,6 +214,15 @@ def _classify_osv_source(file_path: Path) -> str | None:
     if source in ("pnc-build", "novel-pipeline"):
         return source
 
+    # New advisory-format records carry source on per-affected
+    # entries, not at top level.
+    for aff in record.get("affected", []):
+        aff_db = aff.get("database_specific")
+        aff_lw = aff_db.get("lightwell") if isinstance(aff_db, dict) else None
+        aff_source = aff_lw.get("source") if isinstance(aff_lw, dict) else None
+        if aff_source in ("pnc-build", "novel-pipeline"):
+            return aff_source
+
     osv_id = record.get("id")
     if isinstance(osv_id, str) and osv_id:
         by_id = _source_from_osv_id(osv_id)

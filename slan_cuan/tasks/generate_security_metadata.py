@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import socket
 import tempfile
 import time
@@ -26,6 +27,18 @@ from slan_cuan.utils import write_tekton_result
 
 if TYPE_CHECKING:
     from fath_cuan.osidb import OsidbClient
+
+_ADVISORY_ID_RE = re.compile(r"^RHLW-\d{4}-\d{5}$")
+
+
+def _validate_advisory_id(ctx, param, value):
+    """Reject advisory IDs that do not match RHLW-YYYY-NNNNN."""
+    if value and not _ADVISORY_ID_RE.match(value):
+        raise click.BadParameter(
+            f"must match RHLW-YYYY-NNNNN format, got {value!r}"
+        )
+    return value
+
 
 _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
     os.getenv("OSIDB_TOKEN_REQUEST_TIMEOUT", "10.0")
@@ -156,6 +169,9 @@ def _get_osidb_auth_token(
     type=str,
     default="",
     show_default=True,
+    callback=_validate_advisory_id,
+    expose_value=True,
+    is_eager=False,
     help=(
         "Optional advisory ID (e.g. RHLW-2026-00042) for per-release OSV records."
     ),
