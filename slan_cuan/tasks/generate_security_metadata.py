@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import re
 import socket
 import tempfile
 import time
@@ -28,15 +27,63 @@ from slan_cuan.utils import write_tekton_result
 if TYPE_CHECKING:
     from fath_cuan.osidb import OsidbClient
 
-_ADVISORY_ID_RE = re.compile(r"^RHLW-\d{4}-\d{5}$")
+
+def _derive_advisory_id(index_data: dict) -> str | None:
+    """Derive an advisory ID from the build index when none is supplied.
+
+    Format: ``RHLW-{ecosystem}.{name}.{version}``
+
+    Returns None if the index lacks the data to derive an ID (e.g. no
+    vulns to advise on).
+    """
+    if not index_data.get("vulns"):
+        return None
+
+    if "purls" in index_data or "ecosystem" in index_data:
+        ecosystem = index_data.get("ecosystem", "").capitalize() or "Maven"
+        primary = index_data.get("primaryPurl", "")
+        if not primary:
+            purls = index_data.get("purls", [])
+            primary = purls[0] if purls else ""
+        if not primary:
+            return None
+        from packageurl import PackageURL
+
+        try:
+            parsed = PackageURL.from_string(primary)
+        except ValueError:
+            return None
+        name = (
+            f"{parsed.namespace}:{parsed.name}"
+            if parsed.namespace
+            else parsed.name
+        )
+        version = parsed.version or ""
+    else:
+        primary_gav = index_data.get("primaryGav", "")
+        if not primary_gav:
+            return None
+        parts = primary_gav.split(":")
+        if len(parts) != 3:
+            return None
+        ecosystem = "Maven"
+        name = f"{parts[0]}:{parts[1]}"
+        version = parts[2]
+
+    if not version:
+        return None
+    return f"RHLW-{ecosystem}.{name}.{version}"
 
 
 def _validate_advisory_id(ctx, param, value):
-    """Reject advisory IDs that do not match RHLW-YYYY-NNNNN."""
-    if value and not _ADVISORY_ID_RE.match(value):
-        raise click.BadParameter(
-            f"must match RHLW-YYYY-NNNNN format, got {value!r}"
-        )
+    """Reject IDs not starting with RHLW- or containing path separators."""
+    if value:
+        if not value.startswith("RHLW-"):
+            raise click.BadParameter(f"must start with 'RHLW-', got {value!r}")
+        if "/" in value or "\\" in value:
+            raise click.BadParameter(
+                f"must not contain path separators, got {value!r}"
+            )
     return value
 
 
@@ -239,6 +286,8 @@ def generate_security_metadata(
     else:
         click.echo("No OSIDB keytab file found, skipping OSIDB fetching.")
 
+    if not advisory_id:
+        advisory_id = _derive_advisory_id(index_data)
     if advisory_id:
         index_data["advisory_id"] = advisory_id
 
