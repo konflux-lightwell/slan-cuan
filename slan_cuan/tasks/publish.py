@@ -209,7 +209,9 @@ def _classify_osv_source(file_path: Path) -> str | None:
         else None
     )
     source = lightwell.get("source") if isinstance(lightwell, dict) else None
-    if source in ("pnc-build", "novel-pipeline"):
+    if source in ("pnc-build", "novel-pipeline", "lightwell-pipeline"):
+        if source == "lightwell-pipeline":
+            return "pnc-build"
         return source
 
     # New advisory-format records carry source on per-affected
@@ -218,7 +220,9 @@ def _classify_osv_source(file_path: Path) -> str | None:
         aff_db = aff.get("database_specific")
         aff_lw = aff_db.get("lightwell") if isinstance(aff_db, dict) else None
         aff_source = aff_lw.get("source") if isinstance(aff_lw, dict) else None
-        if aff_source in ("pnc-build", "novel-pipeline"):
+        if aff_source in ("pnc-build", "novel-pipeline", "lightwell-pipeline"):
+            if aff_source == "lightwell-pipeline":
+                return "pnc-build"
             return aff_source
 
     osv_id = record.get("id")

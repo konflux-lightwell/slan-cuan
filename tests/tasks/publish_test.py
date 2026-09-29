@@ -3250,7 +3250,7 @@ def test_publish_writes_security_metadata_skipped_tekton_result(
 def _new_format_record(
     advisory_id: str = "RHLW-2026-00042",
     upstream: list[str] | None = None,
-    source: str = "pnc-build",
+    source: str = "lightwell-pipeline",
 ) -> dict:
     """Build a new-format OSV record with upstream."""
     return {
