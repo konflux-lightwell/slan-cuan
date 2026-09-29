@@ -283,6 +283,7 @@ def test_sign_successful_signing(
     assert (app_dir / "my-app-1.0.0.jar.md5").exists()
     assert (app_dir / "my-app-1.0.0.jar.sha1").exists()
     assert (app_dir / "my-app-1.0.0.jar.sha256").exists()
+    assert (app_dir / "my-app-1.0.0.jar.sha512").exists()
 
     assert (app_dir / "my-app-1.0.0.pom").exists()
     assert (app_dir / "my-app-1.0.0.pom.asc").exists()
@@ -294,6 +295,7 @@ def test_sign_successful_signing(
     assert (meta_dir / "maven-metadata.xml.md5").exists()
     assert (meta_dir / "maven-metadata.xml.sha1").exists()
     assert (meta_dir / "maven-metadata.xml.sha256").exists()
+    assert (meta_dir / "maven-metadata.xml.sha512").exists()
 
     meta_text = meta_file.read_text()
     assert "<groupId>org.example</groupId>" in meta_text
@@ -733,6 +735,107 @@ def test_sign_falls_back_to_extracted_directory(
     assert "Sign command completed successfully" in result.output
 
 
+@patch("internal_request.create")
+def test_sign_rejects_direct_sign_disabled(
+    mock_create_ir: Mock,
+    tmp_path: Path,
+) -> None:
+    """DIRECT_SIGN=false is rejected, not silently signed directly."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    repo_path = _setup_repo_dir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        _base_sign_args(output_path, repo_path),
+        env={"SLAN_CUAN_SIGN_DIRECT_SIGN": "false"},
+    )
+
+    assert result.exit_code != 0
+    assert "only supported signing mode" in result.output
+    # The guard must fire before any signing is attempted.
+    mock_create_ir.assert_not_called()
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("internal_request.create")
+def test_sign_missing_extract_result_raises(
+    mock_create_ir: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """A missing extract-result file is an error, not a silent skip."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    # Repo dir WITHOUT an accompanying extract-result.json sibling.
+    repos_dir = tmp_path / "repos"
+    repo_dir = repos_dir / "repository" / "org" / "example" / "my-app" / "1.0.0"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "my-app-1.0.0.jar").write_bytes(b"jar")
+    (repo_dir / "my-app-1.0.0.pom").write_text(
+        "<project><groupId>org.example</groupId><artifactId>my-app</artifactId>"
+        "<version>1.0.0</version></project>",
+        encoding="utf-8",
+    )
+    repo_path = str(repos_dir / "repository")
+
+    mock_create_ir.return_value = "ir-no-extract"
+    mock_fetch_results.return_value = {
+        "sourceDataArtifact": "oci:quay.io/test/blob@sha256:555"
+    }
+    tarball_data = _make_signed_tarball()
+    mock_blob_fetch.side_effect = lambda ref, out, **kw: Path(out).write_bytes(
+        tarball_data
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, _base_sign_args(output_path, repo_path))
+
+    assert result.exit_code != 0
+    assert "extract result file not found" in result.output
+
+
+@patch("slan_cuan.sign.blob_fetch")
+@patch("internal_request.fetch_results")
+@patch("internal_request.create")
+def test_sign_relative_repo_path_copies_siblings(
+    mock_create_ir: Mock,
+    mock_fetch_results: Mock,
+    mock_blob_fetch: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare relative repo_path still copies sibling files (extract result)."""
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    _setup_repo_dir(tmp_path)
+    repos_dir = tmp_path / "repos"
+
+    mock_create_ir.return_value = "ir-relative"
+    mock_fetch_results.return_value = {
+        "sourceDataArtifact": "oci:quay.io/test/blob@sha256:666"
+    }
+    tarball_data = _make_signed_tarball()
+    mock_blob_fetch.side_effect = lambda ref, out, **kw: Path(out).write_bytes(
+        tarball_data
+    )
+
+    # Run with a bare relative repo_path ("repository") from inside repos_dir;
+    # its dirname is "" so the original code skipped the sibling copytree.
+    monkeypatch.chdir(repos_dir)
+    runner = CliRunner()
+    result = runner.invoke(main, _base_sign_args(output_path, "repository"))
+
+    assert result.exit_code == 0, result.output
+    extract_result_path = output_path / "extract-result.json"
+    assert extract_result_path.exists()
+    extract_data = json.loads(extract_result_path.read_text())
+    assert extract_data["deliverable_dir"] == "signed"
+
+
 # ---------------------------------------------------------------------------
 # Unit tests for slan_cuan.maven
 # ---------------------------------------------------------------------------
@@ -875,20 +978,21 @@ def test_generate_maven_metadata_merges_namespaced_existing(
 
 
 def test_ensure_artifact_checksums(tmp_path: Path) -> None:
-    """ensure_artifact_checksums creates .md5, .sha1, .sha256 sidecars."""
+    """ensure_artifact_checksums creates md5/sha1/sha256/sha512 sidecars."""
     jar_file = tmp_path / "sample.jar"
     jar_file.write_bytes(b"hello world")
 
     created = ensure_artifact_checksums(tmp_path)
-    assert len(created) == 3
+    assert len(created) == 4
     assert (tmp_path / "sample.jar.md5").exists()
     assert (tmp_path / "sample.jar.sha1").exists()
     assert (tmp_path / "sample.jar.sha256").exists()
+    assert (tmp_path / "sample.jar.sha512").exists()
 
     # Ensure sidecars are not re-checksummed if called again
     created_again = ensure_artifact_checksums(tmp_path)
     # Updates existing sidecars without chaining e.g. sample.jar.md5.md5
-    assert len(created_again) == 3
+    assert len(created_again) == 4
 
 
 def test_sign_individual_artifacts_end_to_end(tmp_path: Path) -> None:
@@ -993,7 +1097,101 @@ def test_ensure_artifact_checksums_ignores_txt_and_sidecars(
     (tmp_path / "slan-cuan.txt").write_text("manifest")
 
     created = ensure_artifact_checksums(tmp_path)
-    assert len(created) == 3
+    assert len(created) == 4
     assert (tmp_path / "artifact.jar.md5").exists()
     assert not (tmp_path / "slan-cuan.txt.md5").exists()
     assert not (tmp_path / "slan-cuan.txt.sha256").exists()
+
+
+def test_apply_signatures_root_token_inside_gav(tmp_path: Path) -> None:
+    """Root prefix strip is anchored: a GAV containing the root token is safe."""
+    top_level = tmp_path / "repository"
+    art = top_level / "com" / "example" / "repository-utils" / "1.0"
+    art.mkdir(parents=True)
+    (art / "repository-utils-1.0.jar").write_bytes(b"content")
+
+    sign_result = tmp_path / "results.json"
+    sign_result.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "file": (
+                            "repository/com/example/repository-utils/1.0/"
+                            "repository-utils-1.0.jar"
+                        ),
+                        "signature": "SIG",
+                    }
+                ]
+            }
+        )
+    )
+
+    generated = apply_signatures(
+        top_level, sign_result, zip_root_path="repository"
+    )
+    expected_asc = art / "repository-utils-1.0.jar.asc"
+    assert generated == [expected_asc]
+    assert expected_asc.read_text() == "SIG"
+    # No signature written anywhere else (no mis-stripped location).
+    assert list(top_level.rglob("*.asc")) == [expected_asc]
+
+
+def test_apply_signatures_ambiguous_basename_skipped(tmp_path: Path) -> None:
+    """When only a basename match is possible and it is ambiguous, skip it.
+
+    Two artifacts share a basename across different GAVs. The prior code took
+    matches[0] arbitrarily and mis-signed one of them.
+    """
+    top_level = tmp_path / "repository"
+    dir_a = top_level / "com" / "a" / "1.0"
+    dir_b = top_level / "com" / "b" / "1.0"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+    (dir_a / "lib-1.0.jar").write_bytes(b"A")
+    (dir_b / "lib-1.0.jar").write_bytes(b"B")
+
+    sign_result = tmp_path / "results.json"
+    # A path that resolves neither directly nor as a raw relative path, forcing
+    # the basename fallback — where two candidates exist.
+    sign_result.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "file": "repository/unknown/path/lib-1.0.jar",
+                        "signature": "SIG",
+                    }
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="No signature files were generated"):
+        apply_signatures(top_level, sign_result, zip_root_path="repository")
+
+    assert not (dir_a / "lib-1.0.jar.asc").exists()
+    assert not (dir_b / "lib-1.0.jar.asc").exists()
+
+
+def test_format_maven_metadata_dedups_comparator_equal_versions() -> None:
+    """Comparator-equal versions (1.0 / 1.00) collapse to a single entry."""
+    xml_str = format_maven_metadata(
+        group_id="org.example",
+        artifact_id="test-art",
+        versions=["1.0", "1.00", "1.0.0"],
+        last_updated="20260915120000",
+    )
+    # "1.0" and "1.00" are comparator-equal -> one entry; "1.0.0" is distinct.
+    assert xml_str.count("<version>") == 2
+
+
+def test_version_compare_key_hash_eq_contract() -> None:
+    """__hash__/__eq__ are consistent for comparator-equal versions."""
+    a = VersionCompareKey("1.0")
+    b = VersionCompareKey("1.00")
+    assert a == b
+    assert hash(a) == hash(b)
+    assert len({a, b}) == 1
+    # Distinct versions remain distinct.
+    assert VersionCompareKey("1.0") != VersionCompareKey("1.0.0")

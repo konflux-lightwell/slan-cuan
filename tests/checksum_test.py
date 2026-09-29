@@ -25,16 +25,31 @@ def test_compute_checksum_algorithms(tmp_path: Path) -> None:
     ).hexdigest()
 
 
+def test_compute_checksum_sha512(tmp_path: Path) -> None:
+    """compute_checksum supports sha512 via hashlib.new fallback."""
+    test_file = tmp_path / "data.bin"
+    content = b"sha512 coverage content"
+    test_file.write_bytes(content)
+
+    assert compute_checksum(test_file, "sha512") == hashlib.sha512(
+        content
+    ).hexdigest()
+
+
 def test_write_checksum_sidecars(tmp_path: Path) -> None:
-    """write_checksum_sidecars creates valid .md5, .sha1, and .sha256 files."""
+    """write_checksum_sidecars creates .md5, .sha1, .sha256, and .sha512 files."""
     test_file = tmp_path / "lib.jar"
     test_file.write_bytes(b"sample jar content")
 
     created = write_checksum_sidecars(test_file)
-    assert len(created) == 3
+    assert len(created) == 4
     assert (tmp_path / "lib.jar.md5").exists()
     assert (tmp_path / "lib.jar.sha1").exists()
     assert (tmp_path / "lib.jar.sha256").exists()
+    assert (tmp_path / "lib.jar.sha512").exists()
 
     expected_sha256 = hashlib.sha256(b"sample jar content").hexdigest()
     assert (tmp_path / "lib.jar.sha256").read_text() == expected_sha256
+
+    expected_sha512 = hashlib.sha512(b"sample jar content").hexdigest()
+    assert (tmp_path / "lib.jar.sha512").read_text() == expected_sha512

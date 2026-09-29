@@ -25,9 +25,10 @@ def compute_checksum(file_path: Path | str, algorithm: str) -> str:
 
 
 def write_checksum_sidecars(
-    file_path: Path, algorithms: tuple[str, ...] = ("md5", "sha1", "sha256")
+    file_path: Path,
+    algorithms: tuple[str, ...] = ("md5", "sha1", "sha256", "sha512"),
 ) -> list[Path]:
-    """Write .md5, .sha1, .sha256 checksum sidecars next to file_path."""
+    """Write .md5, .sha1, .sha256, .sha512 checksum sidecars next to file_path."""
     created: list[Path] = []
     for algo in algorithms:
         sidecar = file_path.with_name(f"{file_path.name}.{algo}")

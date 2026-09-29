@@ -73,14 +73,40 @@ class VersionCompareKey:
         return self._compare(other) >= 0
 
     def __eq__(self, other: object) -> bool:
-        """Check equality."""
+        """Check equality (consistent with the ordering in _compare)."""
         if not isinstance(other, VersionCompareKey):
             return NotImplemented
-        return self._compare(other) == 0
+        return self._normalized_key() == other._normalized_key()
 
     def __hash__(self) -> int:
-        """Return hash."""
-        return hash(self.version)
+        """Return a hash consistent with __eq__.
+
+        Two versions that _compare treats as equal (e.g. ``1.0`` and
+        ``1.00``) must hash identically, otherwise ``set()``/``dict`` would
+        keep them as distinct entries and produce duplicate ``<version>``
+        elements in maven-metadata.xml.
+        """
+        return hash(self._normalized_key())
+
+    def _normalized_key(self) -> tuple[tuple[int, object], ...]:
+        """Canonical key whose equality mirrors ``_compare() == 0``.
+
+        Each version segment becomes ``(1, int_value)`` when numeric or
+        ``(0, text)`` otherwise. Numeric segments compare by integer value so
+        leading-zero variants collapse; the leading tag keeps numeric and
+        string segments from ever comparing equal, matching _compare's rule
+        that a numeric segment never equals a non-numeric one.
+        """
+        items = self.version.split(".")
+        if items and "-" in items[-1]:
+            items = items[:-1] + items[-1].split("-")
+        key: list[tuple[int, object]] = []
+        for item in items:
+            if item.isnumeric():
+                key.append((1, int(item)))
+            else:
+                key.append((0, item))
+        return tuple(key)
 
     def _compare(self, other: VersionCompareKey) -> int:
         xitems = self.version.split(".")
@@ -205,12 +231,18 @@ def apply_signatures(
         if not rel_file or not signature:
             continue
 
-        # Strip root prefix if present
-        if zip_root_path in rel_file:
-            parts = rel_file.split(zip_root_path, 1)
-            stripped = parts[1].lstrip("/")
+        # Strip the zip root prefix, anchored to the start of the path. A
+        # substring/containment check mis-splits entries whose GAV happens to
+        # contain the root token (e.g. root "repository" inside
+        # ".../repository-utils/..."), dropping the signature.
+        normalized = rel_file.lstrip("/")
+        root_prefix = zip_root_path.strip("/")
+        if root_prefix and normalized.startswith(f"{root_prefix}/"):
+            stripped = normalized[len(root_prefix) + 1:]
+        elif root_prefix and normalized == root_prefix:
+            stripped = ""
         else:
-            stripped = rel_file.lstrip("/")
+            stripped = normalized
 
         target = (top_level / stripped).resolve()
         if not (target == resolved_top or target.is_relative_to(resolved_top)):
@@ -228,9 +260,13 @@ def apply_signatures(
             ):
                 target = raw_target
             else:
-                # Search by filename within top_level
-                matches = list(top_level.rglob(Path(stripped).name))
-                if matches:
+                # Search by filename within top_level. Only accept an
+                # unambiguous single match: two artifacts can share a basename
+                # across different GAVs, and signing an arbitrary matches[0]
+                # would write the .asc next to the wrong artifact.
+                basename = Path(stripped).name
+                matches = list(top_level.rglob(basename))
+                if len(matches) == 1:
                     candidate = matches[0].resolve()
                     if not (
                         candidate == resolved_top
@@ -238,6 +274,15 @@ def apply_signatures(
                     ):
                         continue
                     target = candidate
+                elif len(matches) > 1:
+                    logger.warning(
+                        "Ambiguous basename %s (%d matches) in %s, "
+                        "skipping signature to avoid mis-signing",
+                        basename,
+                        len(matches),
+                        top_level,
+                    )
+                    continue
                 else:
                     logger.warning(
                         "Artifact %s not found in %s, skipping signature",
@@ -304,7 +349,12 @@ def format_maven_metadata(
     """Format maven-metadata.xml content string."""
     if last_updated is None:
         last_updated = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    sorted_versions = sorted(set(versions), key=VersionCompareKey)
+    # Dedup on the comparison form (not the raw string) so comparator-equal
+    # variants like "1.0"/"1.00" collapse to a single <version> entry.
+    unique_versions = {VersionCompareKey(v): v for v in versions}
+    sorted_versions = [
+        unique_versions[k] for k in sorted(unique_versions)
+    ]
     latest_version = sorted_versions[-1]
     non_snapshot = [v for v in sorted_versions if not v.endswith("-SNAPSHOT")]
     release_version = non_snapshot[-1] if non_snapshot else latest_version
@@ -430,7 +480,7 @@ def ensure_artifact_checksums(
     top_level: Path,
     ignore_patterns: tuple[str, ...] | list[str] = (),
 ) -> list[Path]:
-    """Ensure all artifacts have .md5, .sha1, and .sha256 checksum sidecars.
+    """Ensure all artifacts have .md5, .sha1, .sha256, .sha512 sidecars.
 
     Excludes sidecar files, signatures, and metadata files.
     Returns list of created/updated checksum paths.
@@ -462,8 +512,8 @@ def sign_individual_artifacts(
     """Native replacement for novabucks sign_individual_artifacts_workflow.
 
     Unpacks repository, applies .asc signatures from direct signing JSON,
-    generates/refreshes maven-metadata.xml, creates .md5, .sha1, .sha256
-    checksums for metadata and artifacts, and copies everything to
+    generates/refreshes maven-metadata.xml, creates .md5, .sha1, .sha256,
+    .sha512 checksums for metadata and artifacts, and copies everything to
     destination_dir.
     """
     work_ctx: tempfile.TemporaryDirectory[str] | None = None
