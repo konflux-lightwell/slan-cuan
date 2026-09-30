@@ -106,12 +106,17 @@ def wait_for_internal_request(
         conditions = ir_obj.get("status", {}).get("conditions") or []
         for condition in conditions:
             if condition.get("type") == "Succeeded":
-                status = condition.get("status")
+                # Terminal state is keyed off `reason`, not `status`:
+                # release-service reports status "False" with reason
+                # "Running" while the InternalRequest is still executing, so
+                # a `status == "False"` check would misfire mid-run. Only the
+                # reason distinguishes running / succeeded / failed (matching
+                # the vendored internal_request.wait_for_completion helper).
                 reason = condition.get("reason", "")
                 message = condition.get("message", "")
-                if status == "True" and reason == "Succeeded":
+                if reason == "Succeeded":
                     return
-                if status == "False" or (reason and reason != "Running"):
+                if reason and reason != "Running":
                     detail = f": {message}" if message else ""
                     raise click.ClickException(
                         f"InternalRequest '{ir_name}' failed with reason "

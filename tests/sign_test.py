@@ -1288,3 +1288,55 @@ def test_wait_for_internal_request_timeout(mock_run: Mock) -> None:
     ):
         wait_for_internal_request("ir-1", poll_interval=0, timeout=0)
 
+
+@patch("subprocess.run")
+def test_wait_for_internal_request_running_status_false_is_not_failure(
+    mock_run: Mock,
+) -> None:
+    """An in-progress IR (status False, reason Running) must keep polling.
+
+    release-service sets the Succeeded condition to status "False" with
+    reason "Running" while the InternalRequest is still executing. This must
+    not be treated as a terminal failure (regression from #112, which raised
+    "failed with reason 'Running'" and aborted healthy signing runs).
+    """
+    from slan_cuan.sign import wait_for_internal_request
+
+    running = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "False",
+                            "reason": "Running",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    succeeded = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "True",
+                            "reason": "Succeeded",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    mock_run.side_effect = [running, succeeded]
+
+    # Must not raise: the running poll is skipped, the success poll returns.
+    wait_for_internal_request("ir-1", poll_interval=0)
+    assert mock_run.call_count == 2
+
