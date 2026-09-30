@@ -96,6 +96,10 @@ spec:
     - name: sourceDataArtifact
       description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
       type: string
+    - name: securityMetadataArtifact
+      description: Optional Trusted Artifact URI containing security metadata.
+      type: string
+      default: ""
     - name: ociStorage
       description: The OCI repository where the Trusted Artifact is stored.
       type: string
@@ -172,6 +176,29 @@ spec:
           value: /var/workdir/extracted
         - name: sourceDataArtifact
           value: $(params.sourceDataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: use-security-metadata-artifact
+      when:
+        - input: $(params.securityMetadataArtifact)
+          operator: notin
+          values: [""]
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: /var/workdir/extracted/security_metadata
+        - name: sourceDataArtifact
+          value: $(params.securityMetadataArtifact)
         - name: orasOptions
           value: $(params.orasOptions)
         - name: caCertPath
