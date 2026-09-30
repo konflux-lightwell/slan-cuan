@@ -59,8 +59,16 @@ spec:
       type: string
       default: "false"
     - name: sourceDataArtifact
-      description: Trusted Artifact URI of the extracted artifact directory from slan-cuan-extract.
+      description: >-
+        Trusted Artifact URI containing metadata and attachments from slan-cuan-extract.
       type: string
+    - name: signingDataArtifact
+      description: >-
+        Trusted Artifact URI containing only build-output.zip for signing.
+        When set, this is used as the direct-sign input TA and unpacks
+        build-output.zip into workDir. If empty, falls back to sourceDataArtifact.
+      type: string
+      default: ""
     - name: ociStorage
       description: The OCI repository where the Trusted Artifact is stored.
       type: string
@@ -100,7 +108,7 @@ spec:
       runAsNonRoot: true
       readOnlyRootFilesystem: false
   steps:
-    - name: use-trusted-artifact
+    - name: use-source-metadata-artifact
       ref:
         resolver: git
         params:
@@ -119,16 +127,11 @@ spec:
           value: $(params.orasOptions)
         - name: caCertPath
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
-    # Direct signing only needs the repository ZIP. create-trusted-artifact
-    # accepts a file workDir and archives it by basename at the TA root, so we
-    # point it straight at build-output.zip instead of first cp-ing the file
-    # into a staging directory. The original extracted TA is left untouched for
-    # the normal (RADAS) signing flow.
-    - name: create-direct-sign-input-trusted-artifact
+    - name: use-signing-artifact
       when:
-        - input: $(params.DIRECT_SIGN)
-          operator: in
-          values: ["true"]
+        - input: $(params.signingDataArtifact)
+          operator: notin
+          values: [""]
       ref:
         resolver: git
         params:
@@ -137,23 +140,21 @@ spec:
           - name: revision
             value: $(params.catalogGitRevision)
           - name: pathInRepo
-            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
       params:
-        - name: ociStorage
-          value: $(params.ociStorage)
-        # A file workDir is archived by basename at the TA root, producing the
-        # same build-output.zip-at-root layout the cp step used to stage.
         - name: workDir
-          value: /var/workdir/extracted/build-output.zip
-        # Keep this outside workDir so the pullspec file itself is not added
-        # to the reduced TA. The sign CLI reads this hand-off file (via
-        # SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT_FILE).
+          value: /var/workdir/extracted
         - name: sourceDataArtifact
-          value: /var/workdir/direct-sign-sourceDataArtifact
+          value: $(params.signingDataArtifact)
         - name: orasOptions
           value: $(params.orasOptions)
         - name: caCertPath
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    # Direct signing only needs the repository ZIP. create-trusted-artifact
+    # accepts a file workDir and archives it by basename at the TA root, so we
+    # point it straight at build-output.zip instead of first cp-ing the file
+    # into a staging directory. The original extracted TA is left untouched for
+    # the normal (RADAS) signing flow.
     - name: run
       image: quay.io/light-castle/slan-cuan:latest
       imagePullPolicy: Always
@@ -187,11 +188,8 @@ spec:
           value: $(params.DIRECT_SIGN_VERBOSE)
         - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_STORAGE
           value: $(params.ociStorage)
-        # Hand-off file written by the create-direct-sign-input-trusted-artifact
-        # step. The sign CLI reads the reduced-TA pullspec from here, so no inline
-        # shell is needed in this run step. Ignored unless DIRECT_SIGN is true.
-        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT_FILE
-          value: /var/workdir/direct-sign-sourceDataArtifact
+        - name: SLAN_CUAN_SIGN_DIRECT_SIGN_TASK_TA_SOURCE_ARTIFACT
+          value: $(params.signingDataArtifact)
         - name: SLAN_CUAN_SIGN_IGNORE_PATTERNS
           value: $(params.IGNORE_PATTERNS)
         - name: SLAN_CUAN_SIGN_REGISTRY_AUTH_FILE

@@ -361,6 +361,8 @@ def sign(
                 direct_sign_task_ta_source_artifact,
                 direct_sign_task_ta_source_artifact_file,
             )
+            if not source_artifact:
+                source_artifact = repo_url
             _sign_directly(
                 repo_url=source_artifact,
                 signing_key=signing_key,
@@ -406,14 +408,18 @@ def sign(
                     temp_dir=tmp_dir,
                 )
 
-        # 4 - Copy the whole content of the original directory to the output path.
-        # Use abspath so a bare relative repo_path (e.g. "repository", whose
-        # dirname is "") still resolves to its real parent directory instead of
-        # silently skipping the copy of sibling files (including the extract
-        # result).
-        original_dir = os.path.dirname(os.path.abspath(repo_path))
-        if os.path.isdir(original_dir):
-            shutil.copytree(original_dir, output_path, dirs_exist_ok=True)
+        # 4 - Copy only the small metadata needed by publish. Never copy the
+        # original extracted repository: for large releases it contains both a
+        # multi-gigabyte ZIP and its (unneeded) expanded tree.
+        original_dir = Path(repo_path).resolve().parent
+        for name in (EXTRACT_RESULT_FILENAME, "attachments", "metadata"):
+            source = original_dir / name
+            destination = Path(output_path) / name
+            if source.is_dir():
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+            elif source.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
 
         # 5 - Adjust the EXTRACT_RESULT_FILENAME to point to the signed directory
         extract_result_path = os.path.join(output_path, EXTRACT_RESULT_FILENAME)
