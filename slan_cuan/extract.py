@@ -11,7 +11,6 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.archive import extract_zip_safely
 from slan_cuan.context import GlobalContext, write_tekton_result
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
@@ -262,36 +261,43 @@ def extract(
             verbose=ctx.verbose,
         )
 
-        # If the deliverable is a zip archive, extract it safely
+        # ZIP deliverables are intentionally not extracted: downstream consumers
+        # use the archive directly, and materializing a large repository doubles
+        # disk usage. Build the file inventory from ZIP metadata instead.
         deliverable_file = output_dir / deliverable_name
-        if deliverable_file.is_file() and zipfile.is_zipfile(deliverable_file):
-            if ctx.verbose:
-                click.echo(f"Extracting archive: {deliverable_file}")
-            try:
-                extract_zip_safely(deliverable_file, output_dir)
-            except ValueError as e:
-                raise click.ClickException(str(e)) from e
-            deliverable_name = deliverable_name.removesuffix(".zip")
-            if ctx.verbose:
-                click.echo(f"Deliverable directory: {deliverable_name}")
-
-        # Discover extracted files
-        deliverable_path = output_dir / deliverable_name
-        if not deliverable_path.exists():
-            raise click.ClickException(
-                f"Deliverable directory not found: {deliverable_path}"
-            )
-
-        # Walk the directory tree and collect file paths
         files = []
-        for item in deliverable_path.rglob("*"):
-            if item.is_file():
-                # Store relative path from output_dir
-                rel_path = item.relative_to(output_dir)
-                files.append(str(rel_path))
-
-        # Sort for deterministic output
-        files.sort()
+        file_sizes: dict[str, int] = {}
+        if deliverable_file.is_file() and zipfile.is_zipfile(deliverable_file):
+            deliverable_name = deliverable_name.removesuffix(".zip")
+            with zipfile.ZipFile(deliverable_file) as archive:
+                members = archive.infolist()
+                for member in members:
+                    member_path = Path(member.filename)
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        raise click.ClickException(
+                            "Zip-slip path traversal attempt detected: "
+                            + member.filename
+                        )
+                file_sizes = {
+                    str(Path(member.filename)): member.file_size
+                    for member in members
+                    if not member.is_dir()
+                }
+                files = sorted(file_sizes.keys())
+            if ctx.verbose:
+                click.echo(f"Deliverable archive: {deliverable_file}")
+        else:
+            deliverable_path = output_dir / deliverable_name
+            if not deliverable_path.exists():
+                raise click.ClickException(
+                    f"Deliverable directory not found: {deliverable_path}"
+                )
+            file_sizes = {
+                str(item.relative_to(output_dir)): item.stat().st_size
+                for item in deliverable_path.rglob("*")
+                if item.is_file()
+            }
+            files = sorted(file_sizes.keys())
 
         # Discover and pull attachments
         attachment_files: list[str] = []
@@ -396,11 +402,7 @@ def extract(
         pom_count = sum(1 for f in files if f.endswith(".pom"))
         has_sbom = any("cyclonedx.json" in f for f in files)
         has_provenance = any("provenance.json" in f for f in files)
-        total_size = sum(
-            (output_dir / f).stat().st_size
-            for f in files
-            if (output_dir / f).exists()
-        )
+        total_size = sum(file_sizes.values())
 
         click.echo(
             f"Extracted: {jar_count} artifact(s), {pom_count} POM(s), "
@@ -415,7 +417,7 @@ def extract(
         if ctx.verbose:
             click.echo(f"\nExtracted files ({len(files)}):")
             for file_path in files:
-                size = (output_dir / file_path).stat().st_size
+                size = file_sizes.get(file_path, 0)
                 click.echo(f"  {file_path} ({size:,} bytes)")
 
     except OrasError as e:

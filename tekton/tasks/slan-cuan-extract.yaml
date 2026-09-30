@@ -70,8 +70,11 @@ spec:
       description: >-
         Name of the attachments directory inside the extracted output.
         Empty when no attachments were discovered.
+    - name: signingDataArtifact
+      description: Trusted Artifact URI containing only build-output.zip.
+      type: string
     - name: sourceDataArtifact
-      description: Trusted Artifact URI of the extracted artifact directory.
+      description: Trusted Artifact URI containing extraction metadata and attachments.
       type: string
   stepTemplate:
     volumeMounts:
@@ -109,7 +112,18 @@ spec:
         - name: registry-auth
           mountPath: /auth
           readOnly: true
-    - name: create-trusted-artifact
+    - name: prepare-source-data
+      image: quay.io/konflux-ci/konflux-test:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        mkdir -p /var/workdir/source-data
+        cp /var/workdir/extracted/extract-result.json /var/workdir/source-data/
+        cp -a /var/workdir/extracted/metadata /var/workdir/source-data/
+        if [ -d /var/workdir/extracted/attachments ]; then
+          cp -a /var/workdir/extracted/attachments /var/workdir/source-data/
+        fi
+    - name: create-signing-trusted-artifact
       ref:
         resolver: git
         params:
@@ -123,7 +137,28 @@ spec:
         - name: ociStorage
           value: $(params.ociStorage)
         - name: workDir
-          value: /var/workdir/extracted
+          value: /var/workdir/extracted/build-output.zip
+        - name: sourceDataArtifact
+          value: $(results.signingDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: create-source-metadata-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: /var/workdir/source-data
         - name: sourceDataArtifact
           value: $(results.sourceDataArtifact.path)
         - name: orasOptions

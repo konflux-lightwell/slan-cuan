@@ -1061,6 +1061,7 @@ def test_extract_zip_deliverable(
     result = runner.invoke(
         main,
         [
+            "--verbose",
             "extract",
             "--image",
             "quay.io/light-castle/tmp-pnc@sha256:abc123",
@@ -1071,9 +1072,9 @@ def test_extract_zip_deliverable(
 
     assert result.exit_code == 0
 
-    # Zip should be kept, directory should exist
+    # The ZIP is kept and is not expanded to disk.
     assert (output_dir / "TEST-build-output.zip").exists()
-    assert (output_dir / "TEST-build-output").is_dir()
+    assert not (output_dir / "TEST-build-output").exists()
 
     with (output_dir / "extract-result.json").open() as f:
         data = json.load(f)
