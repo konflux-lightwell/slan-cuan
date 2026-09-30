@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 
 from slan_cuan.context import GlobalContext, write_tekton_result
+from slan_cuan.github_osv import GitHubOsvClient, GitHubOsvError
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     PUBLISH_RESULT_FILENAME,
@@ -406,6 +407,42 @@ def _upload_one(
         "(CRLF/newline-delimited 'Key: Value' or JSON)."
     ),
 )
+@click.option(
+    "--github-osv-repo",
+    envvar="SLAN_CUAN_PUBLISH_GITHUB_OSV_REPO",
+    type=str,
+    default=None,
+    help=(
+        "GitHub repository (owner/name) to publish OSV records to, in "
+        "addition to Pulp. Enables GitHub publication when set together with "
+        "--github-osv-token."
+    ),
+)
+@click.option(
+    "--github-osv-token",
+    envvar="SLAN_CUAN_PUBLISH_GITHUB_OSV_TOKEN",
+    type=str,
+    default=None,
+    help="Personal access / bot token with write access to the OSV repo.",
+)
+@click.option(
+    "--github-osv-branch",
+    envvar="SLAN_CUAN_PUBLISH_GITHUB_OSV_BRANCH",
+    type=str,
+    default="main",
+    show_default=True,
+    help="Branch of the OSV repository to commit records onto.",
+)
+@click.option(
+    "--github-osv-path",
+    envvar="SLAN_CUAN_PUBLISH_GITHUB_OSV_PATH",
+    type=str,
+    default="",
+    help=(
+        "Directory prefix inside the OSV repository for records "
+        "(default: repository root)."
+    ),
+)
 @click.pass_obj
 def publish(
     ctx: GlobalContext,
@@ -425,10 +462,18 @@ def publish(
     pulp_task_timeout: float,
     pulp_max_total_task_timeout: float | None,
     pulp_custom_headers: str,
+    github_osv_repo: str | None,
+    github_osv_token: str | None,
+    github_osv_branch: str,
+    github_osv_path: str,
 ) -> None:
     """Publish Maven artifacts to Pulp."""
     pulp_file_repository = (
         pulp_file_repository.strip() or None if pulp_file_repository else None
+    )
+    github_osv_repo = github_osv_repo.strip() or None if github_osv_repo else None
+    github_osv_token = (
+        github_osv_token.strip() or None if github_osv_token else None
     )
     try:
         result_path = artifact_dir / EXTRACT_RESULT_FILENAME
@@ -487,6 +532,13 @@ def publish(
             raise click.UsageError(
                 "--pulp-file-repository is required for OSV publication."
             )
+
+        if bool(github_osv_repo) != bool(github_osv_token):
+            raise click.UsageError(
+                "--github-osv-repo and --github-osv-token must be set "
+                "together for GitHub OSV publication."
+            )
+        github_osv_enabled = bool(github_osv_repo and github_osv_token)
 
         expected_source = (
             _expected_source_for_repo(pulp_file_repository)
@@ -550,6 +602,12 @@ def publish(
             if file_skipped:
                 click.echo(
                     f"Security metadata skipped (wrong type): {file_skipped}"
+                )
+            if github_osv_enabled and uploadable_metadata:
+                click.echo(
+                    f"GitHub OSV: would push {len(uploadable_metadata)} "
+                    f"record(s) to {github_osv_repo} "
+                    f"(branch {github_osv_branch})"
                 )
             click.echo(
                 f"\ndry-run: would upload "
@@ -725,6 +783,41 @@ def publish(
         if file_uploaded:
             click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
 
+        github_osv_uploaded = 0
+        github_osv_commit: str | None = None
+        if github_osv_enabled and uploadable_metadata:
+            assert github_osv_repo is not None
+            assert github_osv_token is not None
+            commit_message = (
+                f"Publish {len(uploadable_metadata)} OSV record(s) "
+                f"from {extract_result.image}"
+            )
+            try:
+                gh_client = GitHubOsvClient(
+                    github_osv_repo,
+                    github_osv_token,
+                    branch=github_osv_branch,
+                    path=github_osv_path,
+                    verbose=ctx.verbose,
+                )
+                github_osv_commit = gh_client.publish(
+                    uploadable_metadata, commit_message
+                )
+            except GitHubOsvError as e:
+                raise click.ClickException(
+                    f"GitHub OSV publication failed: {e.message}\n{e.stderr}"
+                ) from e
+            if github_osv_commit is not None:
+                github_osv_uploaded = len(uploadable_metadata)
+                click.echo(
+                    f"GitHub OSV: pushed {github_osv_uploaded} record(s) to "
+                    f"{github_osv_repo} @ {github_osv_commit}"
+                )
+            else:
+                click.echo(
+                    f"GitHub OSV: no changes to publish to {github_osv_repo}"
+                )
+
         publish_result = PublishResult(
             pulp_url=pulp_url,
             distribution=pulp_repository,
@@ -738,6 +831,9 @@ def publish(
             file_repository=pulp_file_repository if file_uploaded else None,
             security_metadata_uploaded=file_uploaded,
             security_metadata_skipped=file_skipped,
+            github_osv_repo=github_osv_repo if github_osv_uploaded else None,
+            github_osv_commit=github_osv_commit,
+            github_osv_uploaded=github_osv_uploaded,
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
@@ -773,6 +869,16 @@ def publish(
             ctx.tekton_results_dir,
             "SECURITY_METADATA_SKIPPED",
             str(file_skipped),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "GITHUB_OSV_UPLOADED",
+            str(github_osv_uploaded),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "GITHUB_OSV_COMMIT",
+            github_osv_commit or "",
         )
 
         click.echo(
