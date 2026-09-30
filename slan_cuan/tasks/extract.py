@@ -276,8 +276,8 @@ def extract(
                         or target_member_path.is_relative_to(resolved_out)
                     ):
                         raise click.ClickException(
-                            "Zip-slip path traversal attempt detected: "
-                            + member.filename
+                            "Zip-slip path traversal attempt detected: " +
+                            member.filename
                         )
                 zf.extractall(output_dir)
             deliverable_name = deliverable_name.removesuffix(".zip")
