@@ -80,7 +80,7 @@ spec:
     - name: PULP_TASK_TIMEOUT
       description: Maximum time in seconds to wait for asynchronous Pulp tasks.
       type: string
-      default: "1800"
+      default: "2700"
     - name: PULP_MAX_TOTAL_TASK_TIMEOUT
       description: >-
         Absolute maximum time in seconds across all Pulp task state and
