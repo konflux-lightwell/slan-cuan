@@ -1340,3 +1340,37 @@ def test_wait_for_internal_request_running_status_false_is_not_failure(
     wait_for_internal_request("ir-1", poll_interval=0)
     assert mock_run.call_count == 2
 
+
+@patch("subprocess.run")
+def test_wait_for_internal_request_failure_includes_pipeline_run(
+    mock_run: Mock,
+) -> None:
+    """A failure message surfaces the pipelineRun for direct inspection."""
+    import click
+
+    from slan_cuan.sign import wait_for_internal_request
+
+    mock_run.return_value = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "pipelineRun": "middleware-signing-l2f8c",
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "False",
+                            "reason": "PipelineRunFailed",
+                            "message": "pipeline timed out",
+                        }
+                    ],
+                }
+            }
+        ),
+    )
+    with pytest.raises(
+        click.ClickException,
+        match="pipelineRun: middleware-signing-l2f8c",
+    ):
+        wait_for_internal_request("ir-1", poll_interval=0)
+

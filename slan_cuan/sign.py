@@ -103,6 +103,9 @@ def wait_for_internal_request(
             time.sleep(poll_interval)
             continue
 
+        pipeline_run = ir_obj.get("status", {}).get("pipelineRun", "")
+        pr_info = f" (pipelineRun: {pipeline_run})" if pipeline_run else ""
+
         conditions = ir_obj.get("status", {}).get("conditions") or []
         for condition in conditions:
             if condition.get("type") == "Succeeded":
@@ -118,14 +121,15 @@ def wait_for_internal_request(
                     return
                 if reason and reason != "Running":
                     detail = f": {message}" if message else ""
+                    # Surface the pipelineRun so a failed sign can be
+                    # inspected directly (the vendored helper dumped the
+                    # full conditions on failure; this keeps the pointer).
                     raise click.ClickException(
                         f"InternalRequest '{ir_name}' failed with reason "
-                        f"'{reason}'{detail}"
+                        f"'{reason}'{detail}{pr_info}"
                     )
 
         if time.time() - last_log_time >= log_interval:
-            pipeline_run = ir_obj.get("status", {}).get("pipelineRun", "")
-            pr_info = f" (pipelineRun: {pipeline_run})" if pipeline_run else ""
             click.echo(
                 f"  - Waiting for InternalRequest '{ir_name}' to complete... "
                 f"(elapsed: {int(elapsed)}s){pr_info}"
