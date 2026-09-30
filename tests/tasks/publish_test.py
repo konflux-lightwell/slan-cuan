@@ -3280,7 +3280,6 @@ def _new_format_record(
         ],
         "database_specific": {
             "lightwell": {
-                "csaf_advisory": f"https://packages.redhat.com/lightwell/advisories/{advisory_id}.json",
                 "cwe_ids": [],
             }
         },
