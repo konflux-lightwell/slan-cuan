@@ -69,7 +69,10 @@ def wait_for_internal_request(
     log_interval: int = 60,
     timeout: int = 3600,
 ) -> None:
-    """Wait for an InternalRequest to complete with a fixed polling interval and periodic logging."""
+    """Wait for an InternalRequest to complete with fixed polling.
+
+    Uses a static polling interval and periodic heartbeat logging.
+    """
     start_time = time.time()
     last_log_time = 0.0
 
@@ -77,15 +80,18 @@ def wait_for_internal_request(
         elapsed = time.time() - start_time
         if elapsed > timeout:
             raise click.ClickException(
-                f"Timed out waiting for InternalRequest '{ir_name}' after {int(elapsed)}s"
+                f"Timed out waiting for InternalRequest '{ir_name}' "
+                f"after {int(elapsed)}s"
             )
 
         cmd = ["kubectl", "get", "internalrequest", ir_name, "-o", "json"]
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             if time.time() - last_log_time >= log_interval:
+                err = proc.stderr.strip()
                 click.echo(
-                    f"  - Waiting for InternalRequest '{ir_name}'... (kubectl: {proc.stderr.strip()})"
+                    f"  - Waiting for InternalRequest '{ir_name}'... "
+                    f"(kubectl: {err})"
                 )
                 last_log_time = time.time()
             time.sleep(poll_interval)
@@ -108,7 +114,8 @@ def wait_for_internal_request(
                 if status == "False" or (reason and reason != "Running"):
                     detail = f": {message}" if message else ""
                     raise click.ClickException(
-                        f"InternalRequest '{ir_name}' failed with reason '{reason}'{detail}"
+                        f"InternalRequest '{ir_name}' failed with reason "
+                        f"'{reason}'{detail}"
                     )
 
         if time.time() - last_log_time >= log_interval:
