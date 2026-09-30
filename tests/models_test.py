@@ -1226,6 +1226,83 @@ class TestRequireSupplyChainMetadata:
             )
 
 
+class TestSecurityMetadataDirResolution:
+    """from_extract_result resolves the security metadata directory.
+
+    Regression coverage for LWLP-2339: after the Trusted Artifact split
+    (slan-cuan#111), the ``extract-result.json`` reaching publish no longer
+    carries the ``security_metadata_dir`` field that generate-security-metadata
+    writes (that updated file stays in the generate task's workdir and is not
+    packaged into ``securityMetadataArtifact``). Publish must still locate the
+    OSV/VEX records, which the publish task unpacks to the conventional
+    ``<artifact_dir>/security_metadata`` path.
+    """
+
+    def _extract_result(self, security_metadata_dir: str | None) -> ExtractResult:
+        return ExtractResult(
+            image=ImageReference(
+                registry="quay.io",
+                repository="test/image",
+                tag=None,
+                digest="sha256:abc123",
+            ),
+            manifest_digest="sha256:manifest123",
+            layers=[],
+            annotations={},
+            deliverable_dir="TEST-build-output",
+            files=[],
+            extracted_at="2026-06-19T12:00:00Z",
+            security_metadata_dir=security_metadata_dir,
+        )
+
+    def _make_repo(self, tmp_path: Path) -> None:
+        (tmp_path / "TEST-build-output" / "repository").mkdir(parents=True)
+
+    def _make_conventional_metadata(self, tmp_path: Path) -> Path:
+        sec_dir = tmp_path / "security_metadata"
+        sec_dir.mkdir(parents=True)
+        (sec_dir / "x_RHLW-CVE-2024-0001-1.0.0.json").write_text("{}")
+        return sec_dir
+
+    def test_uses_field_when_present(self, tmp_path: Path) -> None:
+        """An explicit security_metadata_dir field is honored."""
+        self._make_repo(tmp_path)
+        sec_dir = tmp_path / "TEST-build-output" / "security_metadata"
+        sec_dir.mkdir(parents=True)
+        result = self._extract_result("TEST-build-output/security_metadata")
+
+        build = BuildOutput.from_extract_result(result, tmp_path)
+
+        assert build.security_metadata_dir == sec_dir
+
+    def test_falls_back_to_conventional_dir_when_field_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """Fall back to the conventional dir when the field is unset.
+
+        The publish task unpacks securityMetadataArtifact into
+        ``<artifact_dir>/security_metadata``, so that directory is used.
+        """
+        self._make_repo(tmp_path)
+        sec_dir = self._make_conventional_metadata(tmp_path)
+        result = self._extract_result(None)
+
+        build = BuildOutput.from_extract_result(result, tmp_path)
+
+        assert build.security_metadata_dir == sec_dir
+
+    def test_none_when_field_absent_and_no_conventional_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """With no field and no conventional dir, resolution yields None."""
+        self._make_repo(tmp_path)
+        result = self._extract_result(None)
+
+        build = BuildOutput.from_extract_result(result, tmp_path)
+
+        assert build.security_metadata_dir is None
+
+
 class TestPublishResult:
     """Tests for PublishResult serialization."""
 

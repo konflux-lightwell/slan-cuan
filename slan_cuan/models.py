@@ -11,6 +11,12 @@ EXTRACT_RESULT_FILENAME = "extract-result.json"
 PUBLISH_RESULT_FILENAME = "publish-result.json"
 REGISTER_RESULT_FILENAME = "register-result.json"
 
+# Conventional directory name, relative to the artifact directory, that
+# generate-security-metadata writes OSV/VEX records into and that the publish
+# task unpacks securityMetadataArtifact into. Used as a fallback when the
+# extract-result.json does not record security_metadata_dir (see LWLP-2339).
+_SECURITY_METADATA_DIRNAME = "security_metadata"
+
 PROVENANCE_SIGSTORE_FILE_SUFFIX = ".provenance.sigstore.json"
 SPDX_FILE_SUFFIX = ".spdx.json"
 VSA_FILE_SUFFIX = ".vsa.json"
@@ -358,6 +364,16 @@ class BuildOutput:
             candidate = output_dir / result.security_metadata_dir
             if candidate.is_dir():
                 security_metadata_path = candidate
+        if security_metadata_path is None:
+            # LWLP-2339: since the Trusted Artifact split (slan-cuan#111), the
+            # extract-result.json reaching publish no longer carries the
+            # security_metadata_dir written by generate-security-metadata (that
+            # updated file stays in the generate task's workdir and is not
+            # packaged into securityMetadataArtifact). Fall back to the
+            # conventional directory the publish task unpacks the metadata into.
+            fallback = output_dir / _SECURITY_METADATA_DIRNAME
+            if fallback.is_dir():
+                security_metadata_path = fallback
 
         artifacts: list[MavenArtifact] = []
 
