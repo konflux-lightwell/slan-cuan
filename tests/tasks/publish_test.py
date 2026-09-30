@@ -3278,11 +3278,6 @@ def _new_format_record(
                 },
             },
         ],
-        "database_specific": {
-            "lightwell": {
-                "cwe_ids": [],
-            }
-        },
     }
 
 
