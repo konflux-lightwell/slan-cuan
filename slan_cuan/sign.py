@@ -7,8 +7,10 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -58,6 +60,67 @@ def _resolve_direct_sign_source_artifact(
             "is empty; expected a trusted-artifact pullspec"
         )
     return content
+
+
+def wait_for_internal_request(
+    ir_name: str,
+    *,
+    poll_interval: int = 10,
+    log_interval: int = 60,
+    timeout: int = 3600,
+) -> None:
+    """Wait for an InternalRequest to complete with a fixed polling interval and periodic logging."""
+    start_time = time.time()
+    last_log_time = 0.0
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            raise click.ClickException(
+                f"Timed out waiting for InternalRequest '{ir_name}' after {int(elapsed)}s"
+            )
+
+        cmd = ["kubectl", "get", "internalrequest", ir_name, "-o", "json"]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            if time.time() - last_log_time >= log_interval:
+                click.echo(
+                    f"  - Waiting for InternalRequest '{ir_name}'... (kubectl: {proc.stderr.strip()})"
+                )
+                last_log_time = time.time()
+            time.sleep(poll_interval)
+            continue
+
+        try:
+            ir_obj = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            time.sleep(poll_interval)
+            continue
+
+        conditions = ir_obj.get("status", {}).get("conditions") or []
+        for condition in conditions:
+            if condition.get("type") == "Succeeded":
+                status = condition.get("status")
+                reason = condition.get("reason", "")
+                message = condition.get("message", "")
+                if status == "True" and reason == "Succeeded":
+                    return
+                if status == "False" or (reason and reason != "Running"):
+                    detail = f": {message}" if message else ""
+                    raise click.ClickException(
+                        f"InternalRequest '{ir_name}' failed with reason '{reason}'{detail}"
+                    )
+
+        if time.time() - last_log_time >= log_interval:
+            pipeline_run = ir_obj.get("status", {}).get("pipelineRun", "")
+            pr_info = f" (pipelineRun: {pipeline_run})" if pipeline_run else ""
+            click.echo(
+                f"  - Waiting for InternalRequest '{ir_name}' to complete... "
+                f"(elapsed: {int(elapsed)}s){pr_info}"
+            )
+            last_log_time = time.time()
+
+        time.sleep(poll_interval)
 
 
 def _sign_directly(
@@ -128,9 +191,13 @@ def _sign_directly(
         direct_sign_pipeline_name,
         params=params,
         labels=labels,
-        sync=True,
+        sync=False,
         service_account="signing-pipeline-sa",
     )
+    click.echo(
+        f"  - InternalRequest '{ir_name}' created, waiting for completion..."
+    )
+    wait_for_internal_request(ir_name)
     click.echo(f"  - InternalRequest '{ir_name}' completed successfully")
 
     results = fetch_results(ir_name)

@@ -24,6 +24,15 @@ from slan_cuan.maven import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_wait_for_internal_request(request: pytest.FixtureRequest):
+    if request.node.name.startswith("test_wait_for_internal_request"):
+        yield None
+        return
+    with patch("slan_cuan.sign.wait_for_internal_request") as m:
+        yield m
+
+
 def _setup_repo_dir(tmp_path: Path) -> str:
     """Create a repo directory with an artifact, POM, and extract-result.json."""
     repos_dir = tmp_path / "repos"
@@ -1195,3 +1204,87 @@ def test_version_compare_key_hash_eq_contract() -> None:
     assert len({a, b}) == 1
     # Distinct versions remain distinct.
     assert VersionCompareKey("1.0") != VersionCompareKey("1.0.0")
+
+
+@patch("subprocess.run")
+def test_wait_for_internal_request_success(mock_run: Mock) -> None:
+    """wait_for_internal_request returns when condition Succeeded is True."""
+    from slan_cuan.sign import wait_for_internal_request
+
+    mock_run.return_value = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "True",
+                            "reason": "Succeeded",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    wait_for_internal_request("ir-1", poll_interval=0)
+
+
+@patch("subprocess.run")
+def test_wait_for_internal_request_failed(mock_run: Mock) -> None:
+    """wait_for_internal_request raises ClickException on failure condition."""
+    import click
+
+    from slan_cuan.sign import wait_for_internal_request
+
+    mock_run.return_value = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "False",
+                            "reason": "PipelineRunFailed",
+                            "message": "pipeline timed out",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    with pytest.raises(
+        click.ClickException, match="PipelineRunFailed.*pipeline timed out"
+    ):
+        wait_for_internal_request("ir-1", poll_interval=0)
+
+
+@patch("subprocess.run")
+def test_wait_for_internal_request_timeout(mock_run: Mock) -> None:
+    """wait_for_internal_request raises ClickException on timeout."""
+    import click
+
+    from slan_cuan.sign import wait_for_internal_request
+
+    mock_run.return_value = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "Unknown",
+                            "reason": "Running",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    with pytest.raises(
+        click.ClickException, match="Timed out waiting for InternalRequest"
+    ):
+        wait_for_internal_request("ir-1", poll_interval=0, timeout=0)
+
