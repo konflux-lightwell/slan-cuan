@@ -100,6 +100,16 @@ def wait_for_internal_request(
         try:
             ir_obj = json.loads(proc.stdout)
         except json.JSONDecodeError:
+            # Don't fail on a transient unparsable read (e.g. an empty or
+            # partial `kubectl` payload) -- keep polling, but log on the
+            # heartbeat cadence so a persistently bad response is visible
+            # rather than silently swallowed.
+            if time.time() - last_log_time >= log_interval:
+                click.echo(
+                    f"  - Waiting for InternalRequest '{ir_name}'... "
+                    f"(unparsable kubectl output)"
+                )
+                last_log_time = time.time()
             time.sleep(poll_interval)
             continue
 

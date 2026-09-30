@@ -1374,3 +1374,41 @@ def test_wait_for_internal_request_failure_includes_pipeline_run(
     ):
         wait_for_internal_request("ir-1", poll_interval=0)
 
+
+@patch("subprocess.run")
+def test_wait_for_internal_request_unparsable_output_keeps_polling(
+    mock_run: Mock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unparsable kubectl payload keeps polling and is logged.
+
+    A transient empty/partial `kubectl get -o json` read must not abort
+    the wait; it should be surfaced on the heartbeat cadence rather than
+    silently swallowed.
+    """
+    from slan_cuan.sign import wait_for_internal_request
+
+    unparsable = Mock(returncode=0, stdout="not json")
+    succeeded = Mock(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "Succeeded",
+                            "status": "True",
+                            "reason": "Succeeded",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    mock_run.side_effect = [unparsable, succeeded]
+
+    wait_for_internal_request("ir-1", poll_interval=0)
+
+    assert mock_run.call_count == 2
+    assert "unparsable kubectl output" in capsys.readouterr().out
+
