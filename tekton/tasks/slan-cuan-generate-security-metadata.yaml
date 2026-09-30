@@ -73,8 +73,8 @@ spec:
   results:
     - name: SECURITY_METADATA_DIR
       description: Name of the directory where the OSV and VEX documents are stored.
-    - name: sourceDataArtifact
-      description: Trusted Artifact URI of the data directory.
+    - name: securityMetadataArtifact
+      description: Trusted Artifact URI of generated security metadata.
       type: string
   stepTemplate:
     volumeMounts:
@@ -147,9 +147,9 @@ spec:
         - name: ociStorage
           value: $(params.ociStorage)
         - name: workDir
-          value: $(params.WORKDIR)
+          value: $(params.OUTPUT_DIR)
         - name: sourceDataArtifact
-          value: $(results.sourceDataArtifact.path)
+          value: $(results.securityMetadataArtifact.path)
         - name: orasOptions
           value: $(params.orasOptions)
         - name: caCertPath
