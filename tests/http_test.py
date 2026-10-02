@@ -11,6 +11,7 @@ import pytest
 from slan_cuan.http import (
     HttpApiError,
     create_ssl_context,
+    parse_custom_headers,
     parse_json_dict,
     raise_for_status,
     request,
@@ -239,3 +240,58 @@ class TestRequest:
         assert captured_body is not None
         assert b"key" in captured_body
         client.close()
+
+
+class TestParseCustomHeaders:
+    """Tests for parse_custom_headers()."""
+
+    def test_parse_custom_headers_empty(self) -> None:
+        """Empty, None, or whitespace returns empty dict."""
+        assert parse_custom_headers(None) == {}
+        assert parse_custom_headers("") == {}
+        assert parse_custom_headers("   ") == {}
+
+    def test_parse_custom_headers_crlf_and_newlines(self) -> None:
+        """CRLF and newline delimiters preserve spaces and commas in values."""
+        raw = (
+            "# Comment line\r\n"
+            "X-TASK-DIAGNOSTICS: pyinstrument,memory\r\n"
+            "Authorization: Bearer my secret token; version=1\n"
+            "Correlation-ID=test-123\n"
+        )
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "pyinstrument,memory",
+            "Authorization": "Bearer my secret token; version=1",
+            "Correlation-ID": "test-123",
+        }
+
+    def test_parse_custom_headers_escaped_newlines(self) -> None:
+        r"""Literal escaped \n and \r\n in strings are supported."""
+        raw = "X-Foo: bar\\r\\nX-Baz: qux,123; test\\nCorrelation-ID=cid"
+        assert parse_custom_headers(raw) == {
+            "X-Foo": "bar",
+            "X-Baz": "qux,123; test",
+            "Correlation-ID": "cid",
+        }
+
+    def test_parse_custom_headers_colon_style(self) -> None:
+        """Single-line HTTP-style Key: Value is supported."""
+        raw = "X-TASK-DIAGNOSTICS: pyinstrument,memory"
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "pyinstrument,memory",
+        }
+
+    def test_parse_custom_headers_json(self) -> None:
+        """Valid JSON objects are parsed into dict."""
+        raw = '{"X-TASK-DIAGNOSTICS": "memray", "Correlation-ID": "cid-789"}'
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "memray",
+            "Correlation-ID": "cid-789",
+        }
+
+    def test_parse_custom_headers_single_line_equals(self) -> None:
+        """Single-line Key=Value is supported."""
+        raw = "X-TASK-DIAGNOSTICS=pyinstrument,memory"
+        assert parse_custom_headers(raw) == {
+            "X-TASK-DIAGNOSTICS": "pyinstrument,memory"
+        }

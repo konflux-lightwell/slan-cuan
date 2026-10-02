@@ -1,13 +1,6 @@
-"""Pulp REST API clients for Maven and File repositories."""
+"""Base Pulp REST API client for repository operations."""
 
-from __future__ import annotations
-
-import hashlib
-import json
 import ssl
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
@@ -15,118 +8,25 @@ import click
 import httpx
 
 from slan_cuan.http import (
-    HttpApiError,
     create_ssl_context,
     parse_json_dict,
     request,
 )
-from slan_cuan.pulp_tasks import (
-    TASK_POLL_TIMEOUT_SECONDS,
+from slan_cuan.pulp.constants import (
+    AUTH_TYPE_CERT,
+    AUTH_TYPE_TBR,
+    AUTH_TYPES,
+    DEFAULT_TIMEOUT_SECONDS,
+    TASK_CANCEL_TIMEOUT_SECONDS,
+)
+from slan_cuan.pulp.exceptions import PulpError
+from slan_cuan.pulp.models import ModifyResult, PulpConfig
+from slan_cuan.pulp.tasks import (
     BlockerLookup,
     BlockerLookupStatus,
     PulpTaskPoller,
 )
-
-# Content API URL path templates
-CONTENT_API_PATH_TEMPLATE = (
-    "/api/pulp/{domain}/api/v3/content/maven/artifact/upload/"
-)
-METADATA_API_PATH_TEMPLATE = (
-    "/api/pulp/{domain}/api/v3/content/maven/metadata/upload/"
-)
-REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/maven/maven/"
-
-# Pulp File plugin API URL path templates
-FILE_CONTENT_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/content/file/files/"
-FILE_REPO_API_PATH_TEMPLATE = "/api/pulp/{domain}/api/v3/repositories/file/file/"
-FILE_PUBLICATION_API_PATH_TEMPLATE = (
-    "/api/pulp/{domain}/api/v3/publications/file/file/"
-)
-FILE_DISTRIBUTION_API_PATH_TEMPLATE = (
-    "/api/pulp/{domain}/api/v3/distributions/file/file/"
-)
-
-# Task polling configuration
-TASK_CANCEL_TIMEOUT_SECONDS = 15.0
-
-
-def _utc_timestamp() -> str:
-    """Return current UTC timestamp in ISO-8601 format."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# HTTP client and error handling constants
-DEFAULT_TIMEOUT_SECONDS = 300.0
-
-
-def parse_custom_headers(raw: str | None) -> dict[str, str]:
-    r"""Parse custom HTTP headers delimited by CRLF or newline.
-
-    Supports:
-        - CRLF / newline-separated lines (e.g. 'Header1: val1\nHeader2: val2')
-        - Escaped literal newlines ('\n' or '\r\n')
-        - Both 'Header: Value' and 'Header=Value' syntax
-        - Single-line header definitions
-        - JSON object string fallback (e.g. '{"Header": "Value"}')
-
-    Args:
-        raw: Header string with newline/CRLF delimiters or JSON format.
-
-    Returns:
-        Dictionary mapping header names to header values.
-
-    """
-    if not raw or not raw.strip():
-        return {}
-    raw = raw.strip()
-    if raw.startswith("{"):
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return {str(k).strip(): str(v).strip() for k, v in data.items()}
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    # Normalize real and escaped newlines (CRLF, LF, \r\n, \n)
-    normalized = (
-        raw.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n")
-    )
-    headers: dict[str, str] = {}
-    for line in normalized.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" in line:
-            k, v = line.split(":", 1)
-            headers[k.strip()] = v.strip()
-        elif "=" in line:
-            k, v = line.split("=", 1)
-            headers[k.strip()] = v.strip()
-    return headers
-
-
-AUTH_TYPE_TBR: str = "tbr"
-AUTH_TYPE_CERT: str = "cert"
-AUTH_TYPES: frozenset[str] = frozenset({AUTH_TYPE_TBR, AUTH_TYPE_CERT})
-
-
-@dataclass(frozen=True)
-class PulpConfig:
-    """Connection configuration for a Pulp instance."""
-
-    base_url: str
-    verify_ssl: bool
-    ca_cert: Path | None = None
-    domain: str | None = None
-    auth_type: str = AUTH_TYPE_TBR
-    username: str | None = None
-    password: str | None = None
-    client_cert: Path | None = None
-    client_key: Path | None = None
-    task_timeout: float = TASK_POLL_TIMEOUT_SECONDS
-    max_total_task_timeout: float | None = None
-    custom_headers: dict[str, str] = field(default_factory=dict)
-    verbose: bool = False
+from slan_cuan.pulp.utils import utc_timestamp
 
 
 def _validate_auth(config: PulpConfig) -> None:
@@ -176,42 +76,7 @@ def _validate_config(config: PulpConfig) -> None:
     _validate_auth(config)
 
 
-@dataclass(frozen=True)
-class ContentUnit:
-    """A content unit returned by the synchronous upload endpoint."""
-
-    pulp_href: str
-    relative_path: str
-    group_id: str
-    artifact_id: str
-    version: str
-    filename: str
-
-
-@dataclass(frozen=True)
-class FileContentUnit:
-    """A content unit returned by the Pulp File upload endpoint."""
-
-    pulp_href: str
-    relative_path: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class ModifyResult:
-    """Result of a repository modify operation."""
-
-    task_href: str
-    state: str
-    repository_version: str | None
-    content_units_added: int
-
-
-class PulpError(HttpApiError):
-    """Exception raised when a Pulp API call fails."""
-
-
-class _PulpClientBase:
+class PulpClientBase:
     """Shared HTTP client logic for Pulp repository operations."""
 
     _repo_api_path_template: str
@@ -320,7 +185,7 @@ class _PulpClientBase:
                 details.append(f"files={list(kwargs['files'].keys())}")
             payload_str = f" [{', '.join(details)}]" if details else ""
             click.echo(
-                f"[{_utc_timestamp()}]  Pulp request: {method} {url}{payload_str}"
+                f"[{utc_timestamp()}]  Pulp request: {method} {url}{payload_str}"
             )
 
         response = request(
@@ -353,7 +218,7 @@ class _PulpClientBase:
                 pass
             extra = f" [{', '.join(details)}]" if details else ""
             click.echo(
-                f"[{_utc_timestamp()}]  Pulp response: "
+                f"[{utc_timestamp()}]  Pulp response: "
                 f"{response.status_code}{extra}"
             )
 
@@ -643,7 +508,7 @@ class _PulpClientBase:
             response_data = parse_json_dict(response, "Modify", PulpError)
             task_href = str(response_data["task"])
             if self._config.verbose:
-                click.echo(f"[{_utc_timestamp()}]  Pulp task queued: {task_href}")
+                click.echo(f"[{utc_timestamp()}]  Pulp task queued: {task_href}")
         except (ValueError, KeyError) as e:
             raise PulpError(
                 f"Failed to parse modify response: {e}",
@@ -716,451 +581,3 @@ class _PulpClientBase:
     def close(self) -> None:
         """Close the HTTP client."""
         self._client.close()
-
-
-class PulpMavenClient(_PulpClientBase):
-    """HTTP client for Pulp Maven deploy operations."""
-
-    _repo_api_path_template = REPO_API_PATH_TEMPLATE
-    _repo_not_found_message = (
-        "Repository '{name}' not found. Check --pulp-repository."
-    )
-
-    def upload_content(
-        self,
-        file_path: Path,
-        relative_path: str,
-        group_id: str = "",
-        artifact_id: str = "",
-        version: str = "",
-        filename: str = "",
-        repository_href: str | None = None,
-        labels: dict[str, str] | None = None,
-    ) -> ContentUnit:
-        """Upload a file and create a Maven content unit in one step.
-
-        Posts the file directly to the content API endpoint,
-        which creates both the artifact and the content unit.
-
-        Args:
-            file_path: Local path to the artifact file.
-            relative_path: Maven repository-layout path.
-            group_id: Maven group ID.
-            artifact_id: Maven artifact ID.
-            version: Maven version.
-            filename: Filename of the artifact.
-            repository_href: Optional repository href to associate
-                the content unit with during creation.
-            labels: Optional dict of labels to attach to the content unit.
-
-        Returns:
-            ContentUnit with pulp_href and parsed GAV coordinates.
-
-        Raises:
-            PulpError: If the upload fails or domain is not set.
-
-        """
-        if self._config.domain is None:
-            raise PulpError(
-                "Domain is required for content API uploads. Set --pulp-domain.",
-                status_code=0,
-                response_body="",
-            )
-
-        url = CONTENT_API_PATH_TEMPLATE.format(domain=self._config.domain)
-
-        data: dict[str, str] = {
-            "relative_path": relative_path,
-        }
-        if group_id:
-            data["group_id"] = group_id
-        if artifact_id:
-            data["artifact_id"] = artifact_id
-        if version:
-            data["version"] = version
-        if filename:
-            data["filename"] = filename
-        if repository_href:
-            data["repository"] = repository_href
-            data["overwrite"] = "true"
-        if labels:
-            data["pulp_labels"] = json.dumps(labels)
-
-        with file_path.open("rb") as f:
-            files = {
-                "file": (
-                    file_path.name,
-                    f,
-                    "application/octet-stream",
-                ),
-            }
-            response = self._request(
-                "POST",
-                url,
-                "Content upload",
-                data=data,
-                files=files,
-            )
-
-        try:
-            response_data = parse_json_dict(response, "Content", PulpError)
-            return ContentUnit(
-                pulp_href=str(response_data["pulp_href"]),
-                relative_path=str(
-                    response_data.get("relative_path", relative_path)
-                ),
-                group_id=str(response_data.get("group_id") or group_id),
-                artifact_id=str(response_data.get("artifact_id") or artifact_id),
-                version=str(response_data.get("version") or version),
-                filename=str(response_data.get("filename") or filename),
-            )
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse content unit response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-    def upload_metadata(
-        self,
-        file_path: Path,
-        relative_path: str,
-        group_id: str = "",
-        artifact_id: str = "",
-        version: str = "",
-        filename: str = "",
-        labels: dict[str, str] | None = None,
-    ) -> ContentUnit:
-        """Upload a Maven metadata XML file as a MavenMetadata content unit.
-
-        Posts the file to the metadata content API endpoint, which
-        expects a sha256 digest computed from the file contents.
-
-        Args:
-            file_path: Local path to the metadata file.
-            relative_path: Maven repository-layout path.
-            group_id: Maven group ID.
-            artifact_id: Maven artifact ID.
-            version: Maven version (optional for metadata).
-            filename: Filename of the metadata file.
-            labels: Optional dict of labels to attach to the content unit.
-
-        Returns:
-            ContentUnit with pulp_href and parsed coordinates.
-
-        Raises:
-            PulpError: If the upload fails or domain is not set.
-
-        """
-        if self._config.domain is None:
-            raise PulpError(
-                "Domain is required for content API uploads. Set --pulp-domain.",
-                status_code=0,
-                response_body="",
-            )
-
-        url = METADATA_API_PATH_TEMPLATE.format(domain=self._config.domain)
-
-        file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
-
-        data: dict[str, str] = {
-            "relative_path": relative_path,
-            "sha256": file_hash,
-        }
-        if group_id:
-            data["group_id"] = group_id
-        if artifact_id:
-            data["artifact_id"] = artifact_id
-        if version:
-            data["version"] = version
-        if filename:
-            data["filename"] = filename
-        if labels:
-            data["pulp_labels"] = json.dumps(labels)
-
-        with file_path.open("rb") as f:
-            files = {
-                "file": (
-                    file_path.name,
-                    f,
-                    "application/octet-stream",
-                ),
-            }
-            response = self._request(
-                "POST",
-                url,
-                "Metadata upload",
-                data=data,
-                files=files,
-            )
-
-        try:
-            response_data = parse_json_dict(response, "Metadata", PulpError)
-            return ContentUnit(
-                pulp_href=str(response_data["pulp_href"]),
-                relative_path=str(
-                    response_data.get("relative_path", relative_path)
-                ),
-                group_id=str(response_data.get("group_id") or group_id),
-                artifact_id=str(response_data.get("artifact_id") or artifact_id),
-                version=str(response_data.get("version") or version),
-                filename=str(response_data.get("filename") or filename),
-            )
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse metadata response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-
-class PulpFileClient(_PulpClientBase):
-    """HTTP client for Pulp File repository operations."""
-
-    _repo_api_path_template = FILE_REPO_API_PATH_TEMPLATE
-    _repo_not_found_message = (
-        "File repository '{name}' not found. Check --pulp-file-repository."
-    )
-
-    def upload_content(
-        self,
-        file_path: Path,
-        relative_path: str,
-        sha256: str,
-        repository_href: str | None = None,
-    ) -> FileContentUnit:
-        """Upload a file to the Pulp File content API.
-
-        Args:
-            file_path: Local path to the file.
-            relative_path: Path within the file repository.
-            sha256: SHA-256 hex digest of the file.
-            repository_href: Optional repository href to associate
-                the content unit with during creation.
-
-        Returns:
-            FileContentUnit with pulp_href and metadata.
-
-        Raises:
-            PulpError: If the upload fails or domain is not set.
-
-        """
-        if self._config.domain is None:
-            raise PulpError(
-                "Domain is required for content API uploads. Set --pulp-domain.",
-                status_code=0,
-                response_body="",
-            )
-
-        url = FILE_CONTENT_API_PATH_TEMPLATE.format(domain=self._config.domain)
-
-        data: dict[str, str] = {
-            "relative_path": relative_path,
-            "sha256": sha256,
-        }
-        if repository_href:
-            data["repository"] = repository_href
-
-        with file_path.open("rb") as f:
-            files = {
-                "file": (
-                    file_path.name,
-                    f,
-                    "application/octet-stream",
-                ),
-            }
-            response = self._request(
-                "POST",
-                url,
-                "File upload",
-                data=data,
-                files=files,
-            )
-
-        try:
-            response_data = parse_json_dict(response, "File content", PulpError)
-
-            if "task" in response_data:
-                task_href = str(response_data["task"])
-                if self._config.verbose:
-                    click.echo(
-                        f"[{_utc_timestamp()}]  Pulp task queued: {task_href}"
-                    )
-                task_data = self.poll_task(task_href)
-                created = task_data.get("created_resources", [])
-                if not isinstance(created, list) or not created:
-                    raise PulpError(
-                        "File upload task completed but created no resources",
-                        status_code=response.status_code,
-                        response_body=response.text,
-                    )
-                content_href = next(
-                    (str(r) for r in created if "/content/file/files/" in str(r)),
-                    str(created[-1]),
-                )
-                content_response = self._request(
-                    "GET",
-                    content_href,
-                    "File content lookup",
-                )
-                response_data = parse_json_dict(
-                    content_response, "File content", PulpError
-                )
-
-            return FileContentUnit(
-                pulp_href=str(response_data["pulp_href"]),
-                relative_path=str(
-                    response_data.get("relative_path", relative_path)
-                ),
-                sha256=str(response_data.get("sha256", sha256)),
-            )
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse file content unit response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-    def create_publication(self, repository_href: str) -> str:
-        """Create a File publication for a repository.
-
-        Args:
-            repository_href: The pulp_href of the repository.
-
-        Returns:
-            The pulp_href of the created publication.
-
-        Raises:
-            PulpError: If the publication fails or domain is not set.
-
-        """
-        if self._config.domain is None:
-            raise PulpError(
-                "Domain is required for publication creation. Set --pulp-domain.",
-                status_code=0,
-                response_body="",
-            )
-
-        url = FILE_PUBLICATION_API_PATH_TEMPLATE.format(
-            domain=self._config.domain
-        )
-        payload = {"repository": repository_href}
-
-        response = self._request(
-            "POST",
-            url,
-            "Publication creation",
-            json=payload,
-        )
-
-        try:
-            response_data = parse_json_dict(response, "Publication", PulpError)
-            task_href = str(response_data["task"])
-            if self._config.verbose:
-                click.echo(f"[{_utc_timestamp()}]  Pulp task queued: {task_href}")
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse publication response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-        task_data = self.poll_task(task_href)
-
-        created_resources = task_data.get("created_resources", [])
-        if not isinstance(created_resources, list) or not created_resources:
-            raise PulpError(
-                "Publication task completed but created no resources",
-                status_code=0,
-                response_body="",
-            )
-
-        return str(created_resources[0])
-
-    def resolve_distribution(self, name: str) -> str:
-        """Look up a file distribution by name, return its pulp_href.
-
-        Args:
-            name: The distribution name to look up.
-
-        Returns:
-            The pulp_href of the distribution.
-
-        Raises:
-            PulpError: If the distribution is not found or domain is not set.
-
-        """
-        if self._config.domain is None:
-            raise PulpError(
-                "Domain is required for distribution lookup. Set --pulp-domain.",
-                status_code=0,
-                response_body="",
-            )
-
-        url = FILE_DISTRIBUTION_API_PATH_TEMPLATE.format(
-            domain=self._config.domain
-        )
-
-        response = self._request(
-            "GET",
-            url,
-            "Distribution lookup",
-            params={"name": name},
-        )
-
-        try:
-            response_data = parse_json_dict(response, "Distribution", PulpError)
-            results = response_data.get("results", [])
-            if not results:
-                raise PulpError(
-                    f"Distribution '{name}' not found. "
-                    "Check --pulp-file-repository.",
-                    status_code=404,
-                    response_body=response.text,
-                )
-
-            return str(results[0]["pulp_href"])
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse distribution lookup response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-    def update_distribution(
-        self, distribution_href: str, publication_href: str
-    ) -> None:
-        """Update a distribution to serve a new publication.
-
-        Args:
-            distribution_href: The pulp_href of the distribution.
-            publication_href: The pulp_href of the publication to serve.
-
-        Raises:
-            PulpError: If the update fails.
-
-        """
-        payload = {"publication": publication_href, "repository": ""}
-
-        response = self._request(
-            "PATCH",
-            distribution_href,
-            "Distribution update",
-            json=payload,
-        )
-
-        try:
-            response_data = parse_json_dict(
-                response, "Distribution update", PulpError
-            )
-            task_href = str(response_data["task"])
-            if self._config.verbose:
-                click.echo(f"[{_utc_timestamp()}]  Pulp task queued: {task_href}")
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse distribution update response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-        self.poll_task(task_href)

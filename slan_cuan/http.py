@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import ssl
 from pathlib import Path
 from typing import Any
@@ -173,3 +174,49 @@ def request(
 
     raise_for_status(response, operation, error_cls)
     return response
+
+
+def parse_custom_headers(raw: str | None) -> dict[str, str]:
+    r"""Parse custom HTTP headers delimited by CRLF or newline.
+
+    Supports:
+        - CRLF / newline-separated lines (e.g. 'Header1: val1\nHeader2: val2')
+        - Escaped literal newlines ('\n' or '\r\n')
+        - Both 'Header: Value' and 'Header=Value' syntax
+        - Single-line header definitions
+        - JSON object string fallback (e.g. '{"Header": "Value"}')
+
+    Args:
+        raw: Header string with newline/CRLF delimiters or JSON format.
+
+    Returns:
+        Dictionary mapping header names to header values.
+
+    """
+    if not raw or not raw.strip():
+        return {}
+    raw = raw.strip()
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {str(k).strip(): str(v).strip() for k, v in data.items()}
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Normalize real and escaped newlines (CRLF, LF, \r\n, \n)
+    normalized = (
+        raw.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n")
+    )
+    headers: dict[str, str] = {}
+    for line in normalized.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip()] = v.strip()
+        elif "=" in line:
+            k, v = line.split("=", 1)
+            headers[k.strip()] = v.strip()
+    return headers

@@ -5,20 +5,20 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 import click
 
 from slan_cuan.http import parse_json_dict
-
-TASK_POLL_INITIAL_INTERVAL_SECONDS = 2.0
-TASK_POLL_MAX_INTERVAL_SECONDS = 30.0
-TASK_POLL_BACKOFF_FACTOR = 1.5
-TASK_POLL_JITTER_FACTOR = 0.2
-TASK_POLL_TIMEOUT_SECONDS = 2700.0
-DEFAULT_TIMEOUT_SECONDS = 300.0
+from slan_cuan.pulp.constants import (
+    DEFAULT_TIMEOUT_SECONDS,
+    TASK_POLL_BACKOFF_FACTOR,
+    TASK_POLL_INITIAL_INTERVAL_SECONDS,
+    TASK_POLL_JITTER_FACTOR,
+    TASK_POLL_MAX_INTERVAL_SECONDS,
+)
+from slan_cuan.pulp.utils import utc_timestamp
 
 
 class BlockerLookupStatus(str, Enum):
@@ -35,10 +35,6 @@ class BlockerLookup:
 
     href: str | None
     status: BlockerLookupStatus
-
-
-def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class PulpTaskPoller:
@@ -113,7 +109,7 @@ class PulpTaskPoller:
                 if val and key not in logged:
                     logged.add(key)
                     click.echo(
-                        f"[{_utc_timestamp()}]  Pulp task profile ({key}): {val}"
+                        f"[{utc_timestamp()}]  Pulp task profile ({key}): {val}"
                     )
 
     def _transition_to(
@@ -130,7 +126,7 @@ class PulpTaskPoller:
         self.current_interval = TASK_POLL_INITIAL_INTERVAL_SECONDS
         if self._client._config.verbose:
             click.echo(
-                f"[{_utc_timestamp()}]  Pulp task {self.task_href} "
+                f"[{utc_timestamp()}]  Pulp task {self.task_href} "
                 f"transitioned to '{new_state}'; "
                 f"resetting wait deadline for {self.timeout}s"
             )
@@ -148,7 +144,7 @@ class PulpTaskPoller:
         self.current_interval = TASK_POLL_INITIAL_INTERVAL_SECONDS
         if self._client._config.verbose:
             click.echo(
-                f"[{_utc_timestamp()}]  Pulp task {self.task_href} "
+                f"[{utc_timestamp()}]  Pulp task {self.task_href} "
                 f"waiting blocker changed: {old.href if old else None} "
                 f"-> {new_waiting_on.href}; "
                 f"resetting wait deadline for {self.timeout}s"
@@ -196,7 +192,7 @@ class PulpTaskPoller:
                     if self._client._config.verbose:
                         created = fresh_data.get("created_resources", [])
                         click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task completed: "
+                            f"[{utc_timestamp()}]  Pulp task completed: "
                             f"{self.task_href} (created_resources={created})"
                         )
                     self._log_task_profile(fresh_data)
@@ -282,7 +278,7 @@ class PulpTaskPoller:
                     if self._client._config.verbose:
                         created = task_data.get("created_resources", [])
                         click.echo(
-                            f"[{_utc_timestamp()}]  Pulp task completed: "
+                            f"[{utc_timestamp()}]  Pulp task completed: "
                             f"{self.task_href} (created_resources={created})"
                         )
                     self._log_task_profile(task_data)

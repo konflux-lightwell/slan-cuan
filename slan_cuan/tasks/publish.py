@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 
 from slan_cuan.context import GlobalContext, write_tekton_result
+from slan_cuan.http import parse_custom_headers
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     PUBLISH_RESULT_FILENAME,
@@ -27,7 +28,6 @@ from slan_cuan.pulp import (
     PulpError,
     PulpFileClient,
     PulpMavenClient,
-    parse_custom_headers,
 )
 
 _DIAG_MAX_ENTRIES = 50
