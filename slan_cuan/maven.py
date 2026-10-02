@@ -14,8 +14,11 @@ from pathlib import Path
 
 import defusedxml.ElementTree as ET
 
-from slan_cuan.archive import extract_zip_safely
-from slan_cuan.checksum import compute_checksum, write_checksum_sidecars
+from slan_cuan.utils import (
+    compute_checksum,
+    extract_zip_safely,
+    write_checksum_sidecars,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from slan_cuan.archive import extract_zip_safely
+from slan_cuan.utils.archive import extract_zip_safely
 
 
 def test_extract_zip_safely_valid(tmp_path: Path) -> None:

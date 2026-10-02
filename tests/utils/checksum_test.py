@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from slan_cuan.checksum import compute_checksum, write_checksum_sidecars
+from slan_cuan.utils.checksum import compute_checksum, write_checksum_sidecars
 
 
 def test_compute_checksum_algorithms(tmp_path: Path) -> None:

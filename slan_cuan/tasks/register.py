@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext, write_tekton_result
+from slan_cuan.context import GlobalContext
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     REGISTER_RESULT_FILENAME,
@@ -21,6 +21,7 @@ from slan_cuan.trustify import (
     TrustifyConfig,
     TrustifyError,
 )
+from slan_cuan.utils import write_tekton_result
 
 
 @click.command()

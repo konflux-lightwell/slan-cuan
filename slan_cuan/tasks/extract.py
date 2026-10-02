@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext, write_tekton_result
+from slan_cuan.context import GlobalContext
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     ExtractResult,
@@ -19,6 +19,7 @@ from slan_cuan.models import (
     OCIManifest,
 )
 from slan_cuan.oci import OrasError, discover, manifest_fetch, pull
+from slan_cuan.utils import write_tekton_result
 
 
 def _deduplicate_referrers(
