@@ -1,0 +1,5 @@
+"""Trustify REST API constants."""
+
+SBOM_UPLOAD_PATH = "api/v2/sbom"
+TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+TOKEN_EXPIRY_BUFFER_SECONDS = 15

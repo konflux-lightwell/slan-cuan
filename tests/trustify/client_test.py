@@ -1,4 +1,4 @@
-"""Tests for Trustify client (slan_cuan/trustify.py)."""
+"""Tests for the Trustify client (slan_cuan/trustify/client.py)."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class TestTrustifyClientAuth:
             verify_ssl=True,
         )
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             mock_post.return_value = httpx.Response(
                 200,
                 json={"access_token": "tok123", "expires_in": 300},
@@ -53,7 +53,7 @@ class TestTrustifyClientAuth:
             verify_ssl=True,
         )
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             mock_post.return_value = httpx.Response(401, text="Unauthorized")
 
             client = TrustifyClient(config)
@@ -74,7 +74,7 @@ class TestTrustifyClientAuth:
             verify_ssl=True,
         )
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             mock_post.side_effect = httpx.ConnectError("Connection refused")
 
             client = TrustifyClient(config)
@@ -95,7 +95,7 @@ class TestTrustifyClientAuth:
             verify_ssl=True,
         )
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             mock_post.return_value = httpx.Response(200, json={})
 
             client = TrustifyClient(config)
@@ -117,7 +117,7 @@ class TestTrustifyClientAuth:
             verify_ssl=True,
         )
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             mock_post.return_value = httpx.Response(
                 200,
                 json={
@@ -147,7 +147,7 @@ class TestTrustifyClientAuth:
         client._access_token = "old-token"
         client._token_expiration = time.monotonic() - 100
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             mock_post.return_value = httpx.Response(
                 200,
                 json={"access_token": "new-token", "expires_in": 300},
@@ -173,7 +173,7 @@ class TestTrustifyClientAuth:
         client._access_token = "valid-token"
         client._token_expiration = time.monotonic() + 3600
 
-        with patch("slan_cuan.trustify.httpx.post") as mock_post:
+        with patch("slan_cuan.trustify.client.httpx.post") as mock_post:
             client._ensure_valid_token()
 
             mock_post.assert_not_called()
@@ -251,7 +251,7 @@ class TestTrustifyClientUpload:
             transport=transport, base_url="https://trustify.example.com"
         )
 
-        with patch("slan_cuan.trustify.time.sleep"):
+        with patch("slan_cuan.trustify.client.time.sleep"):
             result = client.upload_sbom(sbom_file)
 
         assert attempt_count == 3
@@ -326,7 +326,7 @@ class TestTrustifyClientUpload:
             transport=transport, base_url="https://trustify.example.com"
         )
 
-        with patch("slan_cuan.trustify.time.sleep"):
+        with patch("slan_cuan.trustify.client.time.sleep"):
             result = client.upload_sbom(sbom_file)
 
         assert attempt_count == 2
@@ -363,7 +363,7 @@ class TestTrustifyClientUpload:
         )
 
         with pytest.raises(TrustifyError) as exc_info:
-            with patch("slan_cuan.trustify.time.sleep"):
+            with patch("slan_cuan.trustify.client.time.sleep"):
                 client.upload_sbom(sbom_file)
 
         assert attempt_count == 3
@@ -406,7 +406,7 @@ class TestTrustifyClientUpload:
 class TestTrustifyClientSSL:
     """Tests for TLS/SSL configuration."""
 
-    @patch("slan_cuan.trustify.ssl.create_default_context")
+    @patch("slan_cuan.trustify.client.ssl.create_default_context")
     def test_ca_cert_creates_ssl_context(
         self, mock_create_ctx: Mock, tmp_path: Path
     ) -> None:
@@ -477,20 +477,3 @@ class TestTrustifyClientClose:
 
         # Should not raise
         client.close()
-
-
-class TestTrustifyError:
-    """Tests for TrustifyError exception."""
-
-    def test_trustify_error_attributes(self) -> None:
-        """Verify message, status_code, response_body are preserved."""
-        error = TrustifyError(
-            message="Upload failed",
-            status_code=500,
-            response_body="Internal Server Error",
-        )
-
-        assert error.message == "Upload failed"
-        assert error.status_code == 500
-        assert error.response_body == "Internal Server Error"
-        assert str(error) == "Upload failed"

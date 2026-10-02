@@ -1,0 +1,1 @@
+"""Trustify module test suite."""

@@ -4,52 +4,23 @@ from __future__ import annotations
 
 import ssl
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 
 import httpx
 
 from slan_cuan.http import (
-    HttpApiError,
     create_ssl_context,
     parse_json_dict,
     raise_for_status,
 )
-
-SBOM_UPLOAD_PATH = "api/v2/sbom"
-TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
-TOKEN_EXPIRY_BUFFER_SECONDS = 15
-
-
-@dataclass(frozen=True)
-class TrustifyConfig:
-    """Connection configuration for a Trustify instance."""
-
-    api_url: str
-    sso_token_url: str
-    sso_client_id: str
-    sso_client_secret: str
-    verify_ssl: bool
-    ca_cert: Path | None = None
-    retries: int = 3
-
-
-@dataclass(frozen=True)
-class SBOMUploadResult:
-    """Result of a single SBOM upload to Trustify."""
-
-    file_path: str
-    file_size: int
-    sbom_urn: str
-
-
-class TrustifyError(HttpApiError):
-    """Exception raised when a Trustify API call fails."""
-
-
-class TrustifyAuthError(TrustifyError):
-    """Exception raised when OIDC authentication fails."""
+from slan_cuan.trustify.constants import (
+    SBOM_UPLOAD_PATH,
+    TOKEN_EXPIRY_BUFFER_SECONDS,
+    TRANSIENT_STATUS_CODES,
+)
+from slan_cuan.trustify.exceptions import TrustifyAuthError, TrustifyError
+from slan_cuan.trustify.models import SBOMUploadResult, TrustifyConfig
 
 
 class TrustifyClient:
