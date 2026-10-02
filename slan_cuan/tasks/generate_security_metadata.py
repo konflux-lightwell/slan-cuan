@@ -16,10 +16,10 @@ import click
 from fath_cuan.workflow import process_osv
 
 from slan_cuan import oci
-from slan_cuan.context import GlobalContext
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     ExtractResult,
+    GlobalContext,
     ImageReference,
 )
 from slan_cuan.utils import write_tekton_result

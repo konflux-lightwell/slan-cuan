@@ -11,10 +11,10 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     ExtractResult,
+    GlobalContext,
     ImageReference,
     OCIManifest,
 )

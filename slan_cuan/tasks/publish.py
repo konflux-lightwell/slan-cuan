@@ -11,13 +11,13 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
 from slan_cuan.http import parse_custom_headers
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     PUBLISH_RESULT_FILENAME,
     BuildOutput,
     ExtractResult,
+    GlobalContext,
     MavenArtifact,
     PublishResult,
 )

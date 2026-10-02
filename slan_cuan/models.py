@@ -26,6 +26,16 @@ VEX_FILE_SUFFIX = ".vex.json"
 
 
 @dataclass(frozen=True)
+class GlobalContext:
+    """Immutable context passed from the Click group to all subcommands."""
+
+    verbose: bool
+    dry_run: bool
+    ca_cert: Path | None
+    tekton_results_dir: Path | None
+
+
+@dataclass(frozen=True)
 class ImageReference:
     """Parsed OCI image reference."""
 

@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 from click.testing import CliRunner
 
-from slan_cuan.context import GlobalContext
+from slan_cuan.models import GlobalContext
 from slan_cuan.tasks.generate_security_metadata import (
     generate_security_metadata_from_snapshot,
 )

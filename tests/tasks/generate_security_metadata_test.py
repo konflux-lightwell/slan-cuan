@@ -9,8 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from click.testing import CliRunner
 
-from slan_cuan.context import GlobalContext
-from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult
+from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult, GlobalContext
 from slan_cuan.tasks.generate_security_metadata import (
     generate_security_metadata,
 )

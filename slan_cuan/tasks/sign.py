@@ -15,9 +15,8 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
 from slan_cuan.maven import sign_individual_artifacts
-from slan_cuan.models import EXTRACT_RESULT_FILENAME
+from slan_cuan.models import EXTRACT_RESULT_FILENAME, GlobalContext
 from slan_cuan.oci import blob_fetch
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import click
 
-from slan_cuan.context import GlobalContext
+from slan_cuan.models import GlobalContext
 from slan_cuan.tasks import (
     extract,
     generate_security_metadata,
