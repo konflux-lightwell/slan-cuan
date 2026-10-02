@@ -197,7 +197,7 @@ def test_warns_when_no_component_has_a_referrer(
     result = _invoke(runner, snapshot, workdir, output_dir, ctx)
 
     assert result.exit_code == 0, result.output
-    assert "no build-index referrer found on ANY component" in result.stderr
+    assert "no build-index referrer found on ANY component" in result.output
     mock_process_osv.assert_not_called()
 
 

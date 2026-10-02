@@ -720,7 +720,7 @@ def test_get_osidb_auth_token_missing_access_key(
 # ---------------------------------------------------------------------------
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_advisory_id_injected(
     mock_process_osv: Mock,
     ctx: GlobalContext,
@@ -752,7 +752,7 @@ def test_advisory_id_injected(
     assert index_data["advisory_id"] == "RHLW-2026-00042"
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_advisory_id_absent_no_injection(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -778,7 +778,7 @@ def test_advisory_id_absent_no_injection(
     assert "advisory_id" not in index_data
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_output_filename_uses_advisory_id(
     mock_process_osv: Mock,
     ctx: GlobalContext,
