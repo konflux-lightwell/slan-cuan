@@ -46,8 +46,8 @@ dev = ["ruff", "pytest", "poethepoet"]
 # Setuptools — package discovery
 #
 
-[tool.setuptools]
-packages = ["slan_cuan", "slan_cuan.tasks"]
+[tool.setuptools.packages.find]
+include = ["slan_cuan*"]
 
 #
 # Ruff — linter and formatter
