@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from slan_cuan.context import GlobalContext
-from slan_cuan.generate_security_metadata import (
+from slan_cuan.tasks.generate_security_metadata import (
     generate_security_metadata_from_snapshot,
 )
 
@@ -63,8 +63,8 @@ def _invoke(runner, snapshot_path, workdir, output_dir, ctx, **extra):
     return runner.invoke(generate_security_metadata_from_snapshot, args, obj=ctx)
 
 
-@patch("slan_cuan.generate_security_metadata.oci")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.oci")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_generates_osv_for_each_component_with_referrer(
     mock_process_osv: Mock,
     mock_oci: Mock,
@@ -106,8 +106,8 @@ def test_generates_osv_for_each_component_with_referrer(
     assert (output_dir / "x_RHLW-CVE-2024-001-1.0.0.json").exists()
 
 
-@patch("slan_cuan.generate_security_metadata.oci")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.oci")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_pulls_referrer_by_digest_in_component_repository(
     mock_process_osv: Mock,
     mock_oci: Mock,
@@ -138,8 +138,8 @@ def test_pulls_referrer_by_digest_in_component_repository(
     assert str(pulled_image) == "registry.local/ntplib@sha256:ref999"
 
 
-@patch("slan_cuan.generate_security_metadata.oci")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.oci")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_skips_components_without_referrer(
     mock_process_osv: Mock,
     mock_oci: Mock,
@@ -177,8 +177,8 @@ def test_skips_components_without_referrer(
     assert mock_process_osv.call_count == 1
 
 
-@patch("slan_cuan.generate_security_metadata.oci")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.oci")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_warns_when_no_component_has_a_referrer(
     mock_process_osv: Mock,
     mock_oci: Mock,
@@ -202,9 +202,9 @@ def test_warns_when_no_component_has_a_referrer(
 
 
 @patch("fath_cuan.osidb.OsidbClient")
-@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
-@patch("slan_cuan.generate_security_metadata.oci")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.tasks.generate_security_metadata.oci")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_builds_osidb_client_once_across_all_components(
     mock_process_osv: Mock,
     mock_oci: Mock,

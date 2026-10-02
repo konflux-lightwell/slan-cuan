@@ -5,14 +5,14 @@ from pathlib import Path
 import click
 
 from slan_cuan.context import GlobalContext
-from slan_cuan.extract import extract
-from slan_cuan.generate_security_metadata import (
+from slan_cuan.tasks import (
+    extract,
     generate_security_metadata,
     generate_security_metadata_from_snapshot,
+    publish,
+    register,
+    sign,
 )
-from slan_cuan.publish import publish
-from slan_cuan.register import register
-from slan_cuan.sign import sign
 
 
 @click.group(context_settings={"auto_envvar_prefix": "SLAN_CUAN"})

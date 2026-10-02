@@ -47,7 +47,7 @@ dev = ["ruff", "pytest", "poethepoet"]
 #
 
 [tool.setuptools]
-packages = ["slan_cuan"]
+packages = ["slan_cuan", "slan_cuan.tasks"]
 
 #
 # Ruff — linter and formatter

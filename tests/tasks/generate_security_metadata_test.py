@@ -10,8 +10,10 @@ import pytest
 from click.testing import CliRunner
 
 from slan_cuan.context import GlobalContext
-from slan_cuan.generate_security_metadata import generate_security_metadata
 from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult
+from slan_cuan.tasks.generate_security_metadata import (
+    generate_security_metadata,
+)
 
 
 @pytest.fixture
@@ -114,7 +116,7 @@ def _invoke(
     return runner.invoke(generate_security_metadata, args, obj=ctx)
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_generate_security_metadata_creates_osv_output(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -151,7 +153,7 @@ def test_generate_security_metadata_creates_osv_output(
     assert updated_result.security_metadata_dir == "security_metadata"
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_generate_security_metadata_custom_filename(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -189,7 +191,7 @@ def test_generate_security_metadata_custom_filename(
     assert written == fake_osv_records[0]
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_generate_security_metadata_passes_index_data_to_process_osv(
     mock_process_osv: Mock,
     ctx: GlobalContext,
@@ -215,7 +217,7 @@ def test_generate_security_metadata_passes_index_data_to_process_osv(
     mock_process_osv.assert_called_once_with(index_data, osidb_client=None)
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_generate_security_metadata_writes_tekton_results(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -251,7 +253,7 @@ def test_generate_security_metadata_writes_tekton_results(
     assert security_metadata_dir_file.read_text() == str(output_dir)
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_generate_security_metadata_creates_nested_output_dir(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -374,7 +376,7 @@ def test_generate_security_metadata_file_not_found(
 # ── OSIDB authentication tests ──────────────────────────────────
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_no_keytab_skips_osidb(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -403,7 +405,7 @@ def test_no_keytab_skips_osidb(
     )
 
 
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_nonexistent_keytab_skips_osidb(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
@@ -440,8 +442,8 @@ def test_nonexistent_keytab_skips_osidb(
 
 
 @patch("fath_cuan.osidb.OsidbClient")
-@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_empty_vulnerabilities_skip_osidb_with_valid_keytab(
     mock_process_osv: Mock,
     mock_get_token: Mock,
@@ -482,8 +484,8 @@ def test_empty_vulnerabilities_skip_osidb_with_valid_keytab(
 
 
 @patch("fath_cuan.osidb.OsidbClient")
-@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_valid_keytab_creates_osidb_client(
     mock_process_osv: Mock,
     mock_get_token: Mock,
@@ -541,8 +543,8 @@ def test_valid_keytab_creates_osidb_client(
 
 
 @patch("fath_cuan.osidb.OsidbClient")
-@patch("slan_cuan.generate_security_metadata._get_osidb_auth_token")
-@patch("slan_cuan.generate_security_metadata.process_osv")
+@patch("slan_cuan.tasks.generate_security_metadata._get_osidb_auth_token")
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
 def test_osidb_client_unavailable_aborts(
     mock_process_osv: Mock,
     mock_get_token: Mock,
@@ -592,7 +594,7 @@ def test_get_osidb_auth_token_uses_spnego(
     import os
     import tempfile
 
-    from slan_cuan.generate_security_metadata import (
+    from slan_cuan.tasks.generate_security_metadata import (
         _get_osidb_auth_token,
     )
 
@@ -619,7 +621,7 @@ def test_get_osidb_auth_token_uses_spnego(
     mock_response.raise_for_status.assert_called_once()
 
 
-@patch("slan_cuan.generate_security_metadata.time.sleep")
+@patch("slan_cuan.tasks.generate_security_metadata.time.sleep")
 @patch("requests.Session")
 @patch("krbticket.KrbTicket")
 def test_get_osidb_auth_token_retries_on_failure(
@@ -630,7 +632,7 @@ def test_get_osidb_auth_token_retries_on_failure(
     """_get_osidb_auth_token retries transient failures and succeeds."""
     import requests
 
-    from slan_cuan.generate_security_metadata import _get_osidb_auth_token
+    from slan_cuan.tasks.generate_security_metadata import _get_osidb_auth_token
 
     ok_response = MagicMock()
     ok_response.json.return_value = {"access": "my-jwt"}
@@ -653,7 +655,7 @@ def test_get_osidb_auth_token_retries_on_failure(
     assert mock_sleep.call_count == 2
 
 
-@patch("slan_cuan.generate_security_metadata.time.sleep")
+@patch("slan_cuan.tasks.generate_security_metadata.time.sleep")
 @patch("requests.Session")
 @patch("krbticket.KrbTicket")
 def test_get_osidb_auth_token_raises_after_max_retries(
@@ -665,7 +667,7 @@ def test_get_osidb_auth_token_raises_after_max_retries(
     import click
     import requests
 
-    from slan_cuan.generate_security_metadata import (
+    from slan_cuan.tasks.generate_security_metadata import (
         _OSIDB_TOKEN_MAX_RETRIES,
         _get_osidb_auth_token,
     )
@@ -684,7 +686,7 @@ def test_get_osidb_auth_token_raises_after_max_retries(
     assert mock_session.get.call_count == _OSIDB_TOKEN_MAX_RETRIES
 
 
-@patch("slan_cuan.generate_security_metadata.time.sleep")
+@patch("slan_cuan.tasks.generate_security_metadata.time.sleep")
 @patch("requests.Session")
 @patch("krbticket.KrbTicket")
 def test_get_osidb_auth_token_missing_access_key(
@@ -695,7 +697,7 @@ def test_get_osidb_auth_token_missing_access_key(
     """_get_osidb_auth_token fails when the 'access' key is absent."""
     import click
 
-    from slan_cuan.generate_security_metadata import _get_osidb_auth_token
+    from slan_cuan.tasks.generate_security_metadata import _get_osidb_auth_token
 
     bad_response = MagicMock()
     bad_response.json.return_value = {"detail": "unauthorized"}

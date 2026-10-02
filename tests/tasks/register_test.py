@@ -286,7 +286,7 @@ def test_register_missing_sbom(tmp_path: Path) -> None:
     assert "SBOM not found" in result.output
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_successful_upload(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
@@ -347,7 +347,7 @@ def test_register_successful_upload(
     assert "registered_at" in register_result
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_trustify_error_handling(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
@@ -385,7 +385,7 @@ def test_register_trustify_error_handling(
     assert "SBOM upload failed" in result.output
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_verbose_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
     """With --verbose, shows upload details."""
     artifact_dir = create_test_artifact_dir_with_sbom(tmp_path)
@@ -428,7 +428,7 @@ def test_register_verbose_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
     assert "client-secret" not in result.output
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_insecure_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
     """With --insecure, verify_ssl=False is passed to TrustifyConfig."""
     artifact_dir = create_test_artifact_dir_with_sbom(tmp_path)
@@ -468,7 +468,7 @@ def test_register_insecure_mode(mock_client_cls: Mock, tmp_path: Path) -> None:
     assert config.verify_ssl is False
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_ca_cert_propagates(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
@@ -513,7 +513,7 @@ def test_register_ca_cert_propagates(
     assert config.verify_ssl is True
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_retries_option(mock_client_cls: Mock, tmp_path: Path) -> None:
     """--retries is passed to TrustifyConfig."""
     artifact_dir = create_test_artifact_dir_with_sbom(tmp_path)
@@ -553,7 +553,7 @@ def test_register_retries_option(mock_client_cls: Mock, tmp_path: Path) -> None:
     assert config.retries == 5
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_writes_tekton_results(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
@@ -597,7 +597,7 @@ def test_register_writes_tekton_results(
     assert sbom_urn_file.read_text() == "urn:uuid:test-tekton-results"
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_uploads_all_sboms(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
@@ -657,7 +657,7 @@ def test_register_uploads_all_sboms(
     assert register_result["sbom_urn"] == "urn:uuid:sbom-2"
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_multiple_sboms_verbose(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:
@@ -705,7 +705,7 @@ def test_register_multiple_sboms_verbose(
     assert "urn:uuid:verbose-multi-2" in result.output
 
 
-@patch("slan_cuan.register.TrustifyClient")
+@patch("slan_cuan.tasks.register.TrustifyClient")
 def test_register_multiple_sboms_error_stops_on_first_failure(
     mock_client_cls: Mock, tmp_path: Path
 ) -> None:

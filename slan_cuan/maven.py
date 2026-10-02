@@ -238,7 +238,7 @@ def apply_signatures(
         normalized = rel_file.lstrip("/")
         root_prefix = zip_root_path.strip("/")
         if root_prefix and normalized.startswith(f"{root_prefix}/"):
-            stripped = normalized[len(root_prefix) + 1:]
+            stripped = normalized[len(root_prefix) + 1 :]
         elif root_prefix and normalized == root_prefix:
             stripped = ""
         else:
@@ -246,18 +246,13 @@ def apply_signatures(
 
         target = (top_level / stripped).resolve()
         if not (target == resolved_top or target.is_relative_to(resolved_top)):
-            logger.warning(
-                "Path traversal attempt in sign results: %s", rel_file
-            )
+            logger.warning("Path traversal attempt in sign results: %s", rel_file)
             continue
 
         if not target.is_file():
             # Try raw relative path
             raw_target = (top_level / rel_file.lstrip("/")).resolve()
-            if (
-                raw_target.is_relative_to(resolved_top)
-                and raw_target.is_file()
-            ):
+            if raw_target.is_relative_to(resolved_top) and raw_target.is_file():
                 target = raw_target
             else:
                 # Search by filename within top_level. Only accept an
@@ -316,9 +311,7 @@ def parse_pom_xml(pom_path: Path) -> tuple[str, str, str] | None:
         def find_text(elem: ET.Element, tag: str) -> str | None:
             child = elem.find(f"{ns}{tag}")
             return (
-                child.text.strip()
-                if child is not None and child.text
-                else None
+                child.text.strip() if child is not None and child.text else None
             )
 
         group_id = find_text(root, "groupId")
@@ -352,9 +345,7 @@ def format_maven_metadata(
     # Dedup on the comparison form (not the raw string) so comparator-equal
     # variants like "1.0"/"1.00" collapse to a single <version> entry.
     unique_versions = {VersionCompareKey(v): v for v in versions}
-    sorted_versions = [
-        unique_versions[k] for k in sorted(unique_versions)
-    ]
+    sorted_versions = [unique_versions[k] for k in sorted(unique_versions)]
     latest_version = sorted_versions[-1]
     non_snapshot = [v for v in sorted_versions if not v.endswith("-SNAPSHOT")]
     release_version = non_snapshot[-1] if non_snapshot else latest_version
@@ -401,17 +392,13 @@ def _merge_existing_metadata_versions(
                 group_id = ".".join(rel_parts[:-1])
         if group_id and artifact_id:
             for elem in root.iter():
-                tag = (
-                    elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-                )
+                tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
                 if tag == "version" and elem.text and elem.text.strip():
                     gav_map.setdefault(group_id, {}).setdefault(
                         artifact_id, set()
                     ).add(elem.text.strip())
     except Exception as e:
-        logger.warning(
-            "Could not parse existing metadata %s: %s", meta_path, e
-        )
+        logger.warning("Could not parse existing metadata %s: %s", meta_path, e)
 
 
 def generate_maven_metadata(
@@ -443,9 +430,9 @@ def generate_maven_metadata(
                 continue
             group_id, artifact_id, version = parsed
 
-        gav_map.setdefault(group_id, {}).setdefault(
-            artifact_id, set()
-        ).add(version)
+        gav_map.setdefault(group_id, {}).setdefault(artifact_id, set()).add(
+            version
+        )
 
     for root_dir, _, files in os.walk(top_level):
         if "maven-metadata.xml" in files:
@@ -528,9 +515,7 @@ def sign_individual_artifacts(
         extract_dest.mkdir(parents=True, exist_ok=True)
 
         repos = (
-            [repo_path]
-            if isinstance(repo_path, (str, Path))
-            else list(repo_path)
+            [repo_path] if isinstance(repo_path, (str, Path)) else list(repo_path)
         )
         top_level = extract_dest
         for r in repos:
@@ -559,9 +544,7 @@ def sign_individual_artifacts(
                         f, ignore_patterns
                     ):
                         file_p = Path(root_dir) / f
-                        valid_artifacts.append(
-                            str(file_p.relative_to(top_level))
-                        )
+                        valid_artifacts.append(str(file_p.relative_to(top_level)))
         manifest_path = top_level / f"{product_key}.txt"
         manifest_content = "\n".join(valid_artifacts) + "\n"
         manifest_path.write_text(manifest_content, encoding="utf-8")

@@ -440,16 +440,10 @@ def sign(
         with tempfile.TemporaryDirectory(
             prefix="slan-cuan-sign-url-"
         ) as tmp_dir_sign_url:
-            repo_url = repo_url.removeprefix("https://").removeprefix(
-                "http://"
-            )
-            sign_artifact_dir = os.path.join(
-                output_path, "signed", "repository"
-            )
+            repo_url = repo_url.removeprefix("https://").removeprefix("http://")
+            sign_artifact_dir = os.path.join(output_path, "signed", "repository")
 
-            click.echo(
-                "Signing the repository directly via internal-request..."
-            )
+            click.echo("Signing the repository directly via internal-request...")
             source_artifact = _resolve_direct_sign_source_artifact(
                 direct_sign_task_ta_source_artifact,
                 direct_sign_task_ta_source_artifact_file,
@@ -487,9 +481,7 @@ def sign(
             click.echo(f"  - root path: [{zip_root_path}]")
             click.echo(f"  - signed file: [{signed_json_file}]")
             click.echo(f"  - output dir: [{sign_artifact_dir}]")
-            with tempfile.TemporaryDirectory(
-                prefix="slan-cuan-sign-"
-            ) as tmp_dir:
+            with tempfile.TemporaryDirectory(prefix="slan-cuan-sign-") as tmp_dir:
                 click.echo(f"  - tmp dir: [{tmp_dir}]")
                 sign_individual_artifacts(
                     repo_path=repo_path,

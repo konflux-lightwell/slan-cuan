@@ -14,15 +14,18 @@ def test_compute_checksum_algorithms(tmp_path: Path) -> None:
     content = b"test artifact binary content 123456"
     test_file.write_bytes(content)
 
-    assert compute_checksum(test_file, "md5") == hashlib.md5(
-        content, usedforsecurity=False
-    ).hexdigest()
-    assert compute_checksum(test_file, "sha1") == hashlib.sha1(
-        content, usedforsecurity=False
-    ).hexdigest()
-    assert compute_checksum(test_file, "sha256") == hashlib.sha256(
-        content
-    ).hexdigest()
+    assert (
+        compute_checksum(test_file, "md5")
+        == hashlib.md5(content, usedforsecurity=False).hexdigest()
+    )
+    assert (
+        compute_checksum(test_file, "sha1")
+        == hashlib.sha1(content, usedforsecurity=False).hexdigest()
+    )
+    assert (
+        compute_checksum(test_file, "sha256")
+        == hashlib.sha256(content).hexdigest()
+    )
 
 
 def test_compute_checksum_sha512(tmp_path: Path) -> None:
@@ -31,9 +34,10 @@ def test_compute_checksum_sha512(tmp_path: Path) -> None:
     content = b"sha512 coverage content"
     test_file.write_bytes(content)
 
-    assert compute_checksum(test_file, "sha512") == hashlib.sha512(
-        content
-    ).hexdigest()
+    assert (
+        compute_checksum(test_file, "sha512")
+        == hashlib.sha512(content).hexdigest()
+    )
 
 
 def test_write_checksum_sidecars(tmp_path: Path) -> None:

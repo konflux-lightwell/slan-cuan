@@ -17,7 +17,6 @@ def extract_zip_safely(zip_path: str | Path, dest_dir: str | Path) -> None:
             target_path = (dest / member.filename).resolve()
             if not (target_path == dest or target_path.is_relative_to(dest)):
                 raise ValueError(
-                    "Zip-slip path traversal attempt detected: "
-                    + member.filename
+                    "Zip-slip path traversal attempt detected: " + member.filename
                 )
         zf.extractall(dest)
