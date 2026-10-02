@@ -104,14 +104,23 @@ def _load_security_metadata(
 
         osv_id = record.get("id")
         affected = record.get("affected")
-        aliases = record.get("aliases", [])
+        aliases = record.get("aliases") or []
+        upstream = record.get("upstream") or []
+        has_vuln_ids = (
+            isinstance(aliases, list)
+            and bool(aliases)
+            and all(isinstance(a, str) and a.strip() for a in aliases)
+        ) or (
+            isinstance(upstream, list)
+            and bool(upstream)
+            and all(isinstance(u, str) and u.strip() for u in upstream)
+        )
         is_osv = (
             isinstance(osv_id, str)
             and bool(osv_id.strip())
             and isinstance(affected, list)
             and bool(affected)
-            and isinstance(aliases, list)
-            and all(isinstance(alias, str) and alias.strip() for alias in aliases)
+            and has_vuln_ids
         )
         is_vex = isinstance(record.get("statements"), list) and (
             "@context" in record or "document" in record
@@ -121,7 +130,7 @@ def _load_security_metadata(
                 "Generated security metadata is not OSV or VEX JSON."
             )
         if is_osv:
-            osv_vulnerability_ids.update((osv_id, *aliases))
+            osv_vulnerability_ids.update((osv_id, *aliases, *upstream))
 
     if vulns and not osv_vulnerability_ids:
         raise ValueError("Vulnerable GAV index has no generated OSV metadata.")
@@ -130,10 +139,8 @@ def _load_security_metadata(
             "Generated security metadata does not match the clean GAV index."
         )
 
-    if any(
-        not any(vulnerability in osv_id for osv_id in osv_vulnerability_ids)
-        for vulnerability in vulns
-    ):
+    uncovered = set(vulns) - osv_vulnerability_ids
+    if uncovered:
         raise ValueError(
             "Generated OSV metadata does not cover all GAV index vulnerabilities."
         )
@@ -202,8 +209,21 @@ def _classify_osv_source(file_path: Path) -> str | None:
         else None
     )
     source = lightwell.get("source") if isinstance(lightwell, dict) else None
-    if source in ("pnc-build", "novel-pipeline"):
+    if source in ("pnc-build", "novel-pipeline", "lightwell-pipeline"):
+        if source == "lightwell-pipeline":
+            return "pnc-build"
         return source
+
+    # New advisory-format records carry source on per-affected
+    # entries, not at top level.
+    for aff in record.get("affected", []):
+        aff_db = aff.get("database_specific")
+        aff_lw = aff_db.get("lightwell") if isinstance(aff_db, dict) else None
+        aff_source = aff_lw.get("source") if isinstance(aff_lw, dict) else None
+        if aff_source in ("pnc-build", "novel-pipeline", "lightwell-pipeline"):
+            if aff_source == "lightwell-pipeline":
+                return "pnc-build"
+            return aff_source
 
     osv_id = record.get("id")
     if isinstance(osv_id, str) and osv_id:

@@ -27,6 +27,66 @@ from slan_cuan.utils import write_tekton_result
 if TYPE_CHECKING:
     from fath_cuan.osidb import OsidbClient
 
+
+def _derive_advisory_id(index_data: dict) -> str | None:
+    """Derive an advisory ID from the build index when none is supplied.
+
+    Format: ``RHLW-{ecosystem}.{name}.{version}``
+
+    Returns None if the index lacks the data to derive an ID (e.g. no
+    vulns to advise on).
+    """
+    if not index_data.get("vulns"):
+        return None
+
+    if "purls" in index_data or "ecosystem" in index_data:
+        ecosystem = index_data.get("ecosystem", "").capitalize() or "Maven"
+        primary = index_data.get("primaryPurl", "")
+        if not primary:
+            purls = index_data.get("purls", [])
+            primary = purls[0] if purls else ""
+        if not primary:
+            return None
+        from packageurl import PackageURL
+
+        try:
+            parsed = PackageURL.from_string(primary)
+        except ValueError:
+            return None
+        name = (
+            f"{parsed.namespace}:{parsed.name}"
+            if parsed.namespace
+            else parsed.name
+        )
+        version = parsed.version or ""
+    else:
+        primary_gav = index_data.get("primaryGav", "")
+        if not primary_gav:
+            return None
+        parts = primary_gav.split(":")
+        if len(parts) != 3:
+            return None
+        ecosystem = "Maven"
+        name = f"{parts[0]}:{parts[1]}"
+        version = parts[2]
+
+    if not version:
+        return None
+    return f"RHLW-{ecosystem}.{name}.{version}"
+
+
+def _validate_advisory_id(ctx, param, value):
+    """Reject IDs not starting with RHLW- or containing path separators."""
+    if value:
+        if not value.startswith("RHLW-"):
+            raise click.BadParameter(f"must start with 'RHLW-', got {value!r}")
+        if "/" in value or "\\" in value:
+            raise click.BadParameter(
+                f"must not contain path separators, got {value!r}"
+            )
+    return value
+
+
 _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
     os.getenv("OSIDB_TOKEN_REQUEST_TIMEOUT", "10.0")
 )
@@ -152,6 +212,18 @@ def _get_osidb_auth_token(
     help="The directory to output the attestations to.",
 )
 @click.option(
+    "--advisory-id",
+    type=str,
+    default="",
+    show_default=True,
+    callback=_validate_advisory_id,
+    expose_value=True,
+    is_eager=False,
+    help=(
+        "Optional advisory ID (e.g. RHLW-2026-00042) for per-release OSV records."
+    ),
+)
+@click.option(
     "--workdir",
     type=click.Path(path_type=Path),
     required=True,
@@ -166,6 +238,7 @@ def generate_security_metadata(
     osidb_keytab: str,
     osidb_kerberos_principal: str,
     output_dir: Path,
+    advisory_id: str,
     workdir: Path,
 ) -> None:
     """Generate the OSV and VEX attestations for a given build index."""
@@ -212,6 +285,11 @@ def generate_security_metadata(
             raise click.Abort()
     else:
         click.echo("No OSIDB keytab file found, skipping OSIDB fetching.")
+
+    if not advisory_id:
+        advisory_id = _derive_advisory_id(index_data)
+    if advisory_id:
+        index_data["advisory_id"] = advisory_id
 
     osv_records = process_osv(index_data, osidb_client=osidb_client)
     output_dir.mkdir(parents=True, exist_ok=True)

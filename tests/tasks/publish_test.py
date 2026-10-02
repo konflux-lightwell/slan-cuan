@@ -3240,3 +3240,172 @@ def test_publish_writes_security_metadata_skipped_tekton_result(
     assert result.exit_code == 0, result.output
     assert (results_dir / "SECURITY_METADATA_SKIPPED").read_text() == "1"
     assert (results_dir / "SECURITY_METADATA_UPLOADED").read_text() == "1"
+
+
+# ---------------------------------------------------------------------------
+# New-format (upstream) record validation tests
+# ---------------------------------------------------------------------------
+
+
+def _new_format_record(
+    advisory_id: str = "RHLW-2026-00042",
+    upstream: list[str] | None = None,
+    source: str = "lightwell-pipeline",
+) -> dict:
+    """Build a new-format OSV record with upstream."""
+    return {
+        "id": advisory_id,
+        "upstream": upstream or ["CVE-2024-25710"],
+        "affected": [
+            {
+                "package": {
+                    "ecosystem": "Maven",
+                    "name": "example",
+                },
+                "database_specific": {
+                    "lightwell": {
+                        "source": source,
+                        "backport_base_version": "1.0.0",
+                        "remediated_version": "1.0.0.rhlw-00001",
+                        "repository_url": "https://packages.redhat.com/lightwell/java/remediated/",
+                    }
+                },
+            },
+            {
+                "package": {
+                    "ecosystem": "Red Hat Lightwell:Maven",
+                    "name": "example",
+                },
+            },
+        ],
+    }
+
+
+def test_upstream_record_accepted(tmp_path: Path) -> None:
+    """New-format upstream record passes is_osv."""
+    from slan_cuan.tasks.publish import _load_security_metadata
+
+    sec_dir = tmp_path / "sec"
+    sec_dir.mkdir()
+    rec = _new_format_record()
+    (sec_dir / "RHLW-2026-00042.json").write_text(json.dumps(rec))
+
+    files = (sec_dir / "RHLW-2026-00042.json",)
+    _load_security_metadata(files, ("CVE-2024-25710",))
+
+
+def test_coverage_check_uses_upstream(tmp_path: Path) -> None:
+    """Vuln coverage check passes when CVEs are in 'upstream' (not 'aliases')."""
+    from slan_cuan.tasks.publish import _load_security_metadata
+
+    sec_dir = tmp_path / "sec"
+    sec_dir.mkdir()
+    rec = _new_format_record(upstream=["CVE-2024-25710", "CVE-2024-26308"])
+    (sec_dir / "RHLW-2026-00042.json").write_text(json.dumps(rec))
+
+    files = (sec_dir / "RHLW-2026-00042.json",)
+    _load_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
+
+
+def test_classify_source_new_id(tmp_path: Path) -> None:
+    """RHLW-* ID falls through to database_specific.lightwell.source."""
+    from slan_cuan.tasks.publish import _classify_osv_source
+
+    rec = _new_format_record()
+    path = tmp_path / "RHLW-2026-00042.json"
+    path.write_text(json.dumps(rec))
+    assert _classify_osv_source(path) == "pnc-build"
+
+
+def test_classify_source_new_format_novel(tmp_path: Path) -> None:
+    """Novel advisory record classified via affected-level source."""
+    from slan_cuan.tasks.publish import _classify_osv_source
+
+    rec = _new_format_record(source="novel-pipeline")
+    path = tmp_path / "RHLW-2026-00042.json"
+    path.write_text(json.dumps(rec))
+    assert _classify_osv_source(path) == "novel-pipeline"
+
+
+def test_mixed_old_new_records(tmp_path: Path) -> None:
+    """Old and new format records coexist in security metadata dir."""
+    from slan_cuan.tasks.publish import _load_security_metadata
+
+    sec_dir = tmp_path / "sec"
+    sec_dir.mkdir()
+
+    old_rec = {
+        "id": "x_RHLW-CVE-2024-25710-1.0.0",
+        "aliases": ["CVE-2024-25710"],
+        "affected": [{"package": {"name": "example"}}],
+        "database_specific": {"lightwell": {"source": "pnc-build"}},
+    }
+    (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json").write_text(json.dumps(old_rec))
+
+    new_rec = _new_format_record(
+        advisory_id="RHLW-2026-00001",
+        upstream=["CVE-2024-26308"],
+    )
+    (sec_dir / "RHLW-2026-00001.json").write_text(json.dumps(new_rec))
+
+    files = (
+        sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json",
+        sec_dir / "RHLW-2026-00001.json",
+    )
+    _load_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
+
+
+def test_coverage_rejects_substring_match(tmp_path: Path) -> None:
+    """CVE-2024-2571 must not be covered by a record for CVE-2024-25710."""
+    from slan_cuan.tasks.publish import _load_security_metadata
+
+    sec_dir = tmp_path / "sec"
+    sec_dir.mkdir()
+    rec = {
+        "id": "x_RHLW-CVE-2024-25710-1.0.0",
+        "aliases": ["CVE-2024-25710"],
+        "affected": [{"package": {"name": "example"}}],
+        "database_specific": {"lightwell": {"source": "pnc-build"}},
+    }
+    (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json").write_text(json.dumps(rec))
+
+    files = (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json",)
+    with pytest.raises(ValueError, match="does not cover all"):
+        _load_security_metadata(files, ("CVE-2024-2571",))
+
+
+def test_empty_aliases_and_upstream_rejected(tmp_path: Path) -> None:
+    """A record with empty aliases and no upstream is not valid OSV."""
+    from slan_cuan.tasks.publish import _load_security_metadata
+
+    sec_dir = tmp_path / "sec"
+    sec_dir.mkdir()
+    rec = {
+        "id": "x_RHLW-CVE-2024-99999-1.0.0",
+        "aliases": [],
+        "upstream": [],
+        "affected": [{"package": {"name": "example"}}],
+    }
+    (sec_dir / "empty.json").write_text(json.dumps(rec))
+
+    with pytest.raises(ValueError, match="not OSV or VEX"):
+        _load_security_metadata((sec_dir / "empty.json",), ("CVE-2024-99999",))
+
+
+def test_null_aliases_and_upstream_handled(tmp_path: Path) -> None:
+    """Explicit JSON null for aliases/upstream must not TypeError."""
+    from slan_cuan.tasks.publish import _load_security_metadata
+
+    sec_dir = tmp_path / "sec"
+    sec_dir.mkdir()
+    rec = {
+        "id": "x_RHLW-CVE-2024-25710-1.0.0",
+        "aliases": None,
+        "upstream": None,
+        "affected": [{"package": {"name": "example"}}],
+    }
+    (sec_dir / "null_fields.json").write_text(json.dumps(rec))
+
+    files = (sec_dir / "null_fields.json",)
+    with pytest.raises(ValueError, match="not OSV or VEX"):
+        _load_security_metadata(files, ("CVE-2024-25710",))
