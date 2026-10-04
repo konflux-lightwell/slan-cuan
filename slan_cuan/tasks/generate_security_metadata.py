@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import click
+from fath_cuan.ecosystems import _OSV_ECOSYSTEM
 from fath_cuan.workflow import process_osv
 
 from slan_cuan import oci
@@ -40,7 +41,15 @@ def _derive_advisory_id(index_data: dict) -> str | None:
         return None
 
     if "purls" in index_data or "ecosystem" in index_data:
-        ecosystem = index_data.get("ecosystem", "").capitalize() or "Maven"
+        raw_eco = index_data.get("ecosystem", "").lower()
+        ecosystem = _OSV_ECOSYSTEM.get(raw_eco)
+        if not ecosystem:
+            supported = ", ".join(sorted(_OSV_ECOSYSTEM))
+            raise click.ClickException(
+                f"build-index ecosystem '{raw_eco}' is not supported; "
+                f"expected one of: {supported} "
+                f"(defined in fath_cuan.ecosystems._OSV_ECOSYSTEM)"
+            )
         primary = index_data.get("primaryPurl", "")
         if not primary:
             purls = index_data.get("purls", [])
