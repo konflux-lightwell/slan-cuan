@@ -40,8 +40,8 @@ def _derive_advisory_id(index_data: dict) -> str | None:
 
     Format: ``RHLW-{YYYY}-{lower64hex}``
 
-    Returns None if the index lacks the data to derive an ID (e.g. no
-    vulns to advise on).
+    Returns None only when the index has no vulnerabilities (no advisory
+    needed). All other derivation failures are hard errors.
     """
     if not index_data.get("vulns"):
         return None
@@ -61,21 +61,19 @@ def _derive_advisory_id(index_data: dict) -> str | None:
             purls = index_data.get("purls", [])
             primary = purls[0] if purls else ""
         if not primary:
-            click.echo(
-                "Warning: cannot derive advisory ID:"
-                " no primaryPurl or purls in index"
+            raise click.ClickException(
+                "Build index has vulns but no primaryPurl or purls;"
+                " cannot derive advisory ID"
             )
-            return None
         from packageurl import PackageURL
 
         try:
             parsed = PackageURL.from_string(primary)
-        except ValueError:
-            click.echo(
-                f"Warning: cannot derive advisory ID:"
-                f" unparseable purl {primary!r}"
-            )
-            return None
+        except ValueError as exc:
+            raise click.ClickException(
+                f"Build index has unparseable purl {primary!r};"
+                f" cannot derive advisory ID"
+            ) from exc
         name = (
             f"{parsed.namespace}:{parsed.name}"
             if parsed.namespace
@@ -85,24 +83,24 @@ def _derive_advisory_id(index_data: dict) -> str | None:
     else:
         primary_gav = index_data.get("primaryGav", "")
         if not primary_gav:
-            click.echo(
-                "Warning: cannot derive advisory ID: no primaryGav in index"
+            raise click.ClickException(
+                "Build index has vulns but no primaryGav;"
+                " cannot derive advisory ID"
             )
-            return None
         parts = primary_gav.split(":")
         if len(parts) != 3:
-            click.echo(
-                f"Warning: cannot derive advisory ID:"
-                f" malformed GAV {primary_gav!r}"
+            raise click.ClickException(
+                f"Build index has malformed GAV {primary_gav!r};"
+                f" cannot derive advisory ID"
             )
-            return None
         ecosystem = "Maven"
         name = f"{parts[0]}:{parts[1]}"
         version = parts[2]
 
     if not version:
-        click.echo("Warning: cannot derive advisory ID: empty version in index")
-        return None
+        raise click.ClickException(
+            "Build index has vulns but empty version; cannot derive advisory ID"
+        )
 
     combo_key = f"{ecosystem}::{name}::{version}"
     hash128 = mmh3.hash128(combo_key, seed=_MURMURHASH_SEED)
