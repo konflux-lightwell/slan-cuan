@@ -30,7 +30,6 @@ from slan_cuan.utils import write_tekton_result
 if TYPE_CHECKING:
     from fath_cuan.osidb import OsidbClient
 
-
 _MURMURHASH_SEED = 42
 _LOWER_64_MASK = 0xFFFF_FFFF_FFFF_FFFF
 _ADVISORY_ID_RE = re.compile(r"^RHLW-\d{4}-[0-9a-f]{16}$")
@@ -62,12 +61,20 @@ def _derive_advisory_id(index_data: dict) -> str | None:
             purls = index_data.get("purls", [])
             primary = purls[0] if purls else ""
         if not primary:
+            click.echo(
+                "Warning: cannot derive advisory ID:"
+                " no primaryPurl or purls in index"
+            )
             return None
         from packageurl import PackageURL
 
         try:
             parsed = PackageURL.from_string(primary)
         except ValueError:
+            click.echo(
+                f"Warning: cannot derive advisory ID:"
+                f" unparseable purl {primary!r}"
+            )
             return None
         name = (
             f"{parsed.namespace}:{parsed.name}"
@@ -78,15 +85,23 @@ def _derive_advisory_id(index_data: dict) -> str | None:
     else:
         primary_gav = index_data.get("primaryGav", "")
         if not primary_gav:
+            click.echo(
+                "Warning: cannot derive advisory ID: no primaryGav in index"
+            )
             return None
         parts = primary_gav.split(":")
         if len(parts) != 3:
+            click.echo(
+                f"Warning: cannot derive advisory ID:"
+                f" malformed GAV {primary_gav!r}"
+            )
             return None
         ecosystem = "Maven"
         name = f"{parts[0]}:{parts[1]}"
         version = parts[2]
 
     if not version:
+        click.echo("Warning: cannot derive advisory ID: empty version in index")
         return None
 
     combo_key = f"{ecosystem}::{name}::{version}"
