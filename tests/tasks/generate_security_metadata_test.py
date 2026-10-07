@@ -926,13 +926,9 @@ def test_derive_advisory_id_golden_value() -> None:
     index = {
         "ecosystem": "maven",
         "primaryPurl": (
-            "pkg:maven/org.springframework/spring-core"
-            "@5.3.18.rhlw-00010"
+            "pkg:maven/org.springframework/spring-core@5.3.18.rhlw-00010"
         ),
-        "purls": [
-            "pkg:maven/org.springframework/spring-core"
-            "@5.3.18.rhlw-00010"
-        ],
+        "purls": ["pkg:maven/org.springframework/spring-core@5.3.18.rhlw-00010"],
         "vulns": ["CVE-2022-22965"],
         "created": "2026-01-01T00:00:00+00:00",
     }
@@ -964,9 +960,7 @@ def test_validate_advisory_id_rejects_old_dot_format() -> None:
     )
 
     with pytest.raises(click.BadParameter, match="must match"):
-        _validate_advisory_id(
-            None, None, "RHLW-Maven.org.example:artifact.1.0.0"
-        )
+        _validate_advisory_id(None, None, "RHLW-Maven.org.example:artifact.1.0.0")
 
 
 def test_validate_advisory_id_rejects_old_numeric() -> None:
@@ -990,9 +984,7 @@ def test_validate_advisory_id_rejects_path_separator() -> None:
     )
 
     with pytest.raises(click.BadParameter, match="must match"):
-        _validate_advisory_id(
-            None, None, "RHLW-2026-5fc0229c/8c1b99c"
-        )
+        _validate_advisory_id(None, None, "RHLW-2026-5fc0229c/8c1b99c")
 
 
 @patch("slan_cuan.tasks.generate_security_metadata.process_osv")
@@ -1015,9 +1007,7 @@ def test_derived_id_malformed_raises(
         return_value="RHLW-bad-format",
     ):
         runner = CliRunner()
-        result = _invoke(
-            runner, index_dir, output_dir, ctx, workdir=workdir
-        )
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
     assert result.exit_code != 0
     assert "malformed" in result.output
 
