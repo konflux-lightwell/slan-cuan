@@ -51,6 +51,7 @@ def _create_index_file(directory: Path, name: str = "gav-index.json") -> Path:
     data = {
         "buildId": "12345",
         "vulns": ["CVE-2024-1234"],
+        "primaryGav": "org.example:lib:1.0.0",
         "artifacts": [
             {
                 "groupId": "org.example",
@@ -401,10 +402,10 @@ def test_no_keytab_skips_osidb(
 
     assert result.exit_code == 0, result.output
     assert "skipping OSIDB fetching" in result.output
-    mock_process_osv.assert_called_once_with(
-        json.loads((index_dir / "gav-index.json").read_text()),
-        osidb_client=None,
-    )
+    mock_process_osv.assert_called_once()
+    call_args = mock_process_osv.call_args
+    assert call_args[1]["osidb_client"] is None
+    assert "advisory_id" in call_args[0][0]
 
 
 @patch("slan_cuan.tasks.generate_security_metadata.process_osv")
@@ -437,10 +438,10 @@ def test_nonexistent_keytab_skips_osidb(
 
     assert result.exit_code == 0, result.output
     assert "skipping OSIDB fetching" in result.output
-    mock_process_osv.assert_called_once_with(
-        json.loads((index_dir / "gav-index.json").read_text()),
-        osidb_client=None,
-    )
+    mock_process_osv.assert_called_once()
+    call_args = mock_process_osv.call_args
+    assert call_args[1]["osidb_client"] is None
+    assert "advisory_id" in call_args[0][0]
 
 
 @patch("fath_cuan.osidb.OsidbClient")
@@ -538,10 +539,10 @@ def test_valid_keytab_creates_osidb_client(
     mock_osidb_client_cls.assert_called_once_with(
         base_url="https://osidb.example.com", token="jwt-token-123"
     )
-    mock_process_osv.assert_called_once_with(
-        json.loads((index_dir / "gav-index.json").read_text()),
-        osidb_client=mock_client,
-    )
+    mock_process_osv.assert_called_once()
+    call_args = mock_process_osv.call_args
+    assert call_args[1]["osidb_client"] is mock_client
+    assert "advisory_id" in call_args[0][0]
 
 
 @patch("fath_cuan.osidb.OsidbClient")
@@ -754,13 +755,17 @@ def test_advisory_id_injected(
 
 
 @patch("slan_cuan.tasks.generate_security_metadata.process_osv")
-def test_advisory_id_absent_no_injection(
+def test_advisory_id_auto_derived(
     mock_process_osv: Mock,
     fake_osv_records: list[dict],
     ctx: GlobalContext,
     tmp_path: Path,
 ) -> None:
-    """Without --advisory-id, index data is unmodified."""
+    """Without --advisory-id, the derived ID is injected automatically."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _ADVISORY_ID_RE,
+    )
+
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     _create_index_file(index_dir)
@@ -776,7 +781,8 @@ def test_advisory_id_absent_no_injection(
     assert result.exit_code == 0, result.output
     call_args = mock_process_osv.call_args
     index_data = call_args[0][0]
-    assert "advisory_id" not in index_data
+    assert "advisory_id" in index_data
+    assert _ADVISORY_ID_RE.match(index_data["advisory_id"])
 
 
 @patch("slan_cuan.tasks.generate_security_metadata.process_osv")
@@ -878,17 +884,22 @@ def test_derive_advisory_id_no_vulns() -> None:
 
 
 def test_derive_advisory_id_no_primary() -> None:
-    """Missing primary purl and GAV returns None."""
+    """Missing primary purl and GAV raises ClickException."""
+    import click
+
     from slan_cuan.tasks.generate_security_metadata import (
         _derive_advisory_id,
     )
 
     index = {"vulns": ["CVE-2024-25710"]}
-    assert _derive_advisory_id(index) is None
+    with pytest.raises(click.ClickException, match="no primaryGav"):
+        _derive_advisory_id(index)
 
 
 def test_derive_advisory_id_missing_version() -> None:
-    """A GAV with no version returns None."""
+    """A GAV with no version raises ClickException."""
+    import click
+
     from slan_cuan.tasks.generate_security_metadata import (
         _derive_advisory_id,
     )
@@ -897,7 +908,8 @@ def test_derive_advisory_id_missing_version() -> None:
         "primaryGav": "org.example:artifact:",
         "vulns": ["CVE-2024-25710"],
     }
-    assert _derive_advisory_id(index) is None
+    with pytest.raises(click.ClickException, match="empty version"):
+        _derive_advisory_id(index)
 
 
 def test_derive_advisory_id_bad_ecosystem() -> None:
@@ -918,22 +930,20 @@ def test_derive_advisory_id_bad_ecosystem() -> None:
 
 
 def test_derive_advisory_id_golden_value() -> None:
-    """Golden-value test for the spring-core example."""
+    """Golden-value test with a synthetic package."""
     from slan_cuan.tasks.generate_security_metadata import (
         _derive_advisory_id,
     )
 
     index = {
         "ecosystem": "maven",
-        "primaryPurl": (
-            "pkg:maven/org.springframework/spring-core@5.3.18.rhlw-00010"
-        ),
-        "purls": ["pkg:maven/org.springframework/spring-core@5.3.18.rhlw-00010"],
-        "vulns": ["CVE-2022-22965"],
+        "primaryPurl": "pkg:maven/com.example/foobar@1.0.0.rhlw-00042",
+        "purls": ["pkg:maven/com.example/foobar@1.0.0.rhlw-00042"],
+        "vulns": ["CVE-2099-00001"],
         "created": "2026-01-01T00:00:00+00:00",
     }
     result = _derive_advisory_id(index)
-    assert result == "RHLW-2026-f342bdbd2d18aaa6"
+    assert result == "RHLW-2026-1c8a4ea22ac9467c"
 
 
 # ---------------------------------------------------------------------------
