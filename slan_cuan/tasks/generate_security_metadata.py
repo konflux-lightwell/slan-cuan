@@ -109,8 +109,7 @@ def _validate_advisory_id(ctx, param, value):
     if value:
         if not _ADVISORY_ID_RE.match(value):
             raise click.BadParameter(
-                f"must match RHLW-YYYY-{{16 hex chars}}, "
-                f"got {value!r}"
+                f"must match RHLW-YYYY-{{16 hex chars}}, got {value!r}"
             )
         if "/" in value or "\\" in value:
             raise click.BadParameter(
@@ -429,6 +428,10 @@ def _generate_osv_for_index(
     click.echo(f"Processing {index_full_path} to generate OSV...")
     with open(index_full_path, "r") as f:
         index_data = json.load(f)
+
+    advisory_id = _derive_advisory_id(index_data)
+    if advisory_id:
+        index_data["advisory_id"] = advisory_id
 
     osv_records = process_osv(index_data, osidb_client=osidb_client)
     output_dir.mkdir(parents=True, exist_ok=True)
