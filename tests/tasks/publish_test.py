@@ -3258,7 +3258,7 @@ def _new_format_record(
         "affected": [
             {
                 "package": {
-                    "ecosystem": "Red Hat Lightwell",
+                    "ecosystem": "Red Hat Lightwell:Maven",
                     "name": "example",
                     "purl": "pkg:maven/org.example/example",
                 },
