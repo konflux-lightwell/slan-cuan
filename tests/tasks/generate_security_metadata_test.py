@@ -735,7 +735,8 @@ def test_advisory_id_injected(
     _create_extract_result(workdir)
     output_dir = workdir / "security_metadata"
 
-    mock_process_osv.return_value = [{"id": "RHLW-2026-00042", "affected": []}]
+    aid = "RHLW-2026-aaaaaaaaaaaaaaaa"
+    mock_process_osv.return_value = [{"id": aid, "affected": []}]
 
     runner = CliRunner()
     result = _invoke(
@@ -744,12 +745,12 @@ def test_advisory_id_injected(
         output_dir,
         ctx,
         workdir=workdir,
-        advisory_id="RHLW-2026-00042",
+        advisory_id=aid,
     )
     assert result.exit_code == 0, result.output
     call_args = mock_process_osv.call_args
     index_data = call_args[0][0]
-    assert index_data["advisory_id"] == "RHLW-2026-00042"
+    assert index_data["advisory_id"] == aid
 
 
 @patch("slan_cuan.tasks.generate_security_metadata.process_osv")
@@ -784,7 +785,7 @@ def test_output_filename_uses_advisory_id(
     ctx: GlobalContext,
     tmp_path: Path,
 ) -> None:
-    """Output file is named RHLW-2026-00042.json."""
+    """Output file is named with a valid MurmurHash advisory ID."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     _create_index_file(index_dir)
@@ -793,7 +794,8 @@ def test_output_filename_uses_advisory_id(
     _create_extract_result(workdir)
     output_dir = workdir / "security_metadata"
 
-    mock_process_osv.return_value = [{"id": "RHLW-2026-00042", "affected": []}]
+    aid = "RHLW-2026-aaaaaaaaaaaaaaaa"
+    mock_process_osv.return_value = [{"id": aid, "affected": []}]
 
     runner = CliRunner()
     result = _invoke(
@@ -802,7 +804,254 @@ def test_output_filename_uses_advisory_id(
         output_dir,
         ctx,
         workdir=workdir,
-        advisory_id="RHLW-2026-00042",
+        advisory_id=aid,
     )
     assert result.exit_code == 0, result.output
-    assert (output_dir / "RHLW-2026-00042.json").exists()
+    assert (output_dir / f"{aid}.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# _derive_advisory_id tests
+# ---------------------------------------------------------------------------
+
+
+def test_derive_advisory_id_purl_path() -> None:
+    """PURL-based build index produces a deterministic MurmurHash ID."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _ADVISORY_ID_RE,
+        _derive_advisory_id,
+    )
+
+    index = {
+        "ecosystem": "maven",
+        "primaryPurl": "pkg:maven/org.example/artifact@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/artifact@1.0.0.rhlw-00001"],
+        "vulns": ["CVE-2024-25710"],
+        "created": "2026-07-15T14:02:27+00:00",
+    }
+    result = _derive_advisory_id(index)
+    assert result is not None
+    assert _ADVISORY_ID_RE.match(result)
+    assert result == "RHLW-2026-5fc0229c48c1b99c"
+
+
+def test_derive_advisory_id_gav_path() -> None:
+    """GAV-based build index produces a deterministic MurmurHash ID."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _ADVISORY_ID_RE,
+        _derive_advisory_id,
+    )
+
+    index = {
+        "primaryGav": "org.example:artifact:1.0.0.rhlw-00001",
+        "vulns": ["CVE-2024-25710"],
+        "created": "2026-07-15T14:02:27+00:00",
+    }
+    result = _derive_advisory_id(index)
+    assert result is not None
+    assert _ADVISORY_ID_RE.match(result)
+    assert result == "RHLW-2026-5fc0229c48c1b99c"
+
+
+def test_derive_advisory_id_deterministic() -> None:
+    """Same input always produces the same hash."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _derive_advisory_id,
+    )
+
+    index = {
+        "primaryGav": "org.example:artifact:1.0.0.rhlw-00001",
+        "vulns": ["CVE-2024-25710"],
+        "created": "2026-07-15T14:02:27+00:00",
+    }
+    assert _derive_advisory_id(index) == _derive_advisory_id(index)
+
+
+def test_derive_advisory_id_no_vulns() -> None:
+    """No vulns returns None."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _derive_advisory_id,
+    )
+
+    index = {"primaryGav": "org.example:artifact:1.0.0", "vulns": []}
+    assert _derive_advisory_id(index) is None
+
+
+def test_derive_advisory_id_no_primary() -> None:
+    """Missing primary purl and GAV returns None."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _derive_advisory_id,
+    )
+
+    index = {"vulns": ["CVE-2024-25710"]}
+    assert _derive_advisory_id(index) is None
+
+
+def test_derive_advisory_id_missing_version() -> None:
+    """A GAV with no version returns None."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _derive_advisory_id,
+    )
+
+    index = {
+        "primaryGav": "org.example:artifact:",
+        "vulns": ["CVE-2024-25710"],
+    }
+    assert _derive_advisory_id(index) is None
+
+
+def test_derive_advisory_id_bad_ecosystem() -> None:
+    """Unsupported ecosystem raises ClickException."""
+    import click
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _derive_advisory_id,
+    )
+
+    index = {
+        "ecosystem": "npm",
+        "purls": ["pkg:npm/foo@1.0.0"],
+        "vulns": ["CVE-2024-25710"],
+    }
+    with pytest.raises(click.ClickException, match="not supported"):
+        _derive_advisory_id(index)
+
+
+def test_derive_advisory_id_golden_value() -> None:
+    """Golden-value test for the spring-core example."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _derive_advisory_id,
+    )
+
+    index = {
+        "ecosystem": "maven",
+        "primaryPurl": (
+            "pkg:maven/org.springframework/spring-core"
+            "@5.3.18.rhlw-00010"
+        ),
+        "purls": [
+            "pkg:maven/org.springframework/spring-core"
+            "@5.3.18.rhlw-00010"
+        ],
+        "vulns": ["CVE-2022-22965"],
+        "created": "2026-01-01T00:00:00+00:00",
+    }
+    result = _derive_advisory_id(index)
+    assert result == "RHLW-2026-f342bdbd2d18aaa6"
+
+
+# ---------------------------------------------------------------------------
+# _validate_advisory_id tests
+# ---------------------------------------------------------------------------
+
+
+def test_validate_advisory_id_accepts_valid() -> None:
+    """Valid MurmurHash-format ID is accepted."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _validate_advisory_id,
+    )
+
+    result = _validate_advisory_id(None, None, "RHLW-2026-5fc0229c48c1b99c")
+    assert result == "RHLW-2026-5fc0229c48c1b99c"
+
+
+def test_validate_advisory_id_rejects_old_dot_format() -> None:
+    """Old dot-delimited format is rejected."""
+    import click
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _validate_advisory_id,
+    )
+
+    with pytest.raises(click.BadParameter, match="must match"):
+        _validate_advisory_id(
+            None, None, "RHLW-Maven.org.example:artifact.1.0.0"
+        )
+
+
+def test_validate_advisory_id_rejects_old_numeric() -> None:
+    """Old numeric ID is rejected."""
+    import click
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _validate_advisory_id,
+    )
+
+    with pytest.raises(click.BadParameter, match="must match"):
+        _validate_advisory_id(None, None, "RHLW-2026-00042")
+
+
+def test_validate_advisory_id_rejects_path_separator() -> None:
+    """Path separators in the ID are rejected by the regex."""
+    import click
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _validate_advisory_id,
+    )
+
+    with pytest.raises(click.BadParameter, match="must match"):
+        _validate_advisory_id(
+            None, None, "RHLW-2026-5fc0229c/8c1b99c"
+        )
+
+
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
+def test_derived_id_malformed_raises(
+    mock_process_osv: Mock,
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """A malformed derived ID raises ClickException."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    _create_index_file(index_dir)
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata._derive_advisory_id",
+        return_value="RHLW-bad-format",
+    ):
+        runner = CliRunner()
+        result = _invoke(
+            runner, index_dir, output_dir, ctx, workdir=workdir
+        )
+    assert result.exit_code != 0
+    assert "malformed" in result.output
+
+
+@patch("slan_cuan.tasks.generate_security_metadata.process_osv")
+def test_override_divergence_warning(
+    mock_process_osv: Mock,
+    ctx: GlobalContext,
+    tmp_path: Path,
+) -> None:
+    """When --advisory-id diverges from derivation, a warning is emitted."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "12345",
+        "vulns": ["CVE-2024-1234"],
+        "primaryGav": "org.example:lib:1.0.0",
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+    mock_process_osv.return_value = []
+
+    override_id = "RHLW-2026-aaaaaaaaaaaaaaaa"
+    runner = CliRunner()
+    result = _invoke(
+        runner,
+        index_dir,
+        output_dir,
+        ctx,
+        workdir=workdir,
+        advisory_id=override_id,
+    )
+    assert result.exit_code == 0, result.output
+    assert "overrides" in result.output

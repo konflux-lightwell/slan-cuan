@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import socket
 import tempfile
 import time
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import click
+import mmh3
 from fath_cuan.ecosystems import _OSV_ECOSYSTEM
 from fath_cuan.workflow import process_osv
 
@@ -29,10 +31,15 @@ if TYPE_CHECKING:
     from fath_cuan.osidb import OsidbClient
 
 
-def _derive_advisory_id(index_data: dict) -> str | None:
-    """Derive an advisory ID from the build index when none is supplied.
+_MURMURHASH_SEED = 42
+_LOWER_64_MASK = 0xFFFF_FFFF_FFFF_FFFF
+_ADVISORY_ID_RE = re.compile(r"^RHLW-\d{4}-[0-9a-f]{16}$")
 
-    Format: ``RHLW-{ecosystem}.{name}.{version}``
+
+def _derive_advisory_id(index_data: dict) -> str | None:
+    """Derive a MurmurHash3-based advisory ID from the build index.
+
+    Format: ``RHLW-{YYYY}-{lower64hex}``
 
     Returns None if the index lacks the data to derive an ID (e.g. no
     vulns to advise on).
@@ -81,14 +88,30 @@ def _derive_advisory_id(index_data: dict) -> str | None:
 
     if not version:
         return None
-    return f"RHLW-{ecosystem}.{name}.{version}"
+
+    combo_key = f"{ecosystem}::{name}::{version}"
+    hash128 = mmh3.hash128(combo_key, seed=_MURMURHASH_SEED)
+    lower64 = hash128 & _LOWER_64_MASK
+
+    created = index_data.get("created", "")
+    if created and len(created) >= 4:
+        year = created[:4]
+    else:
+        from datetime import UTC, datetime
+
+        year = str(datetime.now(UTC).year)
+
+    return f"RHLW-{year}-{lower64:016x}"
 
 
 def _validate_advisory_id(ctx, param, value):
-    """Reject IDs not starting with RHLW- or containing path separators."""
+    """Reject IDs that do not match the MurmurHash format."""
     if value:
-        if not value.startswith("RHLW-"):
-            raise click.BadParameter(f"must start with 'RHLW-', got {value!r}")
+        if not _ADVISORY_ID_RE.match(value):
+            raise click.BadParameter(
+                f"must match RHLW-YYYY-{{16 hex chars}}, "
+                f"got {value!r}"
+            )
         if "/" in value or "\\" in value:
             raise click.BadParameter(
                 f"must not contain path separators, got {value!r}"
@@ -297,6 +320,31 @@ def generate_security_metadata(
 
     if not advisory_id:
         advisory_id = _derive_advisory_id(index_data)
+        if advisory_id and not _ADVISORY_ID_RE.match(advisory_id):
+            raise click.ClickException(
+                f"Derived advisory ID is malformed: {advisory_id!r}"
+            )
+    else:
+        derived = _derive_advisory_id(index_data)
+        if derived and derived != advisory_id:
+            combo_key_parts = []
+            if "purls" in index_data or "ecosystem" in index_data:
+                raw_eco = index_data.get("ecosystem", "").lower()
+                eco = _OSV_ECOSYSTEM.get(raw_eco, raw_eco)
+                primary = index_data.get(
+                    "primaryPurl",
+                    (index_data.get("purls") or [""])[0],
+                )
+                combo_key_parts = [eco, primary]
+            else:
+                combo_key_parts = [
+                    "Maven",
+                    index_data.get("primaryGav", ""),
+                ]
+            click.echo(
+                f"Warning: --advisory-id {advisory_id} overrides "
+                f"derived {derived}; input was {combo_key_parts}"
+            )
     if advisory_id:
         index_data["advisory_id"] = advisory_id
 
