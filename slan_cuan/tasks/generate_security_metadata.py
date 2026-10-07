@@ -105,6 +105,10 @@ def _derive_advisory_id(index_data: dict) -> str | None:
     combo_key = f"{ecosystem}::{name}::{version}"
     hash128 = mmh3.hash128(combo_key, seed=_MURMURHASH_SEED)
     lower64 = hash128 & _LOWER_64_MASK
+    click.echo(
+        f"Advisory ID derivation: key={combo_key!r} "
+        f"hash128={hash128:032x} lower64={lower64:016x}"
+    )
 
     created = index_data.get("created", "")
     if created and len(created) >= 4:
