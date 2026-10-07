@@ -3248,33 +3248,26 @@ def test_publish_writes_security_metadata_skipped_tekton_result(
 
 
 def _new_format_record(
-    advisory_id: str = "RHLW-2026-00042",
+    advisory_id: str = "RHLW-2026-5fc0229c48c1b99c",
     upstream: list[str] | None = None,
-    source: str = "lightwell-pipeline",
 ) -> dict:
-    """Build a new-format OSV record with upstream."""
+    """Build a new-format advisory OSV record with upstream."""
     return {
         "id": advisory_id,
         "upstream": upstream or ["CVE-2024-25710"],
         "affected": [
             {
                 "package": {
-                    "ecosystem": "Maven",
+                    "ecosystem": "Red Hat Lightwell",
                     "name": "example",
+                    "purl": "pkg:maven/org.example/example",
                 },
                 "database_specific": {
                     "lightwell": {
-                        "source": source,
                         "backport_base_version": "1.0.0",
                         "remediated_version": "1.0.0.rhlw-00001",
                         "repository_url": "https://packages.redhat.com/lightwell/java/remediated/",
                     }
-                },
-            },
-            {
-                "package": {
-                    "ecosystem": "Red Hat Lightwell:Maven",
-                    "name": "example",
                 },
             },
         ],
@@ -3288,9 +3281,9 @@ def test_upstream_record_accepted(tmp_path: Path) -> None:
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
     rec = _new_format_record()
-    (sec_dir / "RHLW-2026-00042.json").write_text(json.dumps(rec))
+    (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json").write_text(json.dumps(rec))
 
-    files = (sec_dir / "RHLW-2026-00042.json",)
+    files = (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json",)
     _load_security_metadata(files, ("CVE-2024-25710",))
 
 
@@ -3301,30 +3294,35 @@ def test_coverage_check_uses_upstream(tmp_path: Path) -> None:
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
     rec = _new_format_record(upstream=["CVE-2024-25710", "CVE-2024-26308"])
-    (sec_dir / "RHLW-2026-00042.json").write_text(json.dumps(rec))
+    (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json").write_text(json.dumps(rec))
 
-    files = (sec_dir / "RHLW-2026-00042.json",)
+    files = (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json",)
     _load_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
 
 
 def test_classify_source_new_id(tmp_path: Path) -> None:
-    """RHLW-* ID falls through to database_specific.lightwell.source."""
+    """Advisory records (no source, RHLW- prefix) classified as pnc-build."""
     from slan_cuan.tasks.publish import _classify_osv_source
 
     rec = _new_format_record()
-    path = tmp_path / "RHLW-2026-00042.json"
+    path = tmp_path / "RHLW-2026-5fc0229c48c1b99c.json"
     path.write_text(json.dumps(rec))
     assert _classify_osv_source(path) == "pnc-build"
 
 
-def test_classify_source_new_format_novel(tmp_path: Path) -> None:
-    """Novel advisory record classified via affected-level source."""
+def test_classify_source_per_cve_record(tmp_path: Path) -> None:
+    """Per-CVE records with top-level source still classified correctly."""
     from slan_cuan.tasks.publish import _classify_osv_source
 
-    rec = _new_format_record(source="novel-pipeline")
-    path = tmp_path / "RHLW-2026-00042.json"
+    rec = {
+        "id": "x_RHLW-CVE-2024-25710-1.0.0",
+        "aliases": ["CVE-2024-25710"],
+        "affected": [{"package": {"name": "example"}}],
+        "database_specific": {"lightwell": {"source": "pnc-build"}},
+    }
+    path = tmp_path / "x_RHLW-CVE-2024-25710-1.0.0.json"
     path.write_text(json.dumps(rec))
-    assert _classify_osv_source(path) == "novel-pipeline"
+    assert _classify_osv_source(path) == "pnc-build"
 
 
 def test_mixed_old_new_records(tmp_path: Path) -> None:
@@ -3343,14 +3341,14 @@ def test_mixed_old_new_records(tmp_path: Path) -> None:
     (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json").write_text(json.dumps(old_rec))
 
     new_rec = _new_format_record(
-        advisory_id="RHLW-2026-00001",
+        advisory_id="RHLW-2026-bbbbbbbbbbbbbbbb",
         upstream=["CVE-2024-26308"],
     )
-    (sec_dir / "RHLW-2026-00001.json").write_text(json.dumps(new_rec))
+    (sec_dir / "RHLW-2026-bbbbbbbbbbbbbbbb.json").write_text(json.dumps(new_rec))
 
     files = (
         sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json",
-        sec_dir / "RHLW-2026-00001.json",
+        sec_dir / "RHLW-2026-bbbbbbbbbbbbbbbb.json",
     )
     _load_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
 
