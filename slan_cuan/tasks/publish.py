@@ -304,6 +304,84 @@ def _diagnose_empty_build(artifact_dir: Path, deliverable_dir: str) -> None:
     _list_entries(repo_dir, recursive=True)
 
 
+def _validate_load_extract_result(
+    ctx: GlobalContext, artifact_dir: Path
+) -> ExtractResult:
+    """Validate and load the extract result."""
+    result_path = artifact_dir / EXTRACT_RESULT_FILENAME
+    if ctx.verbose:
+        click.echo(f"Inspecting result path: {result_path}")
+    if not result_path.exists():
+        raise click.ClickException(f"Extract result not found: {result_path}")
+
+    extract_result = ExtractResult.from_file(result_path)
+    if ctx.verbose:
+        click.echo(f"Extract result file: {result_path}")
+        click.echo(f"Artifact directory: {artifact_dir.resolve()}")
+        click.echo(f"Deliverable directory: {extract_result.deliverable_dir}")
+    return extract_result
+
+
+def _verify_requires_file_repository(
+    vulns: tuple[Path, ...],
+    security_metadata_files: tuple[Path, ...],
+    pulp_file_repository: str | None,
+) -> bool:
+    requires_file_repository = bool(vulns or security_metadata_files)
+    if requires_file_repository and not pulp_file_repository:
+        raise click.UsageError(
+            "--pulp-file-repository is required for OSV publication."
+        )
+    return requires_file_repository
+
+
+def _retrieve_uploadable_metadata(
+    security_metadata_files: tuple[Path, ...],
+    expected_source: str | None,
+    pulp_file_repository: str | None,
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Retrieve uploadable metadata."""
+    if not security_metadata_files or expected_source is None:
+        uploadable_metadata = security_metadata_files
+        skipped_metadata: tuple[Path, ...] = ()
+        if security_metadata_files and pulp_file_repository:
+            click.echo(
+                f"Warning: OSV repository '{pulp_file_repository}' is not "
+                f"a recognized backport/novel repository; uploading all "
+                f"{len(security_metadata_files)} record(s) without type "
+                f"filtering."
+            )
+        return uploadable_metadata, skipped_metadata
+
+    # Mismatched records are dropped (warned, not errored) under the
+    # disjoint-repo model: each record type is published to its own
+    # stream by the RPA that owns it. A CVE OSV belongs to the backport
+    # stream, which publishes it independently; the copy riding along a
+    # novel-only release is therefore either redundant (already in the
+    # backport repo) or an orphan pointing at an artifact absent from
+    # the novel repo. Neither justifies writing it here, so a
+    # novel-only release that carried CVE backports correctly drops
+    # them rather than failing. (RPA composition ensuring CVEs reach
+    # the backport stream is out of scope for this task.)
+    kept: list[Path] = []
+    dropped: list[Path] = []
+    for metadata_file in security_metadata_files:
+        record_source = _classify_osv_source(metadata_file)
+        if record_source == expected_source:
+            kept.append(metadata_file)
+        else:
+            dropped.append(metadata_file)
+            click.echo(
+                f"Warning: skipping OSV record {metadata_file.name} "
+                f"(source={record_source or 'unknown'}); it does not "
+                f"belong in the {expected_source} repository "
+                f"'{pulp_file_repository}'."
+            )
+    uploadable_metadata = tuple(kept)
+    skipped_metadata = tuple(dropped)
+    return uploadable_metadata, skipped_metadata
+
+
 def _upload_one(
     client: PulpMavenClient,
     artifact: MavenArtifact,
@@ -328,6 +406,204 @@ def _upload_one(
     if verbose:
         click.echo(f"  -> {content_unit.pulp_href}")
     return content_unit
+
+
+def _upload_to_pulp(
+    ctx: GlobalContext,
+    config: PulpConfig,
+    build: BuildOutput,
+    uploadable_metadata: tuple[Path, ...],
+    pulp_url: str,
+    pulp_file_repository: str | None,
+    pulp_repository: str,
+    pulp_labels: dict[str, str],
+    requires_file_repository: bool,
+    file_skipped: int,
+    upload_workers: int,
+) -> tuple[PublishResult, int, int, int]:
+    """Upload artifacts to Pulp."""
+    uploaded = 0
+    skipped = 0
+    file_uploaded = 0
+    repository_version = None
+    content_unit_hrefs: list[str] = []
+
+    with ExitStack() as clients:
+        file_client: PulpFileClient | None = None
+        file_repo_href: str | None = None
+        if requires_file_repository:
+            try:
+                file_client = clients.enter_context(
+                    PulpFileClient(config, pulp_file_repository)
+                )
+                file_repo_href = file_client.resolve_repository(
+                    pulp_file_repository
+                )
+            except PulpError as e:
+                raise click.ClickException(
+                    "Unable to verify the required OSV publication repository."
+                ) from e
+
+        client = clients.enter_context(PulpMavenClient(config, pulp_repository))
+        uploadable: list[MavenArtifact] = []
+        for artifact in build.artifacts:
+            if not artifact.file_path.exists():
+                click.echo(
+                    f"Warning: skipping missing file: {artifact.relative_path}"
+                )
+                skipped += 1
+            else:
+                uploadable.append(artifact)
+
+        with ThreadPoolExecutor(max_workers=upload_workers) as executor:
+            future_to_artifact: dict[Future[ContentUnit], MavenArtifact] = {
+                executor.submit(
+                    _upload_one, client, artifact, pulp_labels, ctx.verbose
+                ): artifact
+                for artifact in uploadable
+            }
+
+            for future in as_completed(future_to_artifact):
+                artifact = future_to_artifact[future]
+                try:
+                    content_unit = future.result()
+                except PulpError as e:
+                    if e.status_code != 503:
+                        raise
+                    click.echo(
+                        f"Warning: Pulp returned recoverable HTTP 503 for "
+                        f"{artifact.relative_path}; continuing with the "
+                        "publish loop."
+                    )
+                    continue
+                content_unit_hrefs.append(content_unit.pulp_href)
+                uploaded += 1
+
+        if content_unit_hrefs:
+            click.echo(f"Resolving repository: {pulp_repository}")
+            repo_href = client.resolve_repository(pulp_repository)
+
+            click.echo(
+                f"Adding {len(content_unit_hrefs)} content unit(s) to repository"
+            )
+            modify_result = client.modify_repository(
+                repo_href, content_unit_hrefs
+            )
+            repository_version = modify_result.repository_version
+
+            if ctx.verbose:
+                click.echo(f"  -> repository version: {repository_version}")
+
+        if file_client and file_repo_href:
+            try:
+                for file_path in uploadable_metadata:
+                    sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+                    file_client.upload_content(
+                        file_path=file_path,
+                        relative_path=file_path.name,
+                        sha256=sha256,
+                        repository_href=file_repo_href,
+                    )
+                    file_uploaded += 1
+
+                if file_uploaded > 0:
+                    pub_href = file_client.create_publication(file_repo_href)
+                    dist_href = file_client.resolve_distribution(
+                        pulp_file_repository
+                    )
+                    file_client.update_distribution(dist_href, pub_href)
+            except PulpError as e:
+                raise click.ClickException(
+                    "Required OSV publication did not complete."
+                ) from e
+
+    if file_uploaded:
+        click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
+
+    publish_result = PublishResult(
+        pulp_url=pulp_url,
+        distribution=pulp_repository,
+        artifacts_uploaded=uploaded,
+        artifacts_skipped=skipped,
+        coordinates=tuple(build.coordinates),
+        published_at=datetime.now(timezone.utc).isoformat(),
+        repository_version=repository_version,
+        content_unit_hrefs=tuple(content_unit_hrefs),
+        pulp_labels=pulp_labels,
+        file_repository=pulp_file_repository if file_uploaded else None,
+        security_metadata_uploaded=file_uploaded,
+        security_metadata_skipped=file_skipped,
+    )
+    return publish_result, uploaded, skipped, file_uploaded
+
+
+def _print_verbose_pulp_info(
+    ctx: GlobalContext,
+    pulp_url: str,
+    pulp_repository: str,
+    pulp_auth_type: str,
+    insecure: bool,
+    ca_cert: Path | None,
+    pulp_domain: str,
+    pulp_client_cert: Path | None,
+    pulp_client_key: Path | None,
+    config: PulpConfig,
+    upload_workers: int,
+    pulp_task_timeout: float,
+    pulp_max_total_task_timeout: float | None,
+) -> None:
+    """Print verbose Pulp information."""
+    if ctx.verbose:
+        click.echo(f"Pulp URL: {pulp_url}")
+        click.echo(f"Distribution: {pulp_repository}")
+        click.echo(f"Auth type: {pulp_auth_type}")
+        click.echo(f"TLS verification: {not insecure}")
+        if ca_cert:
+            click.echo(f"CA certificate: {ca_cert}")
+        if pulp_domain:
+            click.echo(f"Pulp domain: {pulp_domain}")
+        if pulp_client_cert:
+            click.echo(f"Client certificate: {pulp_client_cert}")
+        if pulp_client_key:
+            click.echo(f"Client key: {pulp_client_key}")
+        if config.custom_headers:
+            click.echo(f"Custom headers: {config.custom_headers}")
+        click.echo(f"Upload workers: {upload_workers}")
+        click.echo(f"Task timeout: {pulp_task_timeout}s")
+        max_timeout = pulp_max_total_task_timeout
+        if max_timeout is None:
+            max_timeout = 2.0 * pulp_task_timeout
+        click.echo(f"Maximum total task timeout: {max_timeout}s")
+
+
+def _print_verbose_artifact_info(
+    ctx: GlobalContext,
+    build: BuildOutput,
+    artifact_dir: Path,
+    extract_result: ExtractResult,
+) -> None:
+    """Print verbose artifact information."""
+    if ctx.verbose:
+        click.echo(
+            f"Discovered {len(build.artifacts)} "
+            f"artifact(s) across "
+            f"{len(build.coordinates)} "
+            f"coordinate(s)"
+        )
+        click.echo(f"Repository root: {build.deliverable_dir}")
+        if not build.artifacts:
+            _diagnose_empty_build(artifact_dir, extract_result.deliverable_dir)
+        for artifact in build.artifacts:
+            size = (
+                artifact.file_path.stat().st_size
+                if artifact.file_path.exists()
+                else -1
+            )
+            click.echo(f"  {artifact.relative_path} ({size} bytes)")
+        coords = [
+            f"{c.group_id}:{c.artifact_id}:{c.version}" for c in build.coordinates
+        ]
+        click.echo(f"Coordinates: {', '.join(coords)}")
 
 
 @click.command()
@@ -470,45 +746,11 @@ def publish(
         pulp_file_repository.strip() or None if pulp_file_repository else None
     )
     try:
-        result_path = artifact_dir / EXTRACT_RESULT_FILENAME
-        if ctx.verbose:
-            click.echo(f"Inspecting result path: {result_path}")
-        if not result_path.exists():
-            raise click.ClickException(f"Extract result not found: {result_path}")
-
-        extract_result = ExtractResult.from_file(result_path)
-        if ctx.verbose:
-            click.echo(f"Extract result file: {result_path}")
-            click.echo(f"Artifact directory: {artifact_dir.resolve()}")
-            click.echo(f"Deliverable directory: {extract_result.deliverable_dir}")
-
+        extract_result = _validate_load_extract_result(ctx, artifact_dir)
         build = BuildOutput.from_extract_result(
             extract_result, artifact_dir, require_supply_chain_metadata
         )
-        if ctx.verbose:
-            click.echo(
-                f"Discovered {len(build.artifacts)} "
-                f"artifact(s) across "
-                f"{len(build.coordinates)} "
-                f"coordinate(s)"
-            )
-            click.echo(f"Repository root: {build.deliverable_dir}")
-            if not build.artifacts:
-                _diagnose_empty_build(
-                    artifact_dir, extract_result.deliverable_dir
-                )
-            for artifact in build.artifacts:
-                size = (
-                    artifact.file_path.stat().st_size
-                    if artifact.file_path.exists()
-                    else -1
-                )
-                click.echo(f"  {artifact.relative_path} ({size} bytes)")
-            coords = [
-                f"{c.group_id}:{c.artifact_id}:{c.version}"
-                for c in build.coordinates
-            ]
-            click.echo(f"Coordinates: {', '.join(coords)}")
+        _print_verbose_artifact_info(ctx, build, artifact_dir, extract_result)
 
         vulns = _gav_index_vulnerabilities(
             extract_result.attachment_files, artifact_dir
@@ -521,54 +763,18 @@ def publish(
             else ()
         )
         _validate_security_metadata(security_metadata_files, vulns)
-        requires_file_repository = bool(vulns or security_metadata_files)
-        if requires_file_repository and not pulp_file_repository:
-            raise click.UsageError(
-                "--pulp-file-repository is required for OSV publication."
-            )
+        requires_file_repository = _verify_requires_file_repository(
+            vulns, security_metadata_files, pulp_file_repository
+        )
 
         expected_source = (
             _expected_source_for_repo(pulp_file_repository)
             if pulp_file_repository
             else None
         )
-        if not security_metadata_files or expected_source is None:
-            uploadable_metadata = security_metadata_files
-            skipped_metadata: tuple[Path, ...] = ()
-            if security_metadata_files and pulp_file_repository:
-                click.echo(
-                    f"Warning: OSV repository '{pulp_file_repository}' is not "
-                    f"a recognized backport/novel repository; uploading all "
-                    f"{len(security_metadata_files)} record(s) without type "
-                    f"filtering."
-                )
-        else:
-            # Mismatched records are dropped (warned, not errored) under the
-            # disjoint-repo model: each record type is published to its own
-            # stream by the RPA that owns it. A CVE OSV belongs to the backport
-            # stream, which publishes it independently; the copy riding along a
-            # novel-only release is therefore either redundant (already in the
-            # backport repo) or an orphan pointing at an artifact absent from
-            # the novel repo. Neither justifies writing it here, so a
-            # novel-only release that carried CVE backports correctly drops
-            # them rather than failing. (RPA composition ensuring CVEs reach
-            # the backport stream is out of scope for this task.)
-            kept: list[Path] = []
-            dropped: list[Path] = []
-            for metadata_file in security_metadata_files:
-                record_source = _classify_osv_source(metadata_file)
-                if record_source == expected_source:
-                    kept.append(metadata_file)
-                else:
-                    dropped.append(metadata_file)
-                    click.echo(
-                        f"Warning: skipping OSV record {metadata_file.name} "
-                        f"(source={record_source or 'unknown'}); it does not "
-                        f"belong in the {expected_source} repository "
-                        f"'{pulp_file_repository}'."
-                    )
-            uploadable_metadata = tuple(kept)
-            skipped_metadata = tuple(dropped)
+        uploadable_metadata, skipped_metadata = _retrieve_uploadable_metadata(
+            security_metadata_files, expected_source, pulp_file_repository
+        )
         file_skipped = len(skipped_metadata)
 
         if ctx.dry_run:
@@ -632,151 +838,39 @@ def publish(
             verbose=ctx.verbose,
         )
 
-        if ctx.verbose:
-            click.echo(f"Pulp URL: {pulp_url}")
-            click.echo(f"Distribution: {pulp_repository}")
-            click.echo(f"Auth type: {pulp_auth_type}")
-            click.echo(f"TLS verification: {not insecure}")
-            if ca_cert:
-                click.echo(f"CA certificate: {ca_cert}")
-            if pulp_domain:
-                click.echo(f"Pulp domain: {pulp_domain}")
-            if pulp_client_cert:
-                click.echo(f"Client certificate: {pulp_client_cert}")
-            if pulp_client_key:
-                click.echo(f"Client key: {pulp_client_key}")
-            if config.custom_headers:
-                click.echo(f"Custom headers: {config.custom_headers}")
-            click.echo(f"Upload workers: {upload_workers}")
-            click.echo(f"Task timeout: {pulp_task_timeout}s")
-            max_timeout = pulp_max_total_task_timeout
-            if max_timeout is None:
-                max_timeout = 2.0 * pulp_task_timeout
-            click.echo(f"Maximum total task timeout: {max_timeout}s")
-
-        uploaded = 0
-        skipped = 0
-        repository_version = None
-        content_unit_hrefs: list[str] = []
+        _print_verbose_pulp_info(
+            ctx=ctx,
+            pulp_url=pulp_url,
+            pulp_repository=pulp_repository,
+            pulp_auth_type=pulp_auth_type,
+            insecure=insecure,
+            ca_cert=ca_cert,
+            pulp_domain=pulp_domain,
+            pulp_client_cert=pulp_client_cert,
+            pulp_client_key=pulp_client_key,
+            config=config,
+            upload_workers=upload_workers,
+            pulp_task_timeout=pulp_task_timeout,
+            pulp_max_total_task_timeout=pulp_max_total_task_timeout,
+        )
 
         pulp_labels: dict[str, str] = {
             "source_image": str(extract_result.image),
         }
         click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
 
-        file_uploaded = 0
-        with ExitStack() as clients:
-            file_client: PulpFileClient | None = None
-            file_repo_href: str | None = None
-            if requires_file_repository:
-                try:
-                    file_client = clients.enter_context(
-                        PulpFileClient(config, pulp_file_repository)
-                    )
-                    file_repo_href = file_client.resolve_repository(
-                        pulp_file_repository
-                    )
-                except PulpError as e:
-                    raise click.ClickException(
-                        "Unable to verify the required OSV publication "
-                        "repository."
-                    ) from e
-
-            client = clients.enter_context(
-                PulpMavenClient(config, pulp_repository)
-            )
-            uploadable: list[MavenArtifact] = []
-            for artifact in build.artifacts:
-                if not artifact.file_path.exists():
-                    click.echo(
-                        f"Warning: skipping missing file: "
-                        f"{artifact.relative_path}"
-                    )
-                    skipped += 1
-                else:
-                    uploadable.append(artifact)
-
-            with ThreadPoolExecutor(max_workers=upload_workers) as executor:
-                future_to_artifact: dict[Future[ContentUnit], MavenArtifact] = {
-                    executor.submit(
-                        _upload_one, client, artifact, pulp_labels, ctx.verbose
-                    ): artifact
-                    for artifact in uploadable
-                }
-
-                for future in as_completed(future_to_artifact):
-                    artifact = future_to_artifact[future]
-                    try:
-                        content_unit = future.result()
-                    except PulpError as e:
-                        if e.status_code != 503:
-                            raise
-                        click.echo(
-                            f"Warning: Pulp returned recoverable HTTP 503 for "
-                            f"{artifact.relative_path}; continuing with the "
-                            "publish loop."
-                        )
-                        continue
-                    content_unit_hrefs.append(content_unit.pulp_href)
-                    uploaded += 1
-
-            if content_unit_hrefs:
-                click.echo(f"Resolving repository: {pulp_repository}")
-                repo_href = client.resolve_repository(pulp_repository)
-
-                click.echo(
-                    f"Adding {len(content_unit_hrefs)} content unit(s) "
-                    f"to repository"
-                )
-                modify_result = client.modify_repository(
-                    repo_href, content_unit_hrefs
-                )
-                repository_version = modify_result.repository_version
-
-                if ctx.verbose:
-                    click.echo(f"  -> repository version: {repository_version}")
-
-            if file_client and file_repo_href:
-                try:
-                    for file_path in uploadable_metadata:
-                        sha256 = hashlib.sha256(
-                            file_path.read_bytes()
-                        ).hexdigest()
-                        file_client.upload_content(
-                            file_path=file_path,
-                            relative_path=file_path.name,
-                            sha256=sha256,
-                            repository_href=file_repo_href,
-                        )
-                        file_uploaded += 1
-
-                    if file_uploaded > 0:
-                        pub_href = file_client.create_publication(file_repo_href)
-                        dist_href = file_client.resolve_distribution(
-                            pulp_file_repository
-                        )
-                        file_client.update_distribution(dist_href, pub_href)
-                except PulpError as e:
-                    raise click.ClickException(
-                        "Required OSV publication did not complete."
-                    ) from e
-
-        if file_uploaded:
-            click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
-
-        publish_result = PublishResult(
+        publish_result, uploaded, skipped, file_uploaded = _upload_to_pulp(
+            ctx=ctx,
+            config=config,
+            build=build,
+            uploadable_metadata=uploadable_metadata,
             pulp_url=pulp_url,
-            distribution=pulp_repository,
-            artifacts_uploaded=uploaded,
-            artifacts_skipped=skipped,
-            coordinates=tuple(build.coordinates),
-            published_at=datetime.now(timezone.utc).isoformat(),
-            repository_version=repository_version,
-            content_unit_hrefs=tuple(content_unit_hrefs),
+            pulp_file_repository=pulp_file_repository,
+            pulp_repository=pulp_repository,
             pulp_labels=pulp_labels,
-            file_repository=pulp_file_repository if file_uploaded else None,
-            security_metadata_uploaded=file_uploaded,
-            security_metadata_skipped=file_skipped,
+            requires_file_repository=requires_file_repository,
+            file_skipped=file_skipped,
+            upload_workers=upload_workers,
         )
         publish_result_path = artifact_dir / PUBLISH_RESULT_FILENAME
         publish_result.save(publish_result_path)
