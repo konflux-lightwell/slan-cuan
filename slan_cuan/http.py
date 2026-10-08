@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import ssl
 from pathlib import Path
 from typing import Any
 
 import httpx
+
 from slan_cuan.utils import safe_json_load
 
 ERROR_BODY_MAX_LENGTH = 200
