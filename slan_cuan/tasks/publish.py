@@ -47,9 +47,6 @@ def _gav_index_vulnerabilities(
     release.  Only an attachment is accepted: an identically named Maven file
     must not be mistaken for the build index.
     """
-    if not isinstance(attachment_files, list):
-        raise ValueError("Unable to verify the required GAV index attachment.")
-
     index_paths: list[Path] = []
     artifact_root = artifact_dir.resolve()
     for relative_path in attachment_files:
