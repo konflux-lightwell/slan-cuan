@@ -8,6 +8,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -37,6 +38,49 @@ DEFAULT_UPLOAD_WORKERS = 4
 GAV_INDEX_FILENAME = "gav-index.json"
 
 
+def _verify_gav_index_attachment(attachment_files: list[str]) -> None:
+    """Verify the GAV index attachment is present and valid."""
+    for relative_path in attachment_files:
+        if not isinstance(relative_path, str):
+            raise ValueError(
+                "Unable to verify the required GAV index attachment."
+            )
+
+
+def _resolve_gav_index_attachment(
+    relative_path: str, artifact_dir: Path, artifact_root: Path
+) -> Path:
+    """Resolve the GAV index attachment to a file path."""
+    _verify_gav_index_attachment(relative_path)
+    candidate = artifact_dir / relative_path
+    try:
+        candidate.resolve().relative_to(artifact_root)
+    except ValueError:
+        raise ValueError(
+            "Unable to verify the required GAV index attachment."
+        ) from None
+    return candidate
+
+
+def _validate_load_gav_index(index_path: Path) -> None:
+    """Validate and load the GAV index from its declared attachment."""
+    try:
+        return json.loads(index_path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError("Unable to parse the required GAV index.") from e
+
+
+def _validate_parse_gav_index_data(data: dict[str, Any]) -> tuple[str, ...]:
+    """Validate the GAV index data is present and valid."""
+    if not isinstance(data, dict) or not isinstance(data.get("vulns"), list):
+        raise ValueError("The required GAV index has invalid vulnerability data.")
+    if any(
+        not isinstance(vuln, str) or not vuln.strip() for vuln in data["vulns"]
+    ):
+        raise ValueError("The required GAV index has invalid vulnerability data.")
+    return tuple(data["vulns"])
+
+
 def _gav_index_vulnerabilities(
     attachment_files: list[str], artifact_dir: Path
 ) -> tuple[str, ...]:
@@ -50,34 +94,17 @@ def _gav_index_vulnerabilities(
     index_paths: list[Path] = []
     artifact_root = artifact_dir.resolve()
     for relative_path in attachment_files:
-        if not isinstance(relative_path, str):
-            raise ValueError(
-                "Unable to verify the required GAV index attachment."
-            )
-        candidate = artifact_dir / relative_path
-        try:
-            candidate.resolve().relative_to(artifact_root)
-        except ValueError:
-            raise ValueError(
-                "Unable to verify the required GAV index attachment."
-            ) from None
+        candidate = _resolve_gav_index_attachment(
+            relative_path, artifact_dir, artifact_root
+        )
         if candidate.name == GAV_INDEX_FILENAME:
             index_paths.append(candidate)
 
     if len(index_paths) != 1 or not index_paths[0].is_file():
         raise ValueError("Unable to verify the required GAV index attachment.")
 
-    try:
-        data = json.loads(index_paths[0].read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise ValueError("Unable to parse the required GAV index.") from e
-
-    if not isinstance(data, dict) or not isinstance(data.get("vulns"), list):
-        raise ValueError("The required GAV index has invalid vulnerability data.")
-    vulns = data["vulns"]
-    if any(not isinstance(vuln, str) or not vuln.strip() for vuln in vulns):
-        raise ValueError("The required GAV index has invalid vulnerability data.")
-    return tuple(vulns)
+    data = _validate_load_gav_index(index_paths[0])
+    return _validate_parse_gav_index_data(data)
 
 
 def _load_security_metadata(
