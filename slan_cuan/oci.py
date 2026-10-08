@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from slan_cuan.models import ImageReference
+from slan_cuan.utils import safe_json_load
 
 
 class OrasError(Exception):
@@ -227,14 +228,13 @@ def manifest_fetch(
                 result.returncode,
             )
 
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise OrasError(
-            f"Invalid JSON in manifest response: {e}",
-            result.stderr,
-            1,  # Use returncode=1 for JSON parse errors
-        ) from e
+    return safe_json_load(
+        result.stdout,
+        parse_err_msg="Invalid JSON in manifest response",
+        raise_type=OrasError,
+        stderr=result.stderr,
+        returncode=result.returncode,
+    )
 
 
 def discover(
@@ -312,14 +312,13 @@ def discover(
                 result.returncode,
             )
 
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise OrasError(
-            f"Invalid JSON in discover response: {e}",
-            result.stderr,
-            1,
-        ) from e
+    data = safe_json_load(
+        result.stdout,
+        parse_err_msg="Invalid JSON in discover response",
+        raise_type=OrasError,
+        stderr=result.stderr,
+        returncode=result.returncode,
+    )
 
     referrers = data.get("referrers", [])
     if not isinstance(referrers, list):
