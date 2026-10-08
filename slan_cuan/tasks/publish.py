@@ -108,25 +108,26 @@ def _gav_index_vulnerabilities(
     return _validate_parse_gav_index_data(data)
 
 
-def _load_security_metadata(
+def _validate_load_json_security_metadata(path: Path) -> dict[str, Any]:
+    """Validate and load the JSON security metadata from the given file path."""
+    if path.suffix != ".json":
+        raise ValueError("Generated security metadata is not OSV or VEX JSON.")
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError("Generated security metadata is malformed.") from e
+    if not isinstance(record, dict):
+        raise ValueError("Generated security metadata is not OSV or VEX JSON.")
+    return record
+
+
+def _validate_security_metadata(
     security_metadata_files: tuple[Path, ...], vulns: tuple[str, ...]
 ) -> None:
     """Validate generated OSV/VEX metadata and its GAV-index relationship."""
     osv_vulnerability_ids: set[str] = set()
     for path in security_metadata_files:
-        if path.suffix != ".json":
-            raise ValueError(
-                "Generated security metadata is not OSV or VEX JSON."
-            )
-        try:
-            record = json.loads(path.read_text())
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-            raise ValueError("Generated security metadata is malformed.") from e
-        if not isinstance(record, dict):
-            raise ValueError(
-                "Generated security metadata is not OSV or VEX JSON."
-            )
-
+        record = _validate_load_json_security_metadata(path)
         osv_id = record.get("id")
         affected = record.get("affected")
         aliases = record.get("aliases") or []
@@ -169,9 +170,6 @@ def _load_security_metadata(
         raise ValueError(
             "Generated OSV metadata does not cover all GAV index vulnerabilities."
         )
-
-
-
 
 
 def _expected_source_for_repo(repo_name: str) -> str | None:
@@ -532,7 +530,7 @@ def publish(
             if build.security_metadata_dir
             else ()
         )
-        _load_security_metadata(security_metadata_files, vulns)
+        _validate_security_metadata(security_metadata_files, vulns)
         requires_file_repository = bool(vulns or security_metadata_files)
         if requires_file_repository and not pulp_file_repository:
             raise click.UsageError(

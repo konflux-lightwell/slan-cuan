@@ -3276,7 +3276,7 @@ def _new_format_record(
 
 def test_upstream_record_accepted(tmp_path: Path) -> None:
     """New-format upstream record passes is_osv."""
-    from slan_cuan.tasks.publish import _load_security_metadata
+    from slan_cuan.tasks.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
@@ -3284,12 +3284,12 @@ def test_upstream_record_accepted(tmp_path: Path) -> None:
     (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json").write_text(json.dumps(rec))
 
     files = (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json",)
-    _load_security_metadata(files, ("CVE-2024-25710",))
+    _validate_security_metadata(files, ("CVE-2024-25710",))
 
 
 def test_coverage_check_uses_upstream(tmp_path: Path) -> None:
     """Vuln coverage check passes when CVEs are in 'upstream' (not 'aliases')."""
-    from slan_cuan.tasks.publish import _load_security_metadata
+    from slan_cuan.tasks.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
@@ -3297,7 +3297,7 @@ def test_coverage_check_uses_upstream(tmp_path: Path) -> None:
     (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json").write_text(json.dumps(rec))
 
     files = (sec_dir / "RHLW-2026-5fc0229c48c1b99c.json",)
-    _load_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
+    _validate_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
 
 
 def test_classify_source_new_id(tmp_path: Path) -> None:
@@ -3327,7 +3327,7 @@ def test_classify_source_per_cve_record(tmp_path: Path) -> None:
 
 def test_mixed_old_new_records(tmp_path: Path) -> None:
     """Old and new format records coexist in security metadata dir."""
-    from slan_cuan.tasks.publish import _load_security_metadata
+    from slan_cuan.tasks.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
@@ -3350,12 +3350,12 @@ def test_mixed_old_new_records(tmp_path: Path) -> None:
         sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json",
         sec_dir / "RHLW-2026-bbbbbbbbbbbbbbbb.json",
     )
-    _load_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
+    _validate_security_metadata(files, ("CVE-2024-25710", "CVE-2024-26308"))
 
 
 def test_coverage_rejects_substring_match(tmp_path: Path) -> None:
     """CVE-2024-2571 must not be covered by a record for CVE-2024-25710."""
-    from slan_cuan.tasks.publish import _load_security_metadata
+    from slan_cuan.tasks.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
@@ -3369,12 +3369,12 @@ def test_coverage_rejects_substring_match(tmp_path: Path) -> None:
 
     files = (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json",)
     with pytest.raises(ValueError, match="does not cover all"):
-        _load_security_metadata(files, ("CVE-2024-2571",))
+        _validate_security_metadata(files, ("CVE-2024-2571",))
 
 
 def test_empty_aliases_and_upstream_rejected(tmp_path: Path) -> None:
     """A record with empty aliases and no upstream is not valid OSV."""
-    from slan_cuan.tasks.publish import _load_security_metadata
+    from slan_cuan.tasks.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
@@ -3387,12 +3387,14 @@ def test_empty_aliases_and_upstream_rejected(tmp_path: Path) -> None:
     (sec_dir / "empty.json").write_text(json.dumps(rec))
 
     with pytest.raises(ValueError, match="not OSV or VEX"):
-        _load_security_metadata((sec_dir / "empty.json",), ("CVE-2024-99999",))
+        _validate_security_metadata(
+            (sec_dir / "empty.json",), ("CVE-2024-99999",)
+        )
 
 
 def test_null_aliases_and_upstream_handled(tmp_path: Path) -> None:
     """Explicit JSON null for aliases/upstream must not TypeError."""
-    from slan_cuan.tasks.publish import _load_security_metadata
+    from slan_cuan.tasks.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
@@ -3406,4 +3408,4 @@ def test_null_aliases_and_upstream_handled(tmp_path: Path) -> None:
 
     files = (sec_dir / "null_fields.json",)
     with pytest.raises(ValueError, match="not OSV or VEX"):
-        _load_security_metadata(files, ("CVE-2024-25710",))
+        _validate_security_metadata(files, ("CVE-2024-25710",))
