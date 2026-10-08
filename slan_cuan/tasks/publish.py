@@ -32,6 +32,7 @@ from slan_cuan.pulp import (
 )
 from slan_cuan.utils import write_tekton_result
 
+_OSV_ID_PREFIX = "x_RHLW-"
 _DIAG_MAX_ENTRIES = 50
 _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
@@ -170,7 +171,7 @@ def _load_security_metadata(
         )
 
 
-_OSV_ID_PREFIX = "x_RHLW-"
+
 
 
 def _expected_source_for_repo(repo_name: str) -> str | None:
