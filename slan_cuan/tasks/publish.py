@@ -30,7 +30,7 @@ from slan_cuan.pulp import (
     PulpFileClient,
     PulpMavenClient,
 )
-from slan_cuan.utils import write_tekton_result
+from slan_cuan.utils import safe_json_load, write_tekton_result
 
 _OSV_ID_PREFIX = "x_RHLW-"
 _DIAG_MAX_ENTRIES = 50
@@ -61,14 +61,6 @@ def _resolve_gav_index_attachment(
             "Unable to verify the required GAV index attachment."
         ) from None
     return candidate
-
-
-def _validate_load_gav_index(index_path: Path) -> None:
-    """Validate and load the GAV index from its declared attachment."""
-    try:
-        return json.loads(index_path.read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise ValueError("Unable to parse the required GAV index.") from e
 
 
 def _validate_parse_gav_index_data(data: dict[str, Any]) -> tuple[str, ...]:
@@ -104,7 +96,9 @@ def _gav_index_vulnerabilities(
     if len(index_paths) != 1 or not index_paths[0].is_file():
         raise ValueError("Unable to verify the required GAV index attachment.")
 
-    data = _validate_load_gav_index(index_paths[0])
+    data = safe_json_load(
+        index_paths[0], parse_err_msg="Unable to parse the required GAV index."
+    )
     return _validate_parse_gav_index_data(data)
 
 
@@ -112,13 +106,12 @@ def _validate_load_json_security_metadata(path: Path) -> dict[str, Any]:
     """Validate and load the JSON security metadata from the given file path."""
     if path.suffix != ".json":
         raise ValueError("Generated security metadata is not OSV or VEX JSON.")
-    try:
-        record = json.loads(path.read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise ValueError("Generated security metadata is malformed.") from e
-    if not isinstance(record, dict):
-        raise ValueError("Generated security metadata is not OSV or VEX JSON.")
-    return record
+    return safe_json_load(
+        path,
+        parse_err_msg="Generated security metadata is malformed.",
+        expected_type=dict,
+        type_err_msg="Generated security metadata is not OSV or VEX JSON.",
+    )
 
 
 def _validate_security_metadata(
@@ -228,11 +221,8 @@ def _classify_osv_source(file_path: Path) -> str | None:
     Returns ``"pnc-build"``, ``"novel-pipeline"``, or ``None`` when the record
     cannot be classified (malformed, non-OSV, or an unrecognized id).
     """
-    try:
-        record = json.loads(file_path.read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(record, dict):
+    record = safe_json_load(file_path, raise_on_err=False)
+    if record is None:
         return None
 
     database_specific = record.get("database_specific")

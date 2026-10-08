@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from slan_cuan.utils import safe_json_load
 
 ERROR_BODY_MAX_LENGTH = 200
 
@@ -197,12 +198,12 @@ def parse_custom_headers(raw: str | None) -> dict[str, str]:
         return {}
     raw = raw.strip()
     if raw.startswith("{"):
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return {str(k).strip(): str(v).strip() for k, v in data.items()}
-        except (json.JSONDecodeError, ValueError):
-            pass
+        data = safe_json_load(raw, expected_type=dict, raise_on_err=False)
+        return (
+            data
+            if data is None
+            else {str(k).strip(): str(v).strip() for k, v in data.items()}
+        )
 
     # Normalize real and escaped newlines (CRLF, LF, \r\n, \n)
     normalized = (

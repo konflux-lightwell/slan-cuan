@@ -18,6 +18,7 @@ import click
 from slan_cuan.maven import sign_individual_artifacts
 from slan_cuan.models import EXTRACT_RESULT_FILENAME, GlobalContext
 from slan_cuan.oci import blob_fetch
+from slan_cuan.utils import safe_json_load
 
 logger = logging.getLogger(__name__)
 
@@ -513,7 +514,7 @@ def sign(
                 " Cannot repoint deliverable_dir to the signed directory."
             )
         with open(extract_result_path, "r") as f:
-            extract_result = json.load(f)
+            extract_result = safe_json_load(f)
         extract_result["deliverable_dir"] = "signed"
         with open(extract_result_path, "w") as f:
             json.dump(extract_result, f)
