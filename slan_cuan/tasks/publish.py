@@ -40,19 +40,17 @@ GAV_INDEX_FILENAME = "gav-index.json"
 
 
 def _verify_gav_index_attachment(attachment_files: list[str]) -> None:
-    """Verify the GAV index attachment is present and valid."""
-    for relative_path in attachment_files:
-        if not isinstance(relative_path, str):
-            raise ValueError(
-                "Unable to verify the required GAV index attachment."
-            )
+    """Verify the GAV index attachment list is present and valid."""
+    if not isinstance(attachment_files, list) or not all(
+        isinstance(relative_path, str) for relative_path in attachment_files
+    ):
+        raise ValueError("Unable to verify the required GAV index attachment.")
 
 
 def _resolve_gav_index_attachment(
     relative_path: str, artifact_dir: Path, artifact_root: Path
 ) -> Path:
     """Resolve the GAV index attachment to a file path."""
-    _verify_gav_index_attachment(relative_path)
     candidate = artifact_dir / relative_path
     try:
         candidate.resolve().relative_to(artifact_root)
@@ -84,6 +82,7 @@ def _gav_index_vulnerabilities(
     release.  Only an attachment is accepted: an identically named Maven file
     must not be mistaken for the build index.
     """
+    _verify_gav_index_attachment(attachment_files)
     index_paths: list[Path] = []
     artifact_root = artifact_dir.resolve()
     for relative_path in attachment_files:

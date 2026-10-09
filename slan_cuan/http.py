@@ -199,11 +199,9 @@ def parse_custom_headers(raw: str | None) -> dict[str, str]:
     raw = raw.strip()
     if raw.startswith("{"):
         data = safe_json_load(raw, expected_type=dict, raise_on_err=False)
-        return (
-            data
-            if data is None
-            else {str(k).strip(): str(v).strip() for k, v in data.items()}
-        )
+        if data is not None:
+            return {str(k).strip(): str(v).strip() for k, v in data.items()}
+        # Malformed JSON-looking input falls through to line parsing below.
 
     # Normalize real and escaped newlines (CRLF, LF, \r\n, \n)
     normalized = (

@@ -232,7 +232,7 @@ def manifest_fetch(
         parse_err_msg="Invalid JSON in manifest response",
         raise_type=OrasError,
         stderr=result.stderr,
-        returncode=result.returncode,
+        returncode=1,
     )
 
 
@@ -316,7 +316,7 @@ def discover(
         parse_err_msg="Invalid JSON in discover response",
         raise_type=OrasError,
         stderr=result.stderr,
-        returncode=result.returncode,
+        returncode=1,
     )
 
     referrers = data.get("referrers", [])
