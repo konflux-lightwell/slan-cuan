@@ -295,3 +295,16 @@ class TestParseCustomHeaders:
         assert parse_custom_headers(raw) == {
             "X-TASK-DIAGNOSTICS": "pyinstrument,memory"
         }
+
+    def test_parse_custom_headers_malformed_json_falls_through_to_lines(
+        self,
+    ) -> None:
+        """A '{'-prefixed value that fails to parse falls through to line parsing.
+
+        Regression test: previously this returned None directly, violating
+        the documented dict[str, str] return type.
+        """
+        raw = "{not valid json}: still-a-header-value"
+        assert parse_custom_headers(raw) == {
+            "{not valid json}": "still-a-header-value"
+        }

@@ -2808,6 +2808,65 @@ def test_publish_fails_closed_when_gav_index_attachment_is_missing(
     mock_maven_cls.assert_not_called()
 
 
+def test_gav_index_vulnerabilities_rejects_non_list_attachment_files(
+    tmp_path: Path,
+) -> None:
+    """A non-list attachment_files value is a controlled ValueError.
+
+    Regression test: ``attachment_files`` previously lost its upfront
+    list-type check, so a malformed value such as ``null`` in
+    extract-result.json raised an uncaught ``TypeError`` from iteration
+    instead of the ``ValueError`` that ``publish`` catches.
+    """
+    from slan_cuan.tasks.publish import _gav_index_vulnerabilities
+
+    with pytest.raises(
+        ValueError, match="Unable to verify the required GAV index attachment"
+    ):
+        _gav_index_vulnerabilities(None, tmp_path)  # type: ignore[arg-type]
+
+
+@patch("slan_cuan.tasks.publish.PulpMavenClient")
+def test_publish_fails_closed_when_attachment_files_is_null(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """A null attachment_files in extract-result.json fails closed via Click.
+
+    Regression test for the same bug as
+    ``test_gav_index_vulnerabilities_rejects_non_list_attachment_files``,
+    exercised end-to-end through the CLI to confirm the error is reported
+    as a normal ``ClickException`` rather than crashing the process.
+    """
+    artifact_dir = create_test_artifact_dir(tmp_path)
+    extract_result_path = artifact_dir / "extract-result.json"
+    extract_result = json.loads(extract_result_path.read_text())
+    extract_result["attachment_files"] = None
+    extract_result_path.write_text(json.dumps(extract_result))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unable to verify the required GAV index attachment" in result.output
+    mock_maven_cls.assert_not_called()
+
+
 @patch("slan_cuan.tasks.publish.PulpMavenClient")
 def test_publish_rejects_arbitrary_security_metadata(
     mock_maven_cls: Mock, tmp_path: Path

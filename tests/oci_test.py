@@ -263,14 +263,22 @@ class TestManifestFetch:
     def test_manifest_fetch_invalid_json(
         self, mock_run: Mock, image_ref: ImageReference
     ) -> None:
-        """manifest_fetch raises OrasError for invalid JSON response."""
+        """manifest_fetch raises OrasError for invalid JSON response.
+
+        Regression test: the oras process succeeded (returncode=0), but the
+        raised OrasError must still report a synthetic failure returncode
+        of 1 rather than propagating the process's successful returncode.
+        """
         mock_run.return_value = Mock(
             returncode=0,
             stderr="",
             stdout="not valid json",
         )
-        with pytest.raises(OrasError, match="Invalid JSON in manifest response"):
+        with pytest.raises(
+            OrasError, match="Invalid JSON in manifest response"
+        ) as exc_info:
             manifest_fetch(image_ref)
+        assert exc_info.value.returncode == 1
 
     @patch("slan_cuan.oci.subprocess.run")
     def test_manifest_fetch_with_auth_file(
@@ -427,14 +435,22 @@ class TestDiscover:
     def test_discover_invalid_json(
         self, mock_run: Mock, image_ref: ImageReference
     ) -> None:
-        """Discover raises OrasError for invalid JSON response."""
+        """Discover raises OrasError for invalid JSON response.
+
+        Regression test: the oras process succeeded (returncode=0), but the
+        raised OrasError must still report a synthetic failure returncode
+        of 1 rather than propagating the process's successful returncode.
+        """
         mock_run.return_value = Mock(
             returncode=0,
             stderr="",
             stdout="not valid json",
         )
-        with pytest.raises(OrasError, match="Invalid JSON in discover response"):
+        with pytest.raises(
+            OrasError, match="Invalid JSON in discover response"
+        ) as exc_info:
             discover(image_ref, "application/vnd.example.sbom")
+        assert exc_info.value.returncode == 1
 
     @patch("slan_cuan.oci.subprocess.run")
     def test_discover_with_auth_file(
