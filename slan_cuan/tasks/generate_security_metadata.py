@@ -135,6 +135,30 @@ def _validate_advisory_id(ctx, param, value):
     return value
 
 
+def _combo_key_summary(index_data: dict) -> list[str]:
+    """Return a short description of the combo-key inputs for logging."""
+    if "purls" in index_data or "ecosystem" in index_data:
+        raw_eco = index_data.get("ecosystem", "").lower()
+        eco = _OSV_ECOSYSTEM.get(raw_eco, raw_eco)
+        primary = index_data.get(
+            "primaryPurl",
+            (index_data.get("purls") or [""])[0],
+        )
+        return [eco, primary]
+    return ["Maven", index_data.get("primaryGav", "")]
+
+
+def _warn_override_divergence(override_id: str, index_data: dict) -> None:
+    """Warn when --advisory-id differs from the derived value."""
+    derived = _derive_advisory_id(index_data)
+    if derived and derived != override_id:
+        parts = _combo_key_summary(index_data)
+        click.echo(
+            f"Warning: --advisory-id {override_id} overrides "
+            f"derived {derived}; input was {parts}"
+        )
+
+
 _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
     os.getenv("OSIDB_TOKEN_REQUEST_TIMEOUT", "10.0")
 )
@@ -341,26 +365,7 @@ def generate_security_metadata(
                 f"Derived advisory ID is malformed: {advisory_id!r}"
             )
     else:
-        derived = _derive_advisory_id(index_data)
-        if derived and derived != advisory_id:
-            combo_key_parts = []
-            if "purls" in index_data or "ecosystem" in index_data:
-                raw_eco = index_data.get("ecosystem", "").lower()
-                eco = _OSV_ECOSYSTEM.get(raw_eco, raw_eco)
-                primary = index_data.get(
-                    "primaryPurl",
-                    (index_data.get("purls") or [""])[0],
-                )
-                combo_key_parts = [eco, primary]
-            else:
-                combo_key_parts = [
-                    "Maven",
-                    index_data.get("primaryGav", ""),
-                ]
-            click.echo(
-                f"Warning: --advisory-id {advisory_id} overrides "
-                f"derived {derived}; input was {combo_key_parts}"
-            )
+        _warn_override_divergence(advisory_id, index_data)
     if advisory_id:
         index_data["advisory_id"] = advisory_id
 
