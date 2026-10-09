@@ -174,13 +174,18 @@ def _expected_source_for_repo(repo_name: str) -> str | None:
 
 
 def _source_from_osv_id(osv_id: str) -> str | None:
-    """Classify an OSV id by its vulnerability-id prefix.
+    """Classify an OSV id by its prefix.
 
-    The id is ``x_RHLW-{cve_id}-{base_ver}``; strip the ``x_RHLW-`` prefix
-    first so the ``LW`` inside ``RHLW`` is never mistaken for a novel record.
+    Two id formats coexist:
 
-    Advisory records use ``RHLW-{YYYY}-{16hex}`` and are routed to the
-    backport repository.
+    * **Advisory** ``RHLW-{YYYY}-{16hex}`` — per-release advisory record.
+      Routed to the backport repository (``pnc-build``).
+    * **Per-CVE** ``x_RHLW-{vuln_id}-{base_ver}`` — legacy per-CVE record.
+      ``CVE-`` vulnerabilities route to backport (``pnc-build``);
+      ``LW-`` vulnerabilities route to novel (``novel-pipeline``).
+
+    The ``x_RHLW-`` prefix is stripped before inspecting the vulnerability
+    id so the ``LW`` inside ``RHLW`` is never mistaken for a novel record.
     """
     if osv_id.startswith("RHLW-"):
         return "pnc-build"
