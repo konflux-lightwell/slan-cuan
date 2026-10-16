@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from slan_cuan.models import GlobalContext
+from slan_cuan.python.cli import python_cli
 from slan_cuan.tasks import (
     extract,
     generate_security_metadata,
@@ -48,7 +49,7 @@ def main(
     ca_cert: Path | None,
     tekton_results_dir: Path | None,
 ) -> None:
-    """Release pipeline for Red Hat Lightwell Java artifacts."""
+    """Release tooling for Red Hat Lightwell artifacts (multi-ecosystem)."""
     ctx.obj = GlobalContext(
         verbose=verbose,
         dry_run=dry_run,
@@ -60,6 +61,7 @@ def main(
 main.add_command(generate_security_metadata)
 main.add_command(generate_security_metadata_from_snapshot)
 main.add_command(extract)
+main.add_command(python_cli)
 main.add_command(publish)
 main.add_command(sign)
 main.add_command(register)

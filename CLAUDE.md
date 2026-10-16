@@ -40,12 +40,13 @@ Task definitions are also published as a Tekton OCI bundle (`<tag>-bundle`) for 
 
 ### Tekton Tasks
 
-Each CLI subcommand has a corresponding Tekton Task under `tekton/tasks/`.
+Each CLI subcommand has a corresponding Tekton Task under `tekton/tasks/`. Ecosystem-specific subcommands and modules live in the `slan_cuan/java/` and `slan_cuan/python/` packages (new ecosystems get their own package beside them); shared core code stays out of ecosystem packages. Ecosystem-specific task manifests live under `tekton/tasks/<ecosystem>/`.
 The naming convention is `slan-cuan-<subcommand>`.
 
 | Subcommand | Tekton Task | Task YAML |
 |------------|-------------|-----------|
 | `extract` | `slan-cuan-extract` | `tekton/tasks/slan-cuan-extract.yaml` |
+| `python extract-filter` | `slan-cuan-extract-filter` | `tekton/tasks/python/slan-cuan-extract-filter.yaml` |
 | `sign` | `slan-cuan-sign` | `tekton/tasks/slan-cuan-sign.yaml` |
 | `register` | `slan-cuan-register` | `tekton/tasks/slan-cuan-register.yaml` |
 | `publish` | `slan-cuan-publish` | `tekton/tasks/slan-cuan-publish.yaml` |

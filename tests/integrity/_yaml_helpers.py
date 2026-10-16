@@ -18,11 +18,18 @@ from slan_cuan.cli import main as cli_main
 
 TEKTON_TASKS_DIR = Path(__file__).resolve().parents[2] / "tekton" / "tasks"
 
-TASK_YAML_FILENAMES = sorted(p.name for p in TEKTON_TASKS_DIR.glob("*.yaml"))
+TASK_YAML_FILENAMES = sorted(
+    p.relative_to(TEKTON_TASKS_DIR).as_posix()
+    for p in TEKTON_TASKS_DIR.rglob("*.yaml")
+)
 
 
 def load_task_yaml(filename: str) -> dict:
-    """Parse one Tekton Task YAML file by filename under tekton/tasks/."""
+    """Parse one Tekton Task YAML file by path under tekton/tasks/.
+
+    ``filename`` may be bare (top level) or contain ecosystem
+    subdirectories, e.g. ``python/slan-cuan-extract-filter.yaml``.
+    """
     return yaml.safe_load((TEKTON_TASKS_DIR / filename).read_text())
 
 
@@ -50,38 +57,51 @@ def get_env_var_names(run_step: dict) -> list[str]:
     return [e["name"] for e in run_step.get("env", [])]
 
 
-def build_contexts(subcommand_name: str) -> tuple[click.Context, click.Context]:
-    """Build the (group_ctx, sub_ctx) click Context chain for a subcommand.
+def get_command_path(run_step: dict) -> list[str]:
+    """Return the command path tokens from a run step's args.
+
+    Tokens starting with '--' are global flags and are skipped; the rest
+    form the (possibly nested) command path, e.g.
+    ``['python', 'extract-filter']``.
+    """
+    return [t for t in run_step["args"] if not t.startswith("--")]
+
+
+def build_context_chain(run_step: dict) -> list[click.Context]:
+    """Build the click Context chain for a run step's command path.
 
     Mirrors exactly how click builds this chain internally when invoking a
-    subcommand, so auto_envvar_prefix propagation matches real CLI
-    behavior -- never hardcode the prefix string.
+    (possibly nested) subcommand, so auto_envvar_prefix propagation
+    matches real CLI behavior -- never hardcode the prefix string.
     """
-    group_ctx = click.Context(
+    ctx = click.Context(
         cli_main, info_name="slan-cuan", **cli_main.context_settings
     )
-    sub_cmd = cli_main.commands[subcommand_name]
-    sub_ctx = click.Context(sub_cmd, parent=group_ctx, info_name=subcommand_name)
-    return group_ctx, sub_ctx
+    chain = [ctx]
+    for token in get_command_path(run_step):
+        cmd = ctx.command.commands[token]
+        ctx = click.Context(cmd, parent=ctx, info_name=token)
+        chain.append(ctx)
+    return chain
 
 
 def resolve_env_var_to_param(
-    env_var_name: str, group_ctx: click.Context, sub_ctx: click.Context
+    env_var_name: str, chain: list[click.Context]
 ) -> click.Parameter | None:
     """Find which click Parameter resolves an env var name, if any.
 
     Uses click's own Parameter.resolve_envvar_value, not a reimplementation
     of its naming rule, so this can't drift from click's real behavior.
-    Checks both the subcommand's own params and the group's params, since
-    Task YAMLs mix both kinds (e.g. SLAN_CUAN_EXTRACT_IMAGE is a subcommand
-    option, SLAN_CUAN_TEKTON_RESULTS_DIR is a group option).
+    Checks params at every level of the command path (group, nested
+    ecosystem groups, and the leaf command), since Task YAMLs mix both
+    kinds (e.g. SLAN_CUAN_EXTRACT_IMAGE is a subcommand option,
+    SLAN_CUAN_TEKTON_RESULTS_DIR is a group option).
     """
     sentinel = f"__INTEGRITY_PROBE__{env_var_name}__"
     old_value = os.environ.get(env_var_name)
     os.environ[env_var_name] = sentinel
     try:
-        candidates = [(p, sub_ctx) for p in sub_ctx.command.params]
-        candidates += [(p, group_ctx) for p in group_ctx.command.params]
+        candidates = [(p, ctx) for ctx in chain for p in ctx.command.params]
         matches = [
             p for p, ctx in candidates if p.resolve_envvar_value(ctx) == sentinel
         ]

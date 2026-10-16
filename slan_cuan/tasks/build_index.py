@@ -1,0 +1,241 @@
+"""Filter payload artifacts against build-index purls.
+
+Keeps distribution files (wheels/sdists and their sidecars) whose purls are
+in the build-index ``purls`` release allow-list; moves out-of-scope
+distribution files to a sibling ``-filtered`` directory. Non-distribution
+files (e.g. the ``chains-provenance/`` metadata directory) always pass
+through untouched -- downstream signing consumes them.
+
+The stage functions (:func:`load_build_index`,
+:func:`purls_from_index`, :func:`apply_release_scope_filter`) are
+consumed by the merged ``python extract-filter`` command; the
+ecosystem-specific filename conventions live in
+:mod:`slan_cuan.python.pypi`.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+from pathlib import Path
+
+import click
+
+from slan_cuan.models import (
+    BUILD_INDEX_MEDIA_TYPE,
+    FILTER_REPORT_FILENAME,
+    ImageReference,
+    parse_image_ref,
+)
+from slan_cuan.oci import (
+    OrasError,
+    deduplicate_referrers,
+    discover,
+    manifest_fetch,
+    pull,
+)
+from slan_cuan.python.pypi import (
+    get_purl_candidate_patterns,
+    is_distribution_filename,
+    matches_any_candidate,
+)
+from slan_cuan.utils import safe_json_load
+from slan_cuan.utils.checksum import compute_checksum
+
+
+def load_build_index(
+    image_ref_str: str,
+    registry_auth_file: Path | None,
+    verbose: bool = False,
+) -> tuple[dict, str]:
+    """Discover, dedupe, and pull the build-index for an image.
+
+    Returns ``(index_data, sha256_digest)`` where the digest is of the
+    pulled ``build-index.json`` file. Fails closed when the image
+    reference is not digest-pinned, no referrer exists, referrers are
+    ambiguous, or the index is missing or unparsable.
+    """
+    img_ref = parse_image_ref(image_ref_str)
+    if not img_ref.digest:
+        raise click.ClickException(
+            "Image reference must include a digest "
+            f"(e.g. repo@sha256:...): {image_ref_str}"
+        )
+
+    try:
+        referrers = discover(
+            img_ref,
+            BUILD_INDEX_MEDIA_TYPE,
+            auth_file=registry_auth_file,
+            verbose=verbose,
+        )
+    except OrasError as e:
+        raise click.ClickException(f"OCI error: {e.message}") from e
+
+    if not referrers:
+        raise click.ClickException(
+            f"No build-index referrer found for {image_ref_str}"
+        )
+
+    try:
+        referrer = deduplicate_referrers(
+            referrers,
+            BUILD_INDEX_MEDIA_TYPE,
+            img_ref,
+            registry_auth_file=registry_auth_file,
+            verbose=verbose,
+            manifest_fetch_fn=manifest_fetch,
+        )
+    except OrasError as e:
+        raise click.ClickException(f"OCI error: {e.message}") from e
+    if not referrer or not referrer.get("digest"):
+        raise click.ClickException(
+            f"No valid build-index referrer found for {image_ref_str}"
+        )
+
+    ref_digest = str(referrer["digest"])
+    ref_image = ImageReference(
+        registry=img_ref.registry,
+        repository=img_ref.repository,
+        tag=None,
+        digest=ref_digest,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        try:
+            pull(
+                ref_image,
+                tmp_path,
+                auth_file=registry_auth_file,
+                verbose=verbose,
+            )
+        except OrasError as e:
+            raise click.ClickException(f"OCI error: {e.message}") from e
+
+        index_file = tmp_path / "build-index.json"
+        if not index_file.is_file():
+            candidates = list(tmp_path.rglob("build-index.json"))
+            if candidates:
+                index_file = candidates[0]
+            else:
+                raise click.ClickException(
+                    "No build-index.json found after pulling referrer "
+                    f"{ref_image}"
+                )
+
+        build_index_digest = f"sha256:{compute_checksum(index_file, 'sha256')}"
+        index_data = safe_json_load(
+            index_file,
+            parse_err_msg=f"Failed to parse build-index.json: {index_file}",
+            expected_type=dict,
+            type_err_msg="Expected JSON object in build-index.json",
+            raise_type=click.ClickException,
+        )
+
+    return index_data, build_index_digest
+
+
+def purls_from_index(index_data: dict) -> list[str]:
+    """Extract and validate the ``purls`` list from a build-index."""
+    raw_purls = index_data.get("purls", [])
+    if not isinstance(raw_purls, list):
+        raise click.ClickException(
+            f"Expected 'purls' to be a list in build-index.json, "
+            f"got {type(raw_purls).__name__}"
+        )
+    for purl_str in raw_purls:
+        if not isinstance(purl_str, str):
+            raise click.ClickException(
+                f"build-index 'purls' entries must be strings, "
+                f"got {type(purl_str).__name__}: {purl_str!r}"
+            )
+    return raw_purls
+
+
+def apply_release_scope_filter(
+    payload_dir: Path,
+    purls: list[str],
+    publish_all: bool,
+    build_index_digest: str = "",
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """Filter payload distribution files against the purl allow-list.
+
+    Returns ``(kept_count, removed_count)``. Out-of-scope distribution
+    files (and their sidecars) are moved to a ``-filtered`` sibling
+    directory; non-distribution files always pass through untouched.
+    Writes ``filter-report.json`` next to the payload directory unless
+    ``dry_run`` is set.
+    """
+    allowed_patterns: set[str] = set()
+    unmapped_purls: list[str] = []
+    for purl_str in purls:
+        pats = get_purl_candidate_patterns(purl_str)
+        if pats:
+            allowed_patterns.update(pats)
+        else:
+            unmapped_purls.append(purl_str)
+    if unmapped_purls:
+        # Fail closed: a purl we cannot map to filename candidates might
+        # name in-scope content whose files we would then wrongly remove.
+        raise click.ClickException(
+            "build-index purls yielded no filename candidates (unsupported "
+            f"ecosystem or missing version): {', '.join(sorted(unmapped_purls))}"
+        )
+
+    all_files = sorted(f for f in payload_dir.rglob("*") if f.is_file())
+    kept_files: list[Path] = []
+    removed_files: list[Path] = []
+
+    for f in all_files:
+        if publish_all or matches_any_candidate(f.name, allowed_patterns):
+            kept_files.append(f)
+        elif is_distribution_filename(f.name):
+            # Distribution-shaped but outside the release scope: remove.
+            removed_files.append(f)
+        else:
+            # Non-distribution files (provenance, metadata) are not release
+            # content and are never uploaded; downstream tasks depend on
+            # them, so they pass through untouched.
+            kept_files.append(f)
+
+    filtered_dir = payload_dir.parent / f"{payload_dir.name}-filtered"
+    report_path = payload_dir.parent / FILTER_REPORT_FILENAME
+
+    if dry_run:
+        click.echo(
+            f"dry-run: would keep {len(kept_files)} file(s), "
+            f"remove {len(removed_files)} file(s) to {filtered_dir}"
+        )
+        for f in kept_files:
+            click.echo(f"  keep: {f.relative_to(payload_dir)}")
+        for f in removed_files:
+            click.echo(f"  remove: {f.relative_to(payload_dir)}")
+        return len(kept_files), len(removed_files)
+
+    if removed_files:
+        filtered_dir.mkdir(parents=True, exist_ok=True)
+        for f in removed_files:
+            rel = f.relative_to(payload_dir)
+            dest = filtered_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(f), str(dest))
+
+    report = {
+        "consumed_build_index_digest": build_index_digest,
+        "consumed_digest": build_index_digest,
+        "kept": [str(f.relative_to(payload_dir)) for f in kept_files],
+        "removed": [str(f.relative_to(payload_dir)) for f in removed_files],
+        "kept_count": len(kept_files),
+        "removed_count": len(removed_files),
+    }
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    click.echo(
+        f"Filtered payload: {len(kept_files)} kept, {len(removed_files)} removed."
+    )
+    return len(kept_files), len(removed_files)
