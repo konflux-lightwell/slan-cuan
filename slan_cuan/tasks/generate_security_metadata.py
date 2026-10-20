@@ -327,6 +327,9 @@ def _generate_sbom(
             "notes": (
                 f"Lightwell remediation: backported security fixes to "
                 f"{artifact_id} {base_version}. Build {version}."
+                if cve_ids
+                else f"Lightwell validated build of "
+                f"{artifact_id} {base_version}. Build {version}."
             ),
         },
     }
@@ -349,10 +352,12 @@ def _generate_sbom(
 def _generate_sboms_from_index(
     index_data: dict,
     workdir: Path,
-    output_dir: Path,
     timestamp: str,
 ) -> dict[str, str]:
     """Generate per-artifact CycloneDX SBOMs from build-index data.
+
+    SBOMs are written to the Maven GAV path inside the repository
+    directory so they publish to the Maven repo alongside JARs and POMs.
 
     Returns a dict mapping PURL -> SBOM serialNumber for VEX
     cross-referencing.
@@ -429,9 +434,17 @@ def _generate_sboms_from_index(
         if used_bom_ref != purl:
             sbom_serial_numbers[used_bom_ref] = serial_number
 
-        # Write SBOM file (include groupId to avoid collisions)
-        sbom_filename = f"{group_id}.{artifact_id}-{version}.bom.json"
-        sbom_path = output_dir / sbom_filename
+        # Write SBOM to the Maven GAV path in the repository directory.
+        if repo_dir is None:
+            click.echo(
+                f"Skipping SBOM write for {group_id}:{artifact_id}:{version}"
+                " — repository directory not found"
+            )
+            continue
+        gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
+        gav_dir.mkdir(parents=True, exist_ok=True)
+        sbom_filename = f"{artifact_id}-{version}.bom.json"
+        sbom_path = gav_dir / sbom_filename
         click.echo(f"Writing SBOM to {sbom_path}")
         with open(sbom_path, "w") as f:
             json.dump(sbom, f, indent=2)
@@ -693,27 +706,27 @@ def generate_security_metadata(
         with open(osv_output_path, "w") as f:
             json.dump(record, f, indent=2)
 
-    # Generate per-artifact CycloneDX SBOMs and VEX (build-index only,
-    # gated on vulns: clean builds have no pedigree patches to document).
+    # Generate per-artifact CycloneDX SBOMs (build-index only, all builds)
+    # and VEX (gated on vulns — clean builds have no vulnerabilities to declare).
     sbom_serial_numbers: dict[str, str] = {}
-    if _is_build_index(index_data) and index_data.get("vulns"):
+    if _is_build_index(index_data):
         from datetime import UTC, datetime
 
         ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         sbom_serial_numbers = _generate_sboms_from_index(
             index_data,
             workdir,
-            output_dir,
             ts_now,
         )
 
-        _generate_vex_from_index(
-            index_data,
-            output_dir,
-            osidb_client,
-            sbom_serial_numbers,
-            ts_now,
-        )
+        if index_data.get("vulns"):
+            _generate_vex_from_index(
+                index_data,
+                output_dir,
+                osidb_client,
+                sbom_serial_numbers,
+                ts_now,
+            )
 
     # Save the updated extract result
     result = ExtractResult.from_file(workdir / EXTRACT_RESULT_FILENAME)
