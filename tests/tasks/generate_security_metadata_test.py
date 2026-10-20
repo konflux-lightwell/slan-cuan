@@ -66,8 +66,12 @@ def _create_index_file(directory: Path, name: str = "gav-index.json") -> Path:
     return path
 
 
-def _create_extract_result(workdir: Path) -> None:
-    """Write a minimal extract-result.json into *workdir*."""
+def _create_extract_result(workdir: Path, create_repo: bool = False) -> None:
+    """Write a minimal extract-result.json into *workdir*.
+
+    When *create_repo* is True, also create the ``repository/``
+    subdirectory so that ``repo_dir`` resolves in production code.
+    """
     data = {
         "image": {
             "registry": "quay.io",
@@ -84,6 +88,9 @@ def _create_extract_result(workdir: Path) -> None:
     }
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / EXTRACT_RESULT_FILENAME).write_text(json.dumps(data, indent=2))
+    if create_repo:
+        repo_dir = workdir / "TEST-build-output" / "repository"
+        repo_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _invoke(
@@ -1060,13 +1067,11 @@ def test_override_divergence_warning(
 # --- Regression tests for reviewer findings ---
 
 
-def test_clean_build_index_produces_no_sbom(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
-    """A build-index with no vulns must produce zero .bom.json files.
+def test_clean_build_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A clean build (no vulns) produces an SBOM at the Maven GAV path.
 
-    Regression for finding #1: SBOM generation on clean builds
-    caused publish to raise ValueError.
+    The SBOM must have empty pedigree.patches and "validated build" notes.
+    Replaces test_clean_build_index_produces_no_sbom (C3).
     """
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -1086,7 +1091,206 @@ def test_clean_build_index_produces_no_sbom(
     (index_dir / "gav-index.json").write_text(json.dumps(data))
 
     workdir = tmp_path / "workdir"
-    _create_extract_result(workdir)
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    # SBOM must be at the Maven GAV path inside repo_dir
+    gav_path = (
+        repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert gav_path.exists(), f"Expected SBOM at {gav_path}"
+    sbom = json.loads(gav_path.read_text())
+    assert sbom["bomFormat"] == "CycloneDX"
+
+    component = sbom["components"][0]
+    pedigree = component["pedigree"]
+    assert pedigree["patches"] == []
+    assert "validated build" in pedigree["notes"].lower()
+    assert "remediation" not in pedigree["notes"].lower()
+
+    # No SBOM in output_dir (security_metadata_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    bom_files = list(output_dir.glob("*.bom.json"))
+    assert bom_files == [], f"SBOMs must not appear in output_dir: {bom_files}"
+
+
+def test_clean_build_skips_vex(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A clean build (no vulns) must not call _generate_vex_from_index."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "clean-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    mock_vex.assert_not_called()
+
+
+def test_remediation_sbom_in_repository_dir(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """Remediation SBOMs write to the repository dir with correct notes."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "remediation-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "2.0.0",
+            "full": "2.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": ("pkg:maven/com.example/core@2.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/com.example/core@2.0.0.rhlw-00001"],
+        "vulns": ["CVE-2024-1234"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    mock_vex.assert_called_once()
+
+    gav_path = (
+        repo_dir / "com" / "example" / "core" / "2.0.0.rhlw-00001"
+        / "core-2.0.0.rhlw-00001.bom.json"
+    )
+    assert gav_path.exists(), f"Expected SBOM at {gav_path}"
+    sbom = json.loads(gav_path.read_text())
+
+    component = sbom["components"][0]
+    pedigree = component["pedigree"]
+    assert "backported security fixes" in pedigree["notes"].lower()
+    assert len(pedigree["patches"]) == 1
+    assert pedigree["patches"][0]["resolves"][0]["id"] == "CVE-2024-1234"
+
+
+def test_sbom_replaces_upstream_sbom(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """When an upstream .bom.json exists at the GAV path, it is replaced."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "overwrite-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "3.0.0",
+            "full": "3.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": ("pkg:maven/org.example/widget@3.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/org.example/widget@3.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    # Seed an upstream SBOM at the GAV path
+    gav_dir = repo_dir / "org" / "example" / "widget" / "3.0.0.rhlw-00001"
+    gav_dir.mkdir(parents=True, exist_ok=True)
+    upstream_sbom = {"bomFormat": "CycloneDX", "upstream": True}
+    sbom_path = gav_dir / "widget-3.0.0.rhlw-00001.bom.json"
+    sbom_path.write_text(json.dumps(upstream_sbom))
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    # The generated SBOM must have replaced the upstream one
+    replaced = json.loads(sbom_path.read_text())
+    assert "upstream" not in replaced, "Upstream SBOM was not replaced"
+    assert replaced["bomFormat"] == "CycloneDX"
+    assert "components" in replaced
+
+
+def test_repo_dir_missing_skips_sbom(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """When repository/ does not exist, SBOMs are skipped with a warning."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "no-repo-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
     output_dir = workdir / "security_metadata"
 
     with patch(
@@ -1097,8 +1301,68 @@ def test_clean_build_index_produces_no_sbom(
         result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
-    bom_files = list(output_dir.glob("*.bom.json"))
-    assert bom_files == [], f"Clean build must not produce .bom.json: {bom_files}"
+    assert "Skipping SBOM write" in result.output
+
+    # No .bom.json anywhere
+    bom_files = list(tmp_path.rglob("*.bom.json"))
+    assert bom_files == [], f"No SBOMs should be written: {bom_files}"
+
+
+def test_lw_only_vulns_remediation_notes(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """LW-only vulns produce remediation notes but empty patches.
+
+    Novel fixes are remediations (not backports), so the pedigree notes
+    say "remediation" even though LW- IDs are filtered from patches.
+    """
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "novel-only-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["LW-novel-001"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    gav_path = (
+        repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert gav_path.exists(), f"Expected SBOM at {gav_path}"
+    sbom = json.loads(gav_path.read_text())
+
+    component = sbom["components"][0]
+    pedigree = component["pedigree"]
+    assert pedigree["patches"] == [], "LW- IDs must not appear in patches"
+    assert "remediation" in pedigree["notes"].lower()
 
 
 def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
