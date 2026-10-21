@@ -275,12 +275,28 @@ def _classify_osv_source(file_path: Path) -> str | None:
     return _source_from_osv_id(file_path.stem)
 
 
+def _source_from_vuln_id(vuln_id: str) -> str | None:
+    """Classify a raw vulnerability ID by prefix.
+
+    Handles both OSV-format IDs (``RHLW-*``, ``x_RHLW-*``) and raw
+    CVE/LW IDs found in CycloneDX documents.
+    """
+    osv_result = _source_from_osv_id(vuln_id)
+    if osv_result is not None:
+        return osv_result
+    if vuln_id.startswith("CVE-"):
+        return "pnc-build"
+    if vuln_id.startswith("LW-"):
+        return "novel-pipeline"
+    return None
+
+
 def _classify_cdx_source(record: dict[str, Any], file_path: Path) -> str | None:
-    """Classify a CycloneDX SBOM or VEX by its CVE content.
+    """Classify a CycloneDX SBOM or VEX by its vulnerability content.
 
     VEX: extracts vuln IDs from ``vulnerabilities[].id``.
     SBOM: extracts vuln IDs from ``pedigree.patches[].resolves[].id``.
-    Classifies using ``_source_from_osv_id`` (CVE- -> pnc-build,
+    Classifies using ``_source_from_vuln_id`` (CVE- -> pnc-build,
     LW- -> novel-pipeline). Returns None when no IDs are found.
     """
     ids: list[str] = []
@@ -307,16 +323,15 @@ def _classify_cdx_source(record: dict[str, Any], file_path: Path) -> str | None:
                         ids.append(rid)
 
     if not ids:
-        # Filename may carry a CVE prefix (e.g. CVE-2024-1234-...)
         stem = file_path.stem
         if stem.endswith(".bom"):
             stem = stem[: -len(".bom")]
-        by_stem = _source_from_osv_id(stem)
+        by_stem = _source_from_vuln_id(stem)
         if by_stem:
             return by_stem
         return None
 
-    sources = {_source_from_osv_id(i) for i in ids} - {None}
+    sources = {_source_from_vuln_id(i) for i in ids} - {None}
     if len(sources) == 1:
         return sources.pop()
     if not sources:
