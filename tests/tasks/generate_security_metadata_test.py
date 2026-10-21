@@ -1372,6 +1372,80 @@ def test_lw_only_vulns_novel_notes(
     assert "backported" not in pedigree["notes"].lower()
 
 
+def test_osgi_qualified_version_sbom(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """OSGi-qualified versions (hyphen rhlw suffix) produce correct SBOMs.
+
+    ADR-0026 §1.1: versions like 4.1.132.Final use a hyphen separator
+    (4.1.132.Final-rhlw-00002) because the qualifier already occupies
+    the fourth dot segment.
+    """
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "osgi-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "4.1.132.Final",
+            "full": "4.1.132.Final-rhlw-00002",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": (
+            "pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"
+        ),
+        "purls": [
+            "pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"
+        ],
+        "vulns": ["CVE-2025-99999"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    # SBOM at the correct GAV path (netty uses io.netty groupId)
+    gav_path = (
+        repo_dir / "io" / "netty" / "netty-codec-dns"
+        / "4.1.132.Final-rhlw-00002"
+        / "netty-codec-dns-4.1.132.Final-rhlw-00002.bom.json"
+    )
+    assert gav_path.exists(), f"Expected SBOM at {gav_path}"
+    sbom = json.loads(gav_path.read_text())
+
+    component = sbom["components"][0]
+    pedigree = component["pedigree"]
+
+    # Ancestor must be the upstream base (Final qualifier preserved)
+    ancestor = pedigree["ancestors"][0]
+    assert ancestor["version"] == "4.1.132.Final"
+    assert "rhlw" not in ancestor["version"]
+
+    # Notes and patches correct for remediation
+    assert "backported security fixes" in pedigree["notes"].lower()
+    assert len(pedigree["patches"]) == 1
+
+    # PURL uses remediated repo URL
+    assert "/remediated/" in component["purl"]
+
+
 def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
     """When a .sha256 sidecar exists, the SBOM hashes[] is non-empty.
 
