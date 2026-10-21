@@ -383,16 +383,16 @@ def _generate_sboms_from_index(
     if ecosystem != "maven" or not purls:
         return sbom_serial_numbers
 
-    # Resolve the repository root. SBOMs, checksums, and upstream
-    # metadata all require this directory to exist.
-    repo_dir: Path | None = None
+    # Resolve the repository root via ExtractResult (shared with
+    # BuildOutput.from_extract_result in models.py).
     result_path = workdir / EXTRACT_RESULT_FILENAME
-    if result_path.exists():
-        er = ExtractResult.from_file(result_path)
-        candidate = workdir / er.deliverable_dir / "repository"
-        if candidate.is_dir():
-            repo_dir = candidate
-
+    if not result_path.exists():
+        raise click.ClickException(
+            "Extract result not found — cannot write SBOMs. "
+            "Check the workdir and extract result file."
+        )
+    er = ExtractResult.from_file(result_path)
+    repo_dir = er.resolve_repo_dir(workdir)
     if repo_dir is None:
         raise click.ClickException(
             "Repository directory not found — cannot write SBOMs. "
@@ -454,6 +454,12 @@ def _generate_sboms_from_index(
 
         # Write SBOM to the Maven GAV path in the repository directory.
         gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
+        try:
+            gav_dir.resolve().relative_to(repo_dir.resolve())
+        except ValueError:
+            raise click.ClickException(
+                f"GAV path escapes repository directory: {gav_dir}"
+            )
         gav_dir.mkdir(parents=True, exist_ok=True)
         sbom_filename = f"{artifact_id}-{version}.bom.json"
         sbom_path = gav_dir / sbom_filename
