@@ -1119,6 +1119,10 @@ def test_clean_build_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
     assert "validated build" in pedigree["notes"].lower()
     assert "remediation" not in pedigree["notes"].lower()
 
+    # PURL must use the validated repository URL
+    assert "/validated/" in component["purl"]
+    assert "/remediated/" not in component["purl"]
+
     # No SBOM in output_dir (security_metadata_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     bom_files = list(output_dir.glob("*.bom.json"))
@@ -1218,6 +1222,10 @@ def test_remediation_sbom_in_repository_dir(
     assert len(pedigree["patches"]) == 1
     assert pedigree["patches"][0]["resolves"][0]["id"] == "CVE-2024-1234"
 
+    # PURL must use the remediated repository URL
+    assert "/remediated/" in component["purl"]
+    assert "/validated/" not in component["purl"]
+
 
 def test_sbom_replaces_upstream_sbom(
     ctx: GlobalContext, tmp_path: Path
@@ -1268,10 +1276,10 @@ def test_sbom_replaces_upstream_sbom(
     assert "components" in replaced
 
 
-def test_repo_dir_missing_skips_sbom(
+def test_repo_dir_missing_fails(
     ctx: GlobalContext, tmp_path: Path
 ) -> None:
-    """When repository/ does not exist, SBOMs are skipped with a warning."""
+    """When repository/ does not exist, SBOM generation fails."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     data = {
@@ -1300,21 +1308,18 @@ def test_repo_dir_missing_skips_sbom(
         runner = CliRunner()
         result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
-    assert result.exit_code == 0, result.output
-    assert "Skipping SBOM write" in result.output
-
-    # No .bom.json anywhere
-    bom_files = list(tmp_path.rglob("*.bom.json"))
-    assert bom_files == [], f"No SBOMs should be written: {bom_files}"
+    assert result.exit_code != 0, "Should fail when repository/ is missing"
+    assert "Repository directory not found" in result.output
 
 
-def test_lw_only_vulns_remediation_notes(
+def test_lw_only_vulns_novel_notes(
     ctx: GlobalContext, tmp_path: Path
 ) -> None:
-    """LW-only vulns produce remediation notes but empty patches.
+    """LW-only vulns produce novel-fix notes with empty patches.
 
-    Novel fixes are remediations (not backports), so the pedigree notes
-    say "remediation" even though LW- IDs are filtered from patches.
+    LW- IDs denote embargoed/novel fixes, not backports of publicly
+    disclosed CVEs. The pedigree notes must say "novel fix," and
+    LW- IDs are excluded from patches (no NVD entry).
     """
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -1362,7 +1367,9 @@ def test_lw_only_vulns_remediation_notes(
     component = sbom["components"][0]
     pedigree = component["pedigree"]
     assert pedigree["patches"] == [], "LW- IDs must not appear in patches"
-    assert "remediation" in pedigree["notes"].lower()
+    assert "novel fix" in pedigree["notes"].lower()
+    assert "embargoed" in pedigree["notes"].lower()
+    assert "backported" not in pedigree["notes"].lower()
 
 
 def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
