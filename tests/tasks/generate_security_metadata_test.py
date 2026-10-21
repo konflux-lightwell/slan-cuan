@@ -1106,7 +1106,11 @@ def test_clean_build_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
 
     # SBOM must be at the Maven GAV path inside repo_dir
     gav_path = (
-        repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
+        repo_dir
+        / "org"
+        / "example"
+        / "lib"
+        / "1.0.0.rhlw-00001"
         / "lib-1.0.0.rhlw-00001.bom.json"
     )
     assert gav_path.exists(), f"Expected SBOM at {gav_path}"
@@ -1210,7 +1214,11 @@ def test_remediation_sbom_in_repository_dir(
     mock_vex.assert_called_once()
 
     gav_path = (
-        repo_dir / "com" / "example" / "core" / "2.0.0.rhlw-00001"
+        repo_dir
+        / "com"
+        / "example"
+        / "core"
+        / "2.0.0.rhlw-00001"
         / "core-2.0.0.rhlw-00001.bom.json"
     )
     assert gav_path.exists(), f"Expected SBOM at {gav_path}"
@@ -1227,9 +1235,7 @@ def test_remediation_sbom_in_repository_dir(
     assert "/validated/" not in component["purl"]
 
 
-def test_sbom_replaces_upstream_sbom(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
+def test_sbom_replaces_upstream_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
     """When an upstream .bom.json exists at the GAV path, it is replaced."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -1276,9 +1282,7 @@ def test_sbom_replaces_upstream_sbom(
     assert "components" in replaced
 
 
-def test_repo_dir_missing_fails(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
+def test_repo_dir_missing_fails(ctx: GlobalContext, tmp_path: Path) -> None:
     """When repository/ does not exist, SBOM generation fails."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -1312,9 +1316,7 @@ def test_repo_dir_missing_fails(
     assert "Repository directory not found" in result.output
 
 
-def test_lw_only_vulns_novel_notes(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
+def test_lw_only_vulns_novel_notes(ctx: GlobalContext, tmp_path: Path) -> None:
     """LW-only vulns produce novel-fix notes with empty patches.
 
     LW- IDs denote embargoed/novel fixes, not backports of publicly
@@ -1358,7 +1360,11 @@ def test_lw_only_vulns_novel_notes(
     assert result.exit_code == 0, result.output
 
     gav_path = (
-        repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
+        repo_dir
+        / "org"
+        / "example"
+        / "lib"
+        / "1.0.0.rhlw-00001"
         / "lib-1.0.0.rhlw-00001.bom.json"
     )
     assert gav_path.exists(), f"Expected SBOM at {gav_path}"
@@ -1372,9 +1378,7 @@ def test_lw_only_vulns_novel_notes(
     assert "backported" not in pedigree["notes"].lower()
 
 
-def test_osgi_qualified_version_sbom(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
+def test_osgi_qualified_version_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
     """OSGi-qualified versions (hyphen rhlw suffix) produce correct SBOMs.
 
     ADR-0026 §1.1: versions like 4.1.132.Final use a hyphen separator
@@ -1395,9 +1399,7 @@ def test_osgi_qualified_version_sbom(
         "primaryPurl": (
             "pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"
         ),
-        "purls": [
-            "pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"
-        ],
+        "purls": ["pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"],
         "vulns": ["CVE-2025-99999"],
     }
     (index_dir / "gav-index.json").write_text(json.dumps(data))
@@ -1423,7 +1425,10 @@ def test_osgi_qualified_version_sbom(
 
     # SBOM at the correct GAV path (netty uses io.netty groupId)
     gav_path = (
-        repo_dir / "io" / "netty" / "netty-codec-dns"
+        repo_dir
+        / "io"
+        / "netty"
+        / "netty-codec-dns"
         / "4.1.132.Final-rhlw-00002"
         / "netty-codec-dns-4.1.132.Final-rhlw-00002.bom.json"
     )
