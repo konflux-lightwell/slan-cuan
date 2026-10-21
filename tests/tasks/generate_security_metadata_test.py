@@ -1377,6 +1377,152 @@ def test_lw_only_vulns_novel_notes(ctx: GlobalContext, tmp_path: Path) -> None:
     assert "embargoed" in pedigree["notes"].lower()
     assert "backported" not in pedigree["notes"].lower()
 
+    # PURL must use predisclosure URL — never remediated or validated
+    assert "/predisclosure/" in component["purl"]
+    assert "/remediated/" not in component["purl"]
+    assert "/validated/" not in component["purl"]
+
+
+def test_lw_only_vulns_calls_vex(ctx: GlobalContext, tmp_path: Path) -> None:
+    """LW-only builds (truthy vulns) must still invoke VEX generation."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "novel-vex-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["LW-novel-001"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    mock_vex.assert_called_once()
+
+
+def test_multi_purl_generates_multiple_sboms(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A build index with multiple purls produces one SBOM per artifact."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "multi-purl-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": ("pkg:maven/org.example/lib-core@1.0.0.rhlw-00001"),
+        "purls": [
+            "pkg:maven/org.example/lib-core@1.0.0.rhlw-00001",
+            "pkg:maven/org.example/lib-util@1.0.0.rhlw-00001",
+        ],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    sbom_core = (
+        repo_dir
+        / "org"
+        / "example"
+        / "lib-core"
+        / "1.0.0.rhlw-00001"
+        / "lib-core-1.0.0.rhlw-00001.bom.json"
+    )
+    sbom_util = (
+        repo_dir
+        / "org"
+        / "example"
+        / "lib-util"
+        / "1.0.0.rhlw-00001"
+        / "lib-util-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_core.exists(), f"Expected SBOM at {sbom_core}"
+    assert sbom_util.exists(), f"Expected SBOM at {sbom_util}"
+
+    core_sbom = json.loads(sbom_core.read_text())
+    util_sbom = json.loads(sbom_util.read_text())
+    assert core_sbom["components"][0]["name"] == "lib-core"
+    assert util_sbom["components"][0]["name"] == "lib-util"
+    assert core_sbom["serialNumber"] != util_sbom["serialNumber"]
+
+
+def test_gav_path_traversal_rejected(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A PURL with '..' in the version field is rejected by the traversal guard."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    traversal_version = "..%2F..%2F..%2F..%2Fetc"
+    data = {
+        "buildId": "traversal-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "../../../../etc",
+            "b": 0,
+            "n": 0,
+        },
+        "primaryPurl": f"pkg:maven/org.example/artifact@{traversal_version}",
+        "purls": [f"pkg:maven/org.example/artifact@{traversal_version}"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code != 0, "Should reject path traversal"
+    assert (
+        "escapes repository directory" in result.output
+        or "GAV path" in result.output
+    )
+
 
 def test_osgi_qualified_version_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
     """OSGi-qualified versions (hyphen rhlw suffix) produce correct SBOMs.

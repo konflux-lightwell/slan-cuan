@@ -173,6 +173,10 @@ _MAVEN_REPO_URL_VALIDATED = os.environ.get(
     "SLAN_CUAN_REPOSITORY_URL_MAVEN_VALIDATED",
     "https://packages.redhat.com/lightwell/java/validated/",
 )
+_MAVEN_REPO_URL_PREDISCLOSURE = os.environ.get(
+    "SLAN_CUAN_REPOSITORY_URL_MAVEN_PREDISCLOSURE",
+    "https://packages.redhat.com/lightwell/java/predisclosure/",
+)
 
 
 def _read_sha256_sidecar(repo_dir: Path, relative_path: str) -> str | None:
@@ -265,9 +269,14 @@ def _generate_sbom(
     preserved. Falls back to defaults when absent.
     """
     serial_number = f"urn:uuid:{uuid4()}"
-    repo_url = (
-        _MAVEN_REPO_URL_REMEDIATED if cve_ids else _MAVEN_REPO_URL_VALIDATED
-    )
+    has_cves = any(not cid.startswith("LW-") for cid in cve_ids)
+    if has_cves:
+        repo_url = _MAVEN_REPO_URL_REMEDIATED
+    elif cve_ids:
+        # LW-only: embargoed/novel — must go to predisclosure, never public
+        repo_url = _MAVEN_REPO_URL_PREDISCLOSURE
+    else:
+        repo_url = _MAVEN_REPO_URL_VALIDATED
     purl_qualified = (
         f"pkg:maven/{group_id}/{artifact_id}@{version}"
         f"?type=jar&repository_url={repo_url}"
@@ -290,12 +299,10 @@ def _generate_sbom(
         hashes.append({"alg": "SHA-256", "content": sha256_hash})
 
     patches = []
-    has_cves = False
     for cve_id in cve_ids:
         # LW- IDs are novel/embargoed fixes — not backports, no NVD entry.
         if cve_id.startswith("LW-"):
             continue
-        has_cves = True
         patches.append(
             {
                 "type": "backport",

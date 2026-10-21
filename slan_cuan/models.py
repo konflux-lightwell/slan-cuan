@@ -616,8 +616,16 @@ class ExtractResult:
         """Resolve the Maven repository directory from this extract result.
 
         Returns the path if it exists as a directory, otherwise None.
+        Raises ValueError if deliverable_dir escapes base_dir.
         """
         candidate = base_dir / self.deliverable_dir / "repository"
+        try:
+            candidate.resolve().relative_to(base_dir.resolve())
+        except ValueError:
+            raise ValueError(
+                f"deliverable_dir escapes base directory: "
+                f"{self.deliverable_dir!r}"
+            )
         return candidate if candidate.is_dir() else None
 
     def save(self, path: Path) -> None:

@@ -3097,6 +3097,78 @@ def test_classify_osv_source_non_dict_lightwell_is_none(tmp_path: Path) -> None:
     assert _classify_osv_source(f) is None
 
 
+def test_classify_cdx_source_vex_with_cve() -> None:
+    """VEX with CVE- vulnerability IDs routes to pnc-build."""
+    from slan_cuan.tasks.publish import _classify_cdx_source
+
+    record = {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [{"id": "CVE-2024-1234"}],
+    }
+    assert _classify_cdx_source(record, Path("test.bom.json")) == "pnc-build"
+
+
+def test_classify_cdx_source_vex_with_lw() -> None:
+    """VEX with LW- vulnerability IDs routes to novel-pipeline."""
+    from slan_cuan.tasks.publish import _classify_cdx_source
+
+    record = {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [{"id": "LW-2026-00001"}],
+    }
+    assert _classify_cdx_source(record, Path("test.bom.json")) == "novel-pipeline"
+
+
+def test_classify_cdx_source_sbom_with_cve_patches() -> None:
+    """SBOM with CVE- patches routes to pnc-build."""
+    from slan_cuan.tasks.publish import _classify_cdx_source
+
+    record = {
+        "bomFormat": "CycloneDX",
+        "components": [
+            {"pedigree": {"patches": [{"resolves": [{"id": "CVE-2024-5678"}]}]}}
+        ],
+    }
+    assert _classify_cdx_source(record, Path("test.bom.json")) == "pnc-build"
+
+
+def test_classify_cdx_source_clean_sbom_returns_none() -> None:
+    """SBOM with no vulns and no patches returns None."""
+    from slan_cuan.tasks.publish import _classify_cdx_source
+
+    record = {
+        "bomFormat": "CycloneDX",
+        "components": [{"pedigree": {"patches": []}}],
+    }
+    assert _classify_cdx_source(record, Path("test.bom.json")) is None
+
+
+def test_classify_cdx_source_mixed_sources_defaults_pnc() -> None:
+    """Mixed CVE- and LW- sources default to pnc-build."""
+    from slan_cuan.tasks.publish import _classify_cdx_source
+
+    record = {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [
+            {"id": "CVE-2024-1234"},
+            {"id": "LW-2026-00001"},
+        ],
+    }
+    assert _classify_cdx_source(record, Path("test.bom.json")) == "pnc-build"
+
+
+def test_classify_cdx_source_filename_fallback() -> None:
+    """When record has no IDs, filename prefix is used as fallback."""
+    from slan_cuan.tasks.publish import _classify_cdx_source
+
+    record = {"bomFormat": "CycloneDX"}
+    assert (
+        _classify_cdx_source(record, Path("CVE-2024-1234-2026.bom.json"))
+        == "pnc-build"
+    )
+    assert _classify_cdx_source(record, Path("clean.bom.json")) is None
+
+
 def _setup_file_client(mock_file: Mock) -> None:
     """Configure mock file client with upload/publication/distribution."""
     mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
