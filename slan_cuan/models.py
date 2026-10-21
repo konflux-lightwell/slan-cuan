@@ -612,6 +612,14 @@ class ExtractResult:
             attachment_files=data.get("attachment_files", []),
         )
 
+    def resolve_repo_dir(self, base_dir: Path) -> Path | None:
+        """Resolve the Maven repository directory from this extract result.
+
+        Returns the path if it exists as a directory, otherwise None.
+        """
+        candidate = base_dir / self.deliverable_dir / "repository"
+        return candidate if candidate.is_dir() else None
+
     def save(self, path: Path) -> None:
         """Write JSON to file.
 
