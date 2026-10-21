@@ -165,9 +165,13 @@ def _warn_override_divergence(override_id: str, index_data: dict) -> None:
         )
 
 
-_MAVEN_REPO_URL = os.environ.get(
-    "SLAN_CUAN_REPOSITORY_URL_MAVEN",
+_MAVEN_REPO_URL_REMEDIATED = os.environ.get(
+    "SLAN_CUAN_REPOSITORY_URL_MAVEN_REMEDIATED",
     "https://packages.redhat.com/lightwell/java/remediated/",
+)
+_MAVEN_REPO_URL_VALIDATED = os.environ.get(
+    "SLAN_CUAN_REPOSITORY_URL_MAVEN_VALIDATED",
+    "https://packages.redhat.com/lightwell/java/validated/",
 )
 
 
@@ -261,9 +265,12 @@ def _generate_sbom(
     preserved. Falls back to defaults when absent.
     """
     serial_number = f"urn:uuid:{uuid4()}"
+    repo_url = (
+        _MAVEN_REPO_URL_REMEDIATED if cve_ids else _MAVEN_REPO_URL_VALIDATED
+    )
     purl_qualified = (
         f"pkg:maven/{group_id}/{artifact_id}@{version}"
-        f"?type=jar&repository_url={_MAVEN_REPO_URL}"
+        f"?type=jar&repository_url={repo_url}"
     )
     purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
     ancestor_purl = f"pkg:maven/{group_id}/{artifact_id}@{base_version}"
@@ -283,11 +290,12 @@ def _generate_sbom(
         hashes.append({"alg": "SHA-256", "content": sha256_hash})
 
     patches = []
+    has_cves = False
     for cve_id in cve_ids:
-        # LW- novel-fix IDs are not CVEs — skip them in pedigree
-        # patches (no NVD entry, and type is not "backport").
+        # LW- IDs are novel/embargoed fixes — not backports, no NVD entry.
         if cve_id.startswith("LW-"):
             continue
+        has_cves = True
         patches.append(
             {
                 "type": "backport",
@@ -327,9 +335,14 @@ def _generate_sbom(
             "notes": (
                 f"Lightwell remediation: backported security fixes to "
                 f"{artifact_id} {base_version}. Build {version}."
-                if cve_ids
-                else f"Lightwell validated build of "
-                f"{artifact_id} {base_version}. Build {version}."
+                if has_cves
+                else (
+                    f"Lightwell novel fix: embargoed security fixes to "
+                    f"{artifact_id} {base_version}. Build {version}."
+                    if cve_ids
+                    else f"Lightwell validated build of "
+                    f"{artifact_id} {base_version}. Build {version}."
+                )
             ),
         },
     }
@@ -370,9 +383,8 @@ def _generate_sboms_from_index(
     if ecosystem != "maven" or not purls:
         return sbom_serial_numbers
 
-    # Resolve the repository root for checksum sidecar lookup.
-    # The extract stage writes artifacts under
-    # <workdir>/<deliverable_dir>/repository/.
+    # Resolve the repository root. SBOMs, checksums, and upstream
+    # metadata all require this directory to exist.
     repo_dir: Path | None = None
     result_path = workdir / EXTRACT_RESULT_FILENAME
     if result_path.exists():
@@ -380,6 +392,12 @@ def _generate_sboms_from_index(
         candidate = workdir / er.deliverable_dir / "repository"
         if candidate.is_dir():
             repo_dir = candidate
+
+    if repo_dir is None:
+        raise click.ClickException(
+            "Repository directory not found — cannot write SBOMs. "
+            "Check the extract result and deliverable directory."
+        )
 
     version_info = index_data.get("version", {})
     upstream_version = version_info.get("upstream", "")
@@ -435,12 +453,6 @@ def _generate_sboms_from_index(
             sbom_serial_numbers[used_bom_ref] = serial_number
 
         # Write SBOM to the Maven GAV path in the repository directory.
-        if repo_dir is None:
-            click.echo(
-                f"Skipping SBOM write for {group_id}:{artifact_id}:{version}"
-                " — repository directory not found"
-            )
-            continue
         gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
         gav_dir.mkdir(parents=True, exist_ok=True)
         sbom_filename = f"{artifact_id}-{version}.bom.json"
