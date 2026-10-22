@@ -2733,6 +2733,86 @@ def test_publish_skips_file_repo_for_clean_gav_index_without_osv_files(
     assert result.exit_code == 0, result.output
 
 
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed (LW-) builds must not publish to non-predisclosure repos."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, gav_index_vulns=["LW-2026-0001"]
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-remediated",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0, (
+        "Should reject LW- vulns to non-predisclosure repo"
+    )
+    assert "embargoed" in result.output.lower()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_allows_lw_vulns_to_predisclosure_repo(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed (LW-) builds are allowed to predisclosure repos."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-predisclosure",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+
 @pytest.mark.parametrize(
     ("index_contents", "expected_error"),
     [
@@ -3179,7 +3259,9 @@ def _setup_file_client(mock_file: Mock) -> None:
     mock_file.update_distribution.return_value = None
 
 
-def _run_publish_with_file_repo(artifact_dir: Path, file_repo: str) -> Result:
+def _run_publish_with_file_repo(
+    artifact_dir: Path, file_repo: str, maven_repo: str = "test-repo"
+) -> Result:
     """Invoke the publish command against a Pulp File repository."""
     runner = CliRunner()
     return runner.invoke(
@@ -3189,7 +3271,7 @@ def _run_publish_with_file_repo(artifact_dir: Path, file_repo: str) -> Result:
             "--pulp-url",
             "https://pulp.example.com",
             "--pulp-repository",
-            "test-repo",
+            maven_repo,
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3225,7 +3307,9 @@ def test_publish_novel_repo_skips_cve_records(
     mock_file_cls.return_value = mock_file
     _setup_file_client(mock_file)
 
-    result = _run_publish_with_file_repo(artifact_dir, "osv-java-novel")
+    result = _run_publish_with_file_repo(
+        artifact_dir, "osv-java-novel", maven_repo="lightwell-java-predisclosure"
+    )
 
     assert result.exit_code == 0, result.output
     # Only the novel record uploaded.
@@ -3257,7 +3341,11 @@ def test_publish_backport_repo_skips_novel_records(
     mock_file_cls.return_value = mock_file
     _setup_file_client(mock_file)
 
-    result = _run_publish_with_file_repo(artifact_dir, "osv-java-backport")
+    result = _run_publish_with_file_repo(
+        artifact_dir,
+        "osv-java-backport",
+        maven_repo="lightwell-java-predisclosure",
+    )
 
     assert result.exit_code == 0, result.output
     assert mock_file.upload_content.call_count == 1
@@ -3287,7 +3375,11 @@ def test_publish_unrecognized_repo_uploads_all(
     mock_file_cls.return_value = mock_file
     _setup_file_client(mock_file)
 
-    result = _run_publish_with_file_repo(artifact_dir, "some-other-file-repo")
+    result = _run_publish_with_file_repo(
+        artifact_dir,
+        "some-other-file-repo",
+        maven_repo="lightwell-java-predisclosure",
+    )
 
     assert result.exit_code == 0, result.output
     assert mock_file.upload_content.call_count == 2
@@ -3354,7 +3446,7 @@ def test_publish_writes_security_metadata_skipped_tekton_result(
             "--pulp-url",
             "https://pulp.example.com",
             "--pulp-repository",
-            "test-repo",
+            "lightwell-java-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",

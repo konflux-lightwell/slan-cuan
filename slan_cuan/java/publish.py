@@ -865,6 +865,19 @@ def publish(
         vulns = _gav_index_vulnerabilities(
             extract_result.attachment_files, artifact_dir
         )
+
+        # Embargo safety: LW- IDs indicate embargoed content that must
+        # only publish to predisclosure repos. Reject if the target
+        # Maven repo name does not contain "predisclosure".
+        has_lw = any(v.startswith("LW-") for v in vulns)
+        if has_lw and "predisclosure" not in pulp_repository.lower():
+            raise click.ClickException(
+                f"Build contains embargoed (LW-) vulnerabilities but "
+                f"--pulp-repository '{pulp_repository}' is not a "
+                f"predisclosure repository. Aborting to prevent "
+                f"disclosure of embargoed content."
+            )
+
         security_metadata_files = (
             tuple(
                 f for f in build.security_metadata_dir.rglob("*") if f.is_file()
