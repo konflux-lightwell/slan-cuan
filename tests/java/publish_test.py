@@ -3099,7 +3099,7 @@ def test_classify_osv_source_non_dict_lightwell_is_none(tmp_path: Path) -> None:
 
 def test_classify_cdx_source_vex_with_cve() -> None:
     """VEX with CVE- vulnerability IDs routes to pnc-build."""
-    from slan_cuan.tasks.publish import _classify_cdx_source
+    from slan_cuan.java.publish import _classify_cdx_source
 
     record = {
         "bomFormat": "CycloneDX",
@@ -3110,7 +3110,7 @@ def test_classify_cdx_source_vex_with_cve() -> None:
 
 def test_classify_cdx_source_vex_with_lw() -> None:
     """VEX with LW- vulnerability IDs routes to novel-pipeline."""
-    from slan_cuan.tasks.publish import _classify_cdx_source
+    from slan_cuan.java.publish import _classify_cdx_source
 
     record = {
         "bomFormat": "CycloneDX",
@@ -3121,7 +3121,7 @@ def test_classify_cdx_source_vex_with_lw() -> None:
 
 def test_classify_cdx_source_sbom_with_cve_patches() -> None:
     """SBOM with CVE- patches routes to pnc-build."""
-    from slan_cuan.tasks.publish import _classify_cdx_source
+    from slan_cuan.java.publish import _classify_cdx_source
 
     record = {
         "bomFormat": "CycloneDX",
@@ -3134,7 +3134,7 @@ def test_classify_cdx_source_sbom_with_cve_patches() -> None:
 
 def test_classify_cdx_source_clean_sbom_returns_none() -> None:
     """SBOM with no vulns and no patches returns None."""
-    from slan_cuan.tasks.publish import _classify_cdx_source
+    from slan_cuan.java.publish import _classify_cdx_source
 
     record = {
         "bomFormat": "CycloneDX",
@@ -3145,7 +3145,7 @@ def test_classify_cdx_source_clean_sbom_returns_none() -> None:
 
 def test_classify_cdx_source_mixed_sources_defaults_pnc() -> None:
     """Mixed CVE- and LW- sources default to pnc-build."""
-    from slan_cuan.tasks.publish import _classify_cdx_source
+    from slan_cuan.java.publish import _classify_cdx_source
 
     record = {
         "bomFormat": "CycloneDX",
@@ -3159,7 +3159,7 @@ def test_classify_cdx_source_mixed_sources_defaults_pnc() -> None:
 
 def test_classify_cdx_source_filename_fallback() -> None:
     """When record has no IDs, filename prefix is used as fallback."""
-    from slan_cuan.tasks.publish import _classify_cdx_source
+    from slan_cuan.java.publish import _classify_cdx_source
 
     record = {"bomFormat": "CycloneDX"}
     assert (

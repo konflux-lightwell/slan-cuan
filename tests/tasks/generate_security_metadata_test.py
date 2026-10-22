@@ -1422,6 +1422,70 @@ def test_lw_only_vulns_calls_vex(ctx: GlobalContext, tmp_path: Path) -> None:
     mock_vex.assert_called_once()
 
 
+def test_mixed_cve_lw_build_uses_predisclosure(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """Mixed CVE+LW build is contaminated — predisclosure only."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "mixed-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001"),
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["CVE-2024-1234", "LW-novel-001"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=True)
+    output_dir = workdir / "security_metadata"
+    repo_dir = workdir / "TEST-build-output" / "repository"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    gav_path = (
+        repo_dir
+        / "org"
+        / "example"
+        / "lib"
+        / "1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert gav_path.exists(), f"Expected SBOM at {gav_path}"
+    sbom = json.loads(gav_path.read_text())
+
+    component = sbom["components"][0]
+    pedigree = component["pedigree"]
+
+    # LW- contamination: everything must route to predisclosure
+    assert "/predisclosure/" in component["purl"]
+    assert "/remediated/" not in component["purl"]
+    assert "/validated/" not in component["purl"]
+
+    # Notes must reflect embargoed status, not remediation
+    assert "novel fix" in pedigree["notes"].lower()
+    assert "embargoed" in pedigree["notes"].lower()
+
+
 def test_multi_purl_generates_multiple_sboms(
     ctx: GlobalContext, tmp_path: Path
 ) -> None:
@@ -1487,7 +1551,7 @@ def test_multi_purl_generates_multiple_sboms(
 
 
 def test_gav_path_traversal_rejected(ctx: GlobalContext, tmp_path: Path) -> None:
-    """A PURL with '..' in the version field is rejected by the traversal guard."""
+    """A PURL with '..' in version is rejected by the traversal guard."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     traversal_version = "..%2F..%2F..%2F..%2Fetc"
