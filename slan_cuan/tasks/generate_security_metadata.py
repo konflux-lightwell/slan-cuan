@@ -269,12 +269,13 @@ def _generate_sbom(
     preserved. Falls back to defaults when absent.
     """
     serial_number = f"urn:uuid:{uuid4()}"
+    has_lw = any(cid.startswith("LW-") for cid in cve_ids)
     has_cves = any(not cid.startswith("LW-") for cid in cve_ids)
-    if has_cves:
-        repo_url = _MAVEN_REPO_URL_REMEDIATED
-    elif cve_ids:
-        # LW-only: embargoed/novel — must go to predisclosure, never public
+    if has_lw:
+        # Any LW- presence contaminates the build — predisclosure only.
         repo_url = _MAVEN_REPO_URL_PREDISCLOSURE
+    elif has_cves:
+        repo_url = _MAVEN_REPO_URL_REMEDIATED
     else:
         repo_url = _MAVEN_REPO_URL_VALIDATED
     purl_qualified = (
@@ -340,13 +341,13 @@ def _generate_sbom(
             ],
             "patches": patches,
             "notes": (
-                f"Lightwell remediation: backported security fixes to "
+                f"Lightwell novel fix: embargoed security fixes to "
                 f"{artifact_id} {base_version}. Build {version}."
-                if has_cves
+                if has_lw
                 else (
-                    f"Lightwell novel fix: embargoed security fixes to "
+                    f"Lightwell remediation: backported security fixes to "
                     f"{artifact_id} {base_version}. Build {version}."
-                    if cve_ids
+                    if has_cves
                     else f"Lightwell validated build of "
                     f"{artifact_id} {base_version}. Build {version}."
                 )
