@@ -400,7 +400,10 @@ def _generate_sboms_from_index(
             "Check the workdir and extract result file."
         )
     er = ExtractResult.from_file(result_path)
-    repo_dir = er.resolve_repo_dir(workdir)
+    try:
+        repo_dir = er.resolve_repo_dir(workdir)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
     if repo_dir is None:
         raise click.ClickException(
             "Repository directory not found — cannot write SBOMs. "

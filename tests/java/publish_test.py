@@ -3223,8 +3223,8 @@ def test_classify_cdx_source_clean_sbom_returns_none() -> None:
     assert _classify_cdx_source(record, Path("test.bom.json")) is None
 
 
-def test_classify_cdx_source_mixed_sources_defaults_pnc() -> None:
-    """Mixed CVE- and LW- sources default to pnc-build."""
+def test_classify_cdx_source_mixed_sources_routes_novel() -> None:
+    """Mixed CVE- and LW- sources route to novel-pipeline (embargo rule)."""
     from slan_cuan.java.publish import _classify_cdx_source
 
     record = {
@@ -3234,7 +3234,7 @@ def test_classify_cdx_source_mixed_sources_defaults_pnc() -> None:
             {"id": "LW-2026-00001"},
         ],
     }
-    assert _classify_cdx_source(record, Path("test.bom.json")) == "pnc-build"
+    assert _classify_cdx_source(record, Path("test.bom.json")) == "novel-pipeline"
 
 
 def test_classify_cdx_source_filename_fallback() -> None:

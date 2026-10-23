@@ -291,6 +291,11 @@ def _source_from_vuln_id(vuln_id: str) -> str | None:
     return None
 
 
+def _source_from_vuln_id_has_embargo(vulns: tuple[str, ...] | list[str]) -> bool:
+    """Return True if any vulnerability ID indicates embargoed content."""
+    return any(v.startswith("LW-") for v in vulns)
+
+
 def _classify_cdx_source(record: dict[str, Any], file_path: Path) -> str | None:
     """Classify a CycloneDX SBOM or VEX by its vulnerability content.
 
@@ -336,8 +341,10 @@ def _classify_cdx_source(record: dict[str, Any], file_path: Path) -> str | None:
         return sources.pop()
     if not sources:
         return None
-    # Mixed sources — default to pnc-build (CVE backports are
-    # the dominant case; novel-only VEX is less common).
+    # Mixed sources — any novel-pipeline presence contaminates
+    # the document (embargo rule: LW- takes precedence).
+    if "novel-pipeline" in sources:
+        return "novel-pipeline"
     return "pnc-build"
 
 
@@ -869,7 +876,7 @@ def publish(
         # Embargo safety: LW- IDs indicate embargoed content that must
         # only publish to predisclosure repos. Reject if the target
         # Maven repo name does not contain "predisclosure".
-        has_lw = any(v.startswith("LW-") for v in vulns)
+        has_lw = _source_from_vuln_id_has_embargo(vulns)
         if has_lw and "predisclosure" not in pulp_repository.lower():
             raise click.ClickException(
                 f"Build contains embargoed (LW-) vulnerabilities but "
