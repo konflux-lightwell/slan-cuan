@@ -9,10 +9,11 @@ import re
 import socket
 import tempfile
 import time
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 import click
 import mmh3
@@ -225,6 +226,38 @@ def _load_upstream_sbom(
 
 _DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
 
+# Namespace UUID for Lightwell SBOM serial numbers (uuid5 domain separation).
+_SBOM_SERIAL_NS = UUID("b8f5a1c2-7d3e-4f9a-a6b1-2c8d9e0f1a3b")
+
+
+def _content_derived_serial(sbom: dict) -> str:
+    """Derive a deterministic serial number from SBOM semantic content.
+
+    Hashes the artifact-semantic fields (component identity, hashes,
+    licenses, pedigree, repository_url) so that identical content
+    produces an identical serial. Excludes build-identity metadata
+    (serialNumber, timestamp, metadata.version) so a pure re-run of
+    the same build yields the same serial.
+    """
+    components = sbom.get("components", [])
+    if not components:
+        return f"urn:uuid:{uuid4()}"
+
+    comp = components[0]
+    # Collect semantic fields in a stable order
+    semantic = {
+        "group": comp.get("group", ""),
+        "name": comp.get("name", ""),
+        "version": comp.get("version", ""),
+        "purl": comp.get("purl", ""),
+        "hashes": comp.get("hashes", []),
+        "licenses": comp.get("licenses", []),
+        "pedigree": comp.get("pedigree", {}),
+    }
+    canonical = json.dumps(semantic, sort_keys=True, separators=(",", ":"))
+    digest = sha256(canonical.encode()).hexdigest()
+    return f"urn:uuid:{uuid5(_SBOM_SERIAL_NS, digest)}"
+
 
 def _resolve_repo_url(cve_ids: list[str], explicit_url: str | None) -> str:
     """Determine the repository URL for the SBOM PURL qualifier.
@@ -351,19 +384,19 @@ def _enrich_sbom(
         # Preserve existing bom-ref; fall back to bare PURL
         bom_ref = comp.get("bom-ref", purl_bare)
 
-        # Regenerate serial number (the enriched SBOM is a new document)
-        serial_number = f"urn:uuid:{uuid4()}"
+        # Content-derived serial: identical enrichment → identical serial.
+        serial_number = _content_derived_serial(sbom)
         sbom["serialNumber"] = serial_number
 
-        # Update timestamp
+        # Preserve upstream timestamp when available; fall back to provided.
         if "metadata" not in sbom:
             sbom["metadata"] = {}
-        sbom["metadata"]["timestamp"] = timestamp
+        if not sbom["metadata"].get("timestamp"):
+            sbom["metadata"]["timestamp"] = timestamp
         if not sbom["metadata"].get("supplier"):
             sbom["metadata"]["supplier"] = _DEFAULT_SUPPLIER
     else:
         # Fallback: generate from scratch when no upstream SBOM exists.
-        serial_number = f"urn:uuid:{uuid4()}"
         bom_ref = purl_bare
 
         hashes = []
@@ -373,7 +406,7 @@ def _enrich_sbom(
         sbom = {
             "bomFormat": "CycloneDX",
             "specVersion": "1.7",
-            "serialNumber": serial_number,
+            "serialNumber": "",
             "version": 1,
             "metadata": {
                 "timestamp": timestamp,
@@ -393,6 +426,8 @@ def _enrich_sbom(
                 }
             ],
         }
+        serial_number = _content_derived_serial(sbom)
+        sbom["serialNumber"] = serial_number
 
     return serial_number, bom_ref, sbom
 
@@ -781,7 +816,12 @@ def generate_security_metadata(
     if _is_build_index(index_data):
         from datetime import UTC, datetime
 
-        ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Pin to build provenance timestamp when available; fall back to now.
+        build_created = index_data.get("created", "")
+        if build_created:
+            ts_now = build_created
+        else:
+            ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         sbom_serial_numbers = _generate_sboms_from_index(
             index_data,
             workdir,
