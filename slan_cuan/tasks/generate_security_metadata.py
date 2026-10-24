@@ -195,113 +195,68 @@ def _read_sha256_sidecar(repo_dir: Path, relative_path: str) -> str | None:
     return None
 
 
-def _read_upstream_sbom_metadata(
+def _load_upstream_sbom(
     repo_dir: Path | None,
     group_id: str,
     artifact_id: str,
     version: str,
-) -> dict:
-    """Read licenses, supplier, and bom-ref from an upstream SBOM.
+) -> dict | None:
+    """Load the full upstream SBOM from the repository directory.
 
     Searches for ``.bom.json`` (new PNC convention) then
-    ``.cyclonedx.json`` (legacy) in the repository directory.
-    Returns a dict with keys ``licenses``, ``supplier``, ``bom_ref``
-    — each may be ``None`` when the upstream SBOM is absent or the
-    field is not populated.
+    ``.cyclonedx.json`` (legacy). Returns the parsed JSON dict,
+    or None when no upstream SBOM is found.
     """
-    result: dict = {
-        "licenses": None,
-        "supplier": None,
-        "bom_ref": None,
-    }
     if not repo_dir:
-        return result
+        return None
 
     gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
-    # Try .bom.json first (new convention), then .cyclonedx.json
     for suffix in (".bom.json", ".cyclonedx.json"):
         candidate = gav_dir / f"{artifact_id}-{version}{suffix}"
         if not candidate.exists():
             continue
         try:
             with open(candidate) as f:
-                data = json.load(f)
+                return json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
-        components = data.get("components", [])
-        if not components or not isinstance(components[0], dict):
-            continue
-        comp = components[0]
-        lic = comp.get("licenses")
-        if isinstance(lic, list) and lic:
-            result["licenses"] = lic
-        bref = comp.get("bom-ref", "")
-        if bref:
-            result["bom_ref"] = bref
-        # Supplier can be on metadata or on the component
-        meta = data.get("metadata", {})
-        sup = meta.get("supplier") if isinstance(meta, dict) else None
-        if isinstance(sup, dict) and sup.get("name"):
-            result["supplier"] = sup
-        break
-    return result
+    return None
 
 
 _DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
 
 
-def _generate_sbom(
+def _resolve_repo_url(cve_ids: list[str], explicit_url: str | None) -> str:
+    """Determine the repository URL for the SBOM PURL qualifier.
+
+    When *explicit_url* is provided (from ``--repository-url``), it is
+    used directly. Otherwise the URL is inferred from the vuln list.
+    """
+    if explicit_url:
+        return explicit_url
+    has_lw = any(cid.startswith("LW-") for cid in cve_ids)
+    has_cves = any(not cid.startswith("LW-") for cid in cve_ids)
+    if has_lw:
+        return _MAVEN_REPO_URL_PREDISCLOSURE
+    elif has_cves:
+        return _MAVEN_REPO_URL_REMEDIATED
+    return _MAVEN_REPO_URL_VALIDATED
+
+
+def _build_pedigree(
     group_id: str,
     artifact_id: str,
     version: str,
     base_version: str,
     cve_ids: list[str],
-    sha256_hash: str | None,
-    timestamp: str,
-    upstream_licenses: list | None = None,
-    upstream_supplier: dict | None = None,
-    upstream_bom_ref: str | None = None,
-) -> tuple[str, dict]:
-    """Generate a per-artifact CycloneDX 1.7 SBOM.
-
-    When upstream metadata is available (from PNC or another build
-    system), ``licenses``, ``supplier``, and ``bom-ref`` form are
-    preserved. Falls back to defaults when absent.
-    """
-    serial_number = f"urn:uuid:{uuid4()}"
+) -> dict:
+    """Build the CycloneDX pedigree object (ancestors, patches, notes)."""
+    ancestor_purl = f"pkg:maven/{group_id}/{artifact_id}@{base_version}"
     has_lw = any(cid.startswith("LW-") for cid in cve_ids)
     has_cves = any(not cid.startswith("LW-") for cid in cve_ids)
-    if has_lw:
-        # Any LW- presence contaminates the build — predisclosure only.
-        repo_url = _MAVEN_REPO_URL_PREDISCLOSURE
-    elif has_cves:
-        repo_url = _MAVEN_REPO_URL_REMEDIATED
-    else:
-        repo_url = _MAVEN_REPO_URL_VALIDATED
-    purl_qualified = (
-        f"pkg:maven/{group_id}/{artifact_id}@{version}"
-        f"?type=jar&repository_url={repo_url}"
-    )
-    purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
-    ancestor_purl = f"pkg:maven/{group_id}/{artifact_id}@{base_version}"
-
-    # Use upstream bom-ref form when available (e.g. PNC uses
-    # ?type=jar); fall back to bare PURL (Sonatype convention).
-    bom_ref = upstream_bom_ref if upstream_bom_ref else purl_bare
-
-    # Preserve upstream licenses; empty when absent.
-    licenses = upstream_licenses if upstream_licenses else []
-
-    # Preserve upstream supplier; default to "Red Hat Lightwell".
-    supplier = upstream_supplier if upstream_supplier else _DEFAULT_SUPPLIER
-
-    hashes = []
-    if sha256_hash:
-        hashes.append({"alg": "SHA-256", "content": sha256_hash})
 
     patches = []
     for cve_id in cve_ids:
-        # LW- IDs are novel/embargoed fixes — not backports, no NVD entry.
         if cve_id.startswith("LW-"):
             continue
         patches.append(
@@ -313,59 +268,131 @@ def _generate_sbom(
                         "id": cve_id,
                         "source": {
                             "name": "NVD",
-                            "url": (f"https://nvd.nist.gov/vuln/detail/{cve_id}"),
+                            "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
                         },
                     }
                 ],
             }
         )
 
-    component = {
-        "type": "library",
-        "bom-ref": bom_ref,
-        "group": group_id,
-        "name": artifact_id,
-        "version": version,
-        "purl": purl_qualified,
-        "hashes": hashes,
-        "licenses": licenses,
-        "pedigree": {
-            "ancestors": [
-                {
-                    "type": "library",
-                    "group": group_id,
-                    "name": artifact_id,
-                    "version": base_version,
-                    "purl": ancestor_purl,
-                }
-            ],
-            "patches": patches,
-            "notes": (
-                f"Lightwell novel fix: embargoed security fixes to "
-                f"{artifact_id} {base_version}. Build {version}."
-                if has_lw
-                else (
-                    f"Lightwell remediation: backported security fixes to "
-                    f"{artifact_id} {base_version}. Build {version}."
-                    if has_cves
-                    else f"Lightwell validated build of "
-                    f"{artifact_id} {base_version}. Build {version}."
-                )
-            ),
-        },
+    if has_lw:
+        notes = (
+            f"Lightwell novel fix: embargoed security fixes to "
+            f"{artifact_id} {base_version}. Build {version}."
+        )
+    elif has_cves:
+        notes = (
+            f"Lightwell remediation: backported security fixes to "
+            f"{artifact_id} {base_version}. Build {version}."
+        )
+    else:
+        notes = (
+            f"Lightwell validated build of "
+            f"{artifact_id} {base_version}. Build {version}."
+        )
+
+    return {
+        "ancestors": [
+            {
+                "type": "library",
+                "group": group_id,
+                "name": artifact_id,
+                "version": base_version,
+                "purl": ancestor_purl,
+            }
+        ],
+        "patches": patches,
+        "notes": notes,
     }
 
-    sbom = {
-        "bomFormat": "CycloneDX",
-        "specVersion": "1.7",
-        "serialNumber": serial_number,
-        "version": 1,
-        "metadata": {
-            "timestamp": timestamp,
-            "supplier": supplier,
-        },
-        "components": [component],
-    }
+
+def _enrich_sbom(
+    upstream_sbom: dict | None,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+    base_version: str,
+    cve_ids: list[str],
+    sha256_hash: str | None,
+    timestamp: str,
+    repo_url: str,
+) -> tuple[str, str, dict]:
+    """Enrich an upstream SBOM with pedigree, or generate one from scratch.
+
+    When an upstream SBOM exists, it is mutated in place — preserving
+    all upstream-produced fields (hashes, licenses, supplier, etc.)
+    and adding/updating pedigree, PURL ``repository_url``, and notes.
+
+    When no upstream SBOM exists, a minimal SBOM is generated from
+    scratch.
+
+    Returns ``(serial_number, bom_ref, sbom_dict)``.
+    """
+    purl_qualified = (
+        f"pkg:maven/{group_id}/{artifact_id}@{version}"
+        f"?type=jar&repository_url={repo_url}"
+    )
+    purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
+    pedigree = _build_pedigree(
+        group_id, artifact_id, version, base_version, cve_ids
+    )
+
+    if upstream_sbom and upstream_sbom.get("components"):
+        # Enrich: mutate the upstream SBOM, preserving all existing fields.
+        sbom = upstream_sbom
+        comp = sbom["components"][0]
+
+        # Update PURL to include Lightwell repository_url
+        comp["purl"] = purl_qualified
+
+        # Add/replace pedigree
+        comp["pedigree"] = pedigree
+
+        # Preserve existing bom-ref; fall back to bare PURL
+        bom_ref = comp.get("bom-ref", purl_bare)
+
+        # Regenerate serial number (the enriched SBOM is a new document)
+        serial_number = f"urn:uuid:{uuid4()}"
+        sbom["serialNumber"] = serial_number
+
+        # Update timestamp
+        if "metadata" not in sbom:
+            sbom["metadata"] = {}
+        sbom["metadata"]["timestamp"] = timestamp
+        if not sbom["metadata"].get("supplier"):
+            sbom["metadata"]["supplier"] = _DEFAULT_SUPPLIER
+    else:
+        # Fallback: generate from scratch when no upstream SBOM exists.
+        serial_number = f"urn:uuid:{uuid4()}"
+        bom_ref = purl_bare
+
+        hashes = []
+        if sha256_hash:
+            hashes.append({"alg": "SHA-256", "content": sha256_hash})
+
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.7",
+            "serialNumber": serial_number,
+            "version": 1,
+            "metadata": {
+                "timestamp": timestamp,
+                "supplier": _DEFAULT_SUPPLIER,
+            },
+            "components": [
+                {
+                    "type": "library",
+                    "bom-ref": bom_ref,
+                    "group": group_id,
+                    "name": artifact_id,
+                    "version": version,
+                    "purl": purl_qualified,
+                    "hashes": hashes,
+                    "licenses": [],
+                    "pedigree": pedigree,
+                }
+            ],
+        }
 
     return serial_number, bom_ref, sbom
 
@@ -374,6 +401,7 @@ def _generate_sboms_from_index(
     index_data: dict,
     workdir: Path,
     timestamp: str,
+    explicit_repo_url: str | None = None,
 ) -> dict[str, str]:
     """Generate per-artifact CycloneDX SBOMs from build-index data.
 
@@ -440,12 +468,14 @@ def _generate_sboms_from_index(
             _read_sha256_sidecar(repo_dir, jar_relative) if repo_dir else None
         )
 
-        # Read upstream SBOM metadata (licenses, supplier, bom-ref)
-        upstream = _read_upstream_sbom_metadata(
+        # Load upstream SBOM (enrich if present, generate if absent)
+        upstream_sbom = _load_upstream_sbom(
             repo_dir, group_id, artifact_id, version
         )
+        repo_url = _resolve_repo_url(vulns, explicit_repo_url)
 
-        serial_number, used_bom_ref, sbom = _generate_sbom(
+        serial_number, used_bom_ref, sbom = _enrich_sbom(
+            upstream_sbom,
             group_id,
             artifact_id,
             version,
@@ -453,9 +483,7 @@ def _generate_sboms_from_index(
             vulns,
             sha256_hash,
             timestamp,
-            upstream_licenses=upstream.get("licenses"),
-            upstream_supplier=upstream.get("supplier"),
-            upstream_bom_ref=upstream.get("bom_ref"),
+            repo_url,
         )
         sbom_serial_numbers[purl] = serial_number
         # Also map the bom-ref form used in the SBOM so VEX
@@ -659,6 +687,17 @@ def _get_osidb_auth_token(
     required=True,
     help="The directory to work in, which is the extracted directory.",
 )
+@click.option(
+    "--repository-url",
+    type=str,
+    default="",
+    show_default=True,
+    help=(
+        "Distribution target URL for the SBOM PURL repository_url qualifier. "
+        "When set, overrides the vuln-based inference. Typically the Pulp "
+        "Maven distribution URL (e.g. https://packages.redhat.com/lightwell/java/remediated/)."
+    ),
+)
 @click.pass_obj
 def generate_security_metadata(
     ctx: GlobalContext,
@@ -670,6 +709,7 @@ def generate_security_metadata(
     output_dir: Path,
     advisory_id: str,
     workdir: Path,
+    repository_url: str,
 ) -> None:
     """Generate the OSV and VEX attestations for a given build index."""
     index_full_path = workdir / index_basedir / index_filename
@@ -746,6 +786,7 @@ def generate_security_metadata(
             index_data,
             workdir,
             ts_now,
+            explicit_repo_url=repository_url or None,
         )
 
         if index_data.get("vulns"):
