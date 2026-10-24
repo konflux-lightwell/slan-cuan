@@ -1668,7 +1668,7 @@ def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
     were always empty.
     """
     from slan_cuan.tasks.generate_security_metadata import (
-        _generate_sbom,
+        _enrich_sbom,
         _read_sha256_sidecar,
     )
 
@@ -1683,7 +1683,8 @@ def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
     )
     assert result == "abcd1234deadbeef"
 
-    _, _, sbom = _generate_sbom(
+    _, _, sbom = _enrich_sbom(
+        upstream_sbom=None,
         group_id="com.example",
         artifact_id="lib",
         version="1.0.0.rhlw-00001",
@@ -1691,6 +1692,7 @@ def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
         cve_ids=["CVE-2024-0001"],
         sha256_hash=result,
         timestamp="2026-01-01T00:00:00Z",
+        repo_url="https://packages.redhat.com/lightwell/java/remediated/",
     )
     hashes = sbom["components"][0]["hashes"]
     assert len(hashes) == 1
