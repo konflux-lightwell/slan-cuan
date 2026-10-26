@@ -180,52 +180,6 @@ _MAVEN_REPO_URL_PREDISCLOSURE = os.environ.get(
 )
 
 
-def _read_sha256_sidecar(repo_dir: Path, relative_path: str) -> str | None:
-    """Read SHA-256 from a checksum sidecar file (.sha256).
-
-    ``repo_dir`` is the repository root (e.g.
-    ``workdir/<deliverable_dir>/repository``) so the sidecar is looked
-    up at the same Maven layout path as the artifact itself.
-    """
-    sidecar = repo_dir / f"{relative_path}.sha256"
-    if sidecar.exists():
-        content = sidecar.read_text().strip()
-        if content:
-            parts = content.split()
-            return parts[0] if parts else None
-    return None
-
-
-def _load_upstream_sbom(
-    repo_dir: Path | None,
-    group_id: str,
-    artifact_id: str,
-    version: str,
-) -> tuple[dict | None, Path | None]:
-    """Load the full upstream SBOM from the repository directory.
-
-    Searches for ``.bom.json`` (new PNC convention) then
-    ``.cyclonedx.json`` (legacy). Returns ``(parsed_dict, source_path)``
-    or ``(None, None)`` when no upstream SBOM is found.
-    """
-    if not repo_dir:
-        return None, None
-
-    gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
-    for suffix in (".bom.json", ".cyclonedx.json"):
-        candidate = gav_dir / f"{artifact_id}-{version}{suffix}"
-        if not candidate.exists():
-            continue
-        try:
-            with open(candidate) as f:
-                return json.load(f), candidate
-        except (json.JSONDecodeError, OSError):
-            continue
-    return None, None
-
-
-_DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
-
 # Namespace UUID for Lightwell SBOM serial numbers (uuid5 domain separation).
 _SBOM_SERIAL_NS = UUID("b8f5a1c2-7d3e-4f9a-a6b1-2c8d9e0f1a3b")
 
@@ -345,139 +299,18 @@ def _build_pedigree(
     }
 
 
-def _enrich_sbom(
-    upstream_sbom: dict | None,
-    group_id: str,
-    artifact_id: str,
-    version: str,
-    base_version: str,
-    cve_ids: list[str],
-    sha256_hash: str | None,
-    timestamp: str,
-    repo_url: str,
-) -> tuple[str, str, dict]:
-    """Enrich an upstream SBOM with pedigree, or generate one from scratch.
-
-    When an upstream SBOM exists, it is mutated in place — preserving
-    all upstream-produced fields (hashes, licenses, supplier, etc.)
-    and adding/updating pedigree, PURL ``repository_url``, and notes.
-
-    When no upstream SBOM exists, a minimal SBOM is generated from
-    scratch.
-
-    Returns ``(serial_number, bom_ref, sbom_dict)``.
-    """
-    from packageurl import PackageURL
-
-    purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
-    pedigree = _build_pedigree(
-        group_id, artifact_id, version, base_version, cve_ids
-    )
-
-    components = upstream_sbom.get("components", []) if upstream_sbom else []
-    if components and isinstance(components[0], dict):
-        # Enrich: mutate the upstream SBOM, preserving all existing fields.
-        sbom = upstream_sbom
-        comp = components[0]
-
-        # Derive enriched PURL from upstream, preserving type/classifier;
-        # only add/override repository_url.
-        upstream_purl_str = comp.get("purl", "")
-        try:
-            base_purl = PackageURL.from_string(upstream_purl_str)
-            q = dict(base_purl.qualifiers or {})
-            q["repository_url"] = repo_url
-            purl_qualified = PackageURL(
-                type=base_purl.type,
-                namespace=base_purl.namespace,
-                name=base_purl.name,
-                version=base_purl.version,
-                qualifiers=q,
-                subpath=base_purl.subpath,
-            ).to_string()
-        except ValueError:
-            purl_qualified = (
-                f"pkg:maven/{group_id}/{artifact_id}@{version}"
-                f"?repository_url={repo_url}&type=jar"
-            )
-        comp["purl"] = purl_qualified
-
-        # Add/replace pedigree
-        comp["pedigree"] = pedigree
-
-        # Add sidecar hash if upstream has no hashes
-        if sha256_hash and not comp.get("hashes"):
-            comp["hashes"] = [{"alg": "SHA-256", "content": sha256_hash}]
-
-        # Preserve existing bom-ref; fall back to bare PURL
-        bom_ref = comp.get("bom-ref") or purl_bare
-
-        # Content-derived serial: identical enrichment → identical serial.
-        serial_number = _content_derived_serial(sbom)
-        sbom["serialNumber"] = serial_number
-
-        # Preserve upstream timestamp when available; fall back to provided.
-        if "metadata" not in sbom:
-            sbom["metadata"] = {}
-        if not sbom["metadata"].get("timestamp"):
-            sbom["metadata"]["timestamp"] = timestamp
-        if not sbom["metadata"].get("supplier"):
-            sbom["metadata"]["supplier"] = _DEFAULT_SUPPLIER
-    else:
-        # Fallback: generate from scratch when no upstream SBOM exists.
-        # Default to type=jar; non-jar GAVs should have an upstream SBOM.
-        fallback_purl = PackageURL(
-            type="maven",
-            namespace=group_id,
-            name=artifact_id,
-            version=version,
-            qualifiers={"type": "jar", "repository_url": repo_url},
-        ).to_string()
-        bom_ref = purl_bare
-
-        hashes = []
-        if sha256_hash:
-            hashes.append({"alg": "SHA-256", "content": sha256_hash})
-
-        sbom = {
-            "bomFormat": "CycloneDX",
-            "specVersion": "1.7",
-            "serialNumber": "",
-            "version": 1,
-            "metadata": {
-                "timestamp": timestamp,
-                "supplier": _DEFAULT_SUPPLIER,
-            },
-            "components": [
-                {
-                    "type": "library",
-                    "bom-ref": bom_ref,
-                    "group": group_id,
-                    "name": artifact_id,
-                    "version": version,
-                    "purl": fallback_purl,
-                    "hashes": hashes,
-                    "licenses": [],
-                    "pedigree": pedigree,
-                }
-            ],
-        }
-        serial_number = _content_derived_serial(sbom)
-        sbom["serialNumber"] = serial_number
-
-    return serial_number, bom_ref, sbom
-
-
 def _generate_sboms_from_index(
     index_data: dict,
-    workdir: Path,
+    output_dir: Path,
     timestamp: str,
     explicit_repo_url: str | None = None,
 ) -> dict[str, str]:
-    """Generate per-artifact CycloneDX SBOMs from build-index data.
+    """Generate per-artifact pedigree sidecar files from build-index data.
 
-    SBOMs are written to the Maven GAV path inside the repository
-    directory so they publish to the Maven repo alongside JARs and POMs.
+    Writes pedigree sidecar JSON files to output_dir. The publish task
+    reads these sidecars and merges the enrichment data (pedigree, PURL
+    ``repository_url``, serial number) into the upstream SBOMs in the
+    signed repository tree.
 
     Returns a dict mapping PURL -> SBOM serialNumber for VEX
     cross-referencing.
@@ -490,27 +323,10 @@ def _generate_sboms_from_index(
     if ecosystem != "maven" or not purls:
         return sbom_serial_numbers
 
-    # Resolve the repository root via ExtractResult (shared with
-    # BuildOutput.from_extract_result in models.py).
-    result_path = workdir / EXTRACT_RESULT_FILENAME
-    if not result_path.exists():
-        raise click.ClickException(
-            "Extract result not found — cannot write SBOMs. "
-            "Check the workdir and extract result file."
-        )
-    er = ExtractResult.from_file(result_path)
-    try:
-        repo_dir = er.resolve_repo_dir(workdir)
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
-    if repo_dir is None:
-        raise click.ClickException(
-            "Repository directory not found — cannot write SBOMs. "
-            "Check the extract result and deliverable directory."
-        )
-
     version_info = index_data.get("version", {})
     upstream_version = version_info.get("upstream", "")
+
+    from packageurl import PackageURL
 
     for purl in purls:
         try:
@@ -530,78 +346,70 @@ def _generate_sboms_from_index(
         version = coord.version
         base_version = coord.base_version
 
-        # Load upstream SBOM (enrich if present, generate if absent)
-        upstream_sbom, upstream_sbom_path = _load_upstream_sbom(
-            repo_dir, group_id, artifact_id, version
-        )
-
-        # Derive artifact extension from upstream PURL when available;
-        # default to .jar for the sidecar hash lookup.
-        artifact_ext = "jar"
-        components = upstream_sbom.get("components", []) if upstream_sbom else []
-        if components and isinstance(components[0], dict):
-            try:
-                from packageurl import PackageURL
-
-                up = PackageURL.from_string(components[0].get("purl", ""))
-                artifact_ext = (up.qualifiers or {}).get("type", "jar")
-            except (ValueError, IndexError):
-                pass
-
-        # Read SHA-256 from sidecar if available
-        artifact_relative = (
-            f"{group_id.replace('.', '/')}/{artifact_id}"
-            f"/{version}/{artifact_id}-{version}.{artifact_ext}"
-        )
-        sha256_hash = (
-            _read_sha256_sidecar(repo_dir, artifact_relative)
-            if repo_dir
-            else None
-        )
+        # Guard against path traversal in sidecar filename.
+        for label, value in (
+            ("artifact_id", artifact_id),
+            ("version", version),
+        ):
+            if "/" in value or "\\" in value or ".." in value:
+                raise click.ClickException(
+                    f"{label} contains unsafe characters: {value!r}"
+                )
 
         repo_url = _resolve_repo_url(vulns, explicit_repo_url)
-
-        serial_number, used_bom_ref, sbom = _enrich_sbom(
-            upstream_sbom,
-            group_id,
-            artifact_id,
-            version,
-            base_version,
-            vulns,
-            sha256_hash,
-            timestamp,
-            repo_url,
+        pedigree = _build_pedigree(
+            group_id, artifact_id, version, base_version, vulns
         )
+
+        # Build the qualified PURL. Default to type=jar at generate
+        # time; publish derives the actual type from the upstream SBOM.
+        purl_qualified = PackageURL(
+            type="maven",
+            namespace=group_id,
+            name=artifact_id,
+            version=version,
+            qualifiers={"type": "jar", "repository_url": repo_url},
+        ).to_string()
+
+        purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
+
+        # Content-derived serial from the enrichment fields.
+        sidecar_sbom = {
+            "components": [
+                {
+                    "group": group_id,
+                    "name": artifact_id,
+                    "version": version,
+                    "purl": purl_qualified,
+                    "hashes": [],
+                    "licenses": [],
+                    "pedigree": pedigree,
+                }
+            ]
+        }
+        serial_number = _content_derived_serial(sidecar_sbom)
+
         sbom_serial_numbers[purl] = serial_number
-        # Also map the bom-ref form used in the SBOM so VEX
-        # cross-references resolve regardless of qualifier form.
-        if used_bom_ref != purl:
-            sbom_serial_numbers[used_bom_ref] = serial_number
+        if purl_bare != purl:
+            sbom_serial_numbers[purl_bare] = serial_number
 
-        # Write SBOM to the Maven GAV path in the repository directory.
-        gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
-        try:
-            gav_dir.resolve().relative_to(repo_dir.resolve())
-        except ValueError:
-            raise click.ClickException(
-                f"GAV path escapes repository directory: {gav_dir}"
-            )
-        gav_dir.mkdir(parents=True, exist_ok=True)
-        sbom_filename = f"{artifact_id}-{version}.bom.json"
-        sbom_path = gav_dir / sbom_filename
-        click.echo(f"Writing SBOM to {sbom_path}")
-        with open(sbom_path, "w") as f:
-            json.dump(sbom, f, indent=2)
-
-        # Remove legacy .cyclonedx.json if the enriched file is .bom.json
-        # to prevent shipping two conflicting SBOMs for the same GAV.
-        if (
-            upstream_sbom_path
-            and upstream_sbom_path != sbom_path
-            and upstream_sbom_path.exists()
-        ):
-            click.echo(f"Removing legacy SBOM {upstream_sbom_path.name}")
-            upstream_sbom_path.unlink()
+        # Write pedigree sidecar to output_dir.
+        sidecar_data = {
+            "group_id": group_id,
+            "artifact_id": artifact_id,
+            "version": version,
+            "base_version": base_version,
+            "repository_url": repo_url,
+            "pedigree": pedigree,
+            "serial_number": serial_number,
+            "purl_qualified": purl_qualified,
+            "timestamp": timestamp,
+        }
+        sidecar_filename = f"{group_id}.{artifact_id}-{version}.pedigree.json"
+        sidecar_path = output_dir / sidecar_filename
+        click.echo(f"Writing pedigree sidecar to {sidecar_path}")
+        with open(sidecar_path, "w") as f:
+            json.dump(sidecar_data, f, indent=2)
 
     return sbom_serial_numbers
 
@@ -872,7 +680,7 @@ def generate_security_metadata(
         with open(osv_output_path, "w") as f:
             json.dump(record, f, indent=2)
 
-    # Generate per-artifact CycloneDX SBOMs (build-index only, all builds)
+    # Generate pedigree sidecars (build-index only, all builds)
     # and VEX (gated on vulns — clean builds have no vulnerabilities to declare).
     sbom_serial_numbers: dict[str, str] = {}
     if _is_build_index(index_data):
@@ -886,7 +694,7 @@ def generate_security_metadata(
             ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         sbom_serial_numbers = _generate_sboms_from_index(
             index_data,
-            workdir,
+            output_dir,
             ts_now,
             explicit_repo_url=repository_url or None,
         )
