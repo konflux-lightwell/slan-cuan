@@ -32,11 +32,203 @@ from slan_cuan.pulp import (
 )
 from slan_cuan.utils import safe_json_load, write_tekton_result
 
+_DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
 _OSV_ID_PREFIX = "x_RHLW-"
 _DIAG_MAX_ENTRIES = 50
 _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
 GAV_INDEX_FILENAME = "gav-index.json"
+
+
+def _load_upstream_sbom(
+    repo_dir: Path,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+) -> tuple[dict | None, Path | None]:
+    """Load the upstream SBOM from the repository directory.
+
+    Searches for ``.bom.json`` (new PNC convention) then
+    ``.cyclonedx.json`` (legacy). Returns ``(parsed_dict, source_path)``
+    or ``(None, None)`` when no upstream SBOM is found.
+    """
+    gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
+    for suffix in (".bom.json", ".cyclonedx.json"):
+        candidate = gav_dir / f"{artifact_id}-{version}{suffix}"
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate) as f:
+                return json.load(f), candidate
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None, None
+
+
+def _apply_pedigree_enrichment(
+    extract_result: ExtractResult,
+    artifact_dir: Path,
+) -> None:
+    """Merge pedigree sidecars into upstream SBOMs in the repository tree.
+
+    Scans the security metadata directory for ``.pedigree.json`` files
+    produced by generate-security-metadata. For each sidecar:
+
+    1. Parse the sidecar for GAV coordinates and enrichment data.
+    2. Locate the upstream SBOM in ``repo_dir`` at the Maven GAV path.
+    3. Merge: add ``pedigree``, update PURL with ``repository_url``,
+       set ``serialNumber``. Preserve all other upstream fields.
+    4. Write the enriched SBOM back to the GAV path as ``.bom.json``.
+    5. Remove legacy ``.cyclonedx.json`` if the enriched file is
+       ``.bom.json``.
+    6. If no upstream SBOM exists, generate a minimal SBOM from scratch.
+    """
+    from packageurl import PackageURL
+
+    # Resolve security metadata directory.
+    security_metadata_dir: Path | None = None
+    if extract_result.security_metadata_dir:
+        candidate = artifact_dir / extract_result.security_metadata_dir
+        if candidate.is_dir():
+            security_metadata_dir = candidate
+    if security_metadata_dir is None:
+        fallback = artifact_dir / "security_metadata"
+        if fallback.is_dir():
+            security_metadata_dir = fallback
+    if security_metadata_dir is None:
+        return
+
+    # Resolve repository directory.
+    deliverable_path = artifact_dir / extract_result.deliverable_dir
+    repo_dir = deliverable_path / "repository"
+    if not repo_dir.is_dir():
+        return
+
+    sidecars = sorted(security_metadata_dir.glob("*.pedigree.json"))
+    if not sidecars:
+        return
+
+    click.echo(f"Applying pedigree enrichment for {len(sidecars)} artifact(s)")
+
+    for sidecar_path in sidecars:
+        try:
+            with open(sidecar_path) as f:
+                sidecar = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            click.echo(
+                f"Warning: skipping malformed sidecar {sidecar_path.name}: {exc}"
+            )
+            continue
+
+        group_id = sidecar["group_id"]
+        artifact_id = sidecar["artifact_id"]
+        version = sidecar["version"]
+        pedigree = sidecar["pedigree"]
+        serial_number = sidecar["serial_number"]
+        repo_url = sidecar["repository_url"]
+        purl_qualified = sidecar["purl_qualified"]
+        timestamp = sidecar.get("timestamp", "")
+
+        # GAV path — traversal guard.
+        gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
+        try:
+            gav_dir.resolve().relative_to(repo_dir.resolve())
+        except ValueError:
+            click.echo(
+                f"Warning: GAV path escapes repository tree for "
+                f"{group_id}:{artifact_id}:{version}; skipping"
+            )
+            continue
+        gav_dir.mkdir(parents=True, exist_ok=True)
+
+        sbom_filename = f"{artifact_id}-{version}.bom.json"
+        sbom_path = gav_dir / sbom_filename
+
+        # Load upstream SBOM.
+        upstream_sbom, upstream_path = _load_upstream_sbom(
+            repo_dir, group_id, artifact_id, version
+        )
+
+        components = upstream_sbom.get("components", []) if upstream_sbom else []
+        if components and isinstance(components[0], dict):
+            # Enrich: mutate upstream SBOM, preserving all existing fields.
+            comp = components[0]
+
+            # Derive enriched PURL from upstream, preserving
+            # type/classifier; only add/override repository_url.
+            upstream_purl_str = comp.get("purl", "")
+            try:
+                base_purl = PackageURL.from_string(upstream_purl_str)
+                q = dict(base_purl.qualifiers or {})
+                q["repository_url"] = repo_url
+                enriched_purl = PackageURL(
+                    type=base_purl.type,
+                    namespace=base_purl.namespace,
+                    name=base_purl.name,
+                    version=base_purl.version,
+                    qualifiers=q,
+                    subpath=base_purl.subpath,
+                ).to_string()
+            except ValueError:
+                enriched_purl = purl_qualified
+
+            comp["purl"] = enriched_purl
+            comp["pedigree"] = pedigree
+
+            upstream_sbom["serialNumber"] = serial_number
+            if "metadata" not in upstream_sbom:
+                upstream_sbom["metadata"] = {}
+            if not upstream_sbom["metadata"].get("timestamp"):
+                upstream_sbom["metadata"]["timestamp"] = timestamp
+            if not upstream_sbom["metadata"].get("supplier"):
+                upstream_sbom["metadata"]["supplier"] = _DEFAULT_SUPPLIER
+
+            click.echo(
+                f"Enriching upstream SBOM for {group_id}:{artifact_id}:{version}"
+            )
+            with open(sbom_path, "w") as f:
+                json.dump(upstream_sbom, f, indent=2)
+        else:
+            # Fallback: generate a minimal SBOM from scratch.
+            purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
+            sbom = {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.7",
+                "serialNumber": serial_number,
+                "version": 1,
+                "metadata": {
+                    "timestamp": timestamp,
+                    "supplier": _DEFAULT_SUPPLIER,
+                },
+                "components": [
+                    {
+                        "type": "library",
+                        "bom-ref": purl_bare,
+                        "group": group_id,
+                        "name": artifact_id,
+                        "version": version,
+                        "purl": purl_qualified,
+                        "hashes": [],
+                        "licenses": [],
+                        "pedigree": pedigree,
+                    }
+                ],
+            }
+            click.echo(
+                f"Generating SBOM from scratch for "
+                f"{group_id}:{artifact_id}:{version}"
+            )
+            with open(sbom_path, "w") as f:
+                json.dump(sbom, f, indent=2)
+
+        # Remove legacy .cyclonedx.json to prevent duplicate SBOMs.
+        if (
+            upstream_path
+            and upstream_path != sbom_path
+            and upstream_path.exists()
+        ):
+            click.echo(f"Removing legacy SBOM {upstream_path.name}")
+            upstream_path.unlink()
 
 
 def _verify_gav_index_attachment(attachment_files: list[str]) -> None:
@@ -864,6 +1056,11 @@ def publish(
     )
     try:
         extract_result = _validate_load_extract_result(ctx, artifact_dir)
+
+        # Merge pedigree sidecars into upstream SBOMs before building
+        # the artifact list so enriched SBOMs are discovered by the walk.
+        _apply_pedigree_enrichment(extract_result, artifact_dir)
+
         build = BuildOutput.from_extract_result(
             extract_result, artifact_dir, require_supply_chain_metadata
         )
@@ -887,7 +1084,9 @@ def publish(
 
         security_metadata_files = (
             tuple(
-                f for f in build.security_metadata_dir.rglob("*") if f.is_file()
+                f
+                for f in build.security_metadata_dir.rglob("*")
+                if f.is_file() and not f.name.endswith(".pedigree.json")
             )
             if build.security_metadata_dir
             else ()
