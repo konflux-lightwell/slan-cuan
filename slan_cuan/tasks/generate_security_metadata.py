@@ -201,15 +201,15 @@ def _load_upstream_sbom(
     group_id: str,
     artifact_id: str,
     version: str,
-) -> dict | None:
+) -> tuple[dict | None, Path | None]:
     """Load the full upstream SBOM from the repository directory.
 
     Searches for ``.bom.json`` (new PNC convention) then
-    ``.cyclonedx.json`` (legacy). Returns the parsed JSON dict,
-    or None when no upstream SBOM is found.
+    ``.cyclonedx.json`` (legacy). Returns ``(parsed_dict, source_path)``
+    or ``(None, None)`` when no upstream SBOM is found.
     """
     if not repo_dir:
-        return None
+        return None, None
 
     gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
     for suffix in (".bom.json", ".cyclonedx.json"):
@@ -218,10 +218,10 @@ def _load_upstream_sbom(
             continue
         try:
             with open(candidate) as f:
-                return json.load(f)
+                return json.load(f), candidate
         except (json.JSONDecodeError, OSError):
             continue
-    return None
+    return None, None
 
 
 _DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
@@ -234,10 +234,16 @@ def _content_derived_serial(sbom: dict) -> str:
     """Derive a deterministic serial number from SBOM semantic content.
 
     Hashes the artifact-semantic fields (component identity, hashes,
-    licenses, pedigree, repository_url) so that identical content
-    produces an identical serial. Excludes build-identity metadata
-    (serialNumber, timestamp, metadata.version) so a pure re-run of
-    the same build yields the same serial.
+    licenses, pedigree, and PURL including ``repository_url``) so that
+    identical content produces an identical serial. Excludes build-
+    identity metadata (serialNumber, timestamp, metadata.version) so a
+    pure re-run of the same build yields the same serial.
+
+    Note: the PURL embeds ``repository_url``, so identical content
+    published to different repos gets different serials. This is
+    intentional — the serial is scoped to one distribution target.
+    Only ``components[0]`` contributes to the hash (per-artifact SBOMs
+    have exactly one component).
     """
     components = sbom.get("components", [])
     if not components:
@@ -368,10 +374,11 @@ def _enrich_sbom(
         group_id, artifact_id, version, base_version, cve_ids
     )
 
-    if upstream_sbom and upstream_sbom.get("components"):
+    components = upstream_sbom.get("components", []) if upstream_sbom else []
+    if components and isinstance(components[0], dict):
         # Enrich: mutate the upstream SBOM, preserving all existing fields.
         sbom = upstream_sbom
-        comp = sbom["components"][0]
+        comp = components[0]
 
         # Derive enriched PURL from upstream, preserving type/classifier;
         # only add/override repository_url.
@@ -398,8 +405,12 @@ def _enrich_sbom(
         # Add/replace pedigree
         comp["pedigree"] = pedigree
 
+        # Add sidecar hash if upstream has no hashes
+        if sha256_hash and not comp.get("hashes"):
+            comp["hashes"] = [{"alg": "SHA-256", "content": sha256_hash}]
+
         # Preserve existing bom-ref; fall back to bare PURL
-        bom_ref = comp.get("bom-ref", purl_bare)
+        bom_ref = comp.get("bom-ref") or purl_bare
 
         # Content-derived serial: identical enrichment → identical serial.
         serial_number = _content_derived_serial(sbom)
@@ -520,20 +531,19 @@ def _generate_sboms_from_index(
         base_version = coord.base_version
 
         # Load upstream SBOM (enrich if present, generate if absent)
-        upstream_sbom = _load_upstream_sbom(
+        upstream_sbom, upstream_sbom_path = _load_upstream_sbom(
             repo_dir, group_id, artifact_id, version
         )
 
         # Derive artifact extension from upstream PURL when available;
         # default to .jar for the sidecar hash lookup.
         artifact_ext = "jar"
-        if upstream_sbom and upstream_sbom.get("components"):
+        components = upstream_sbom.get("components", []) if upstream_sbom else []
+        if components and isinstance(components[0], dict):
             try:
                 from packageurl import PackageURL
 
-                up = PackageURL.from_string(
-                    upstream_sbom["components"][0].get("purl", "")
-                )
+                up = PackageURL.from_string(components[0].get("purl", ""))
                 artifact_ext = (up.qualifiers or {}).get("type", "jar")
             except (ValueError, IndexError):
                 pass
@@ -582,6 +592,16 @@ def _generate_sboms_from_index(
         click.echo(f"Writing SBOM to {sbom_path}")
         with open(sbom_path, "w") as f:
             json.dump(sbom, f, indent=2)
+
+        # Remove legacy .cyclonedx.json if the enriched file is .bom.json
+        # to prevent shipping two conflicting SBOMs for the same GAV.
+        if (
+            upstream_sbom_path
+            and upstream_sbom_path != sbom_path
+            and upstream_sbom_path.exists()
+        ):
+            click.echo(f"Removing legacy SBOM {upstream_sbom_path.name}")
+            upstream_sbom_path.unlink()
 
     return sbom_serial_numbers
 
