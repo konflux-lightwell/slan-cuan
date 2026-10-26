@@ -361,10 +361,8 @@ def _enrich_sbom(
 
     Returns ``(serial_number, bom_ref, sbom_dict)``.
     """
-    purl_qualified = (
-        f"pkg:maven/{group_id}/{artifact_id}@{version}"
-        f"?type=jar&repository_url={repo_url}"
-    )
+    from packageurl import PackageURL
+
     purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
     pedigree = _build_pedigree(
         group_id, artifact_id, version, base_version, cve_ids
@@ -375,7 +373,26 @@ def _enrich_sbom(
         sbom = upstream_sbom
         comp = sbom["components"][0]
 
-        # Update PURL to include Lightwell repository_url
+        # Derive enriched PURL from upstream, preserving type/classifier;
+        # only add/override repository_url.
+        upstream_purl_str = comp.get("purl", "")
+        try:
+            base_purl = PackageURL.from_string(upstream_purl_str)
+            q = dict(base_purl.qualifiers or {})
+            q["repository_url"] = repo_url
+            purl_qualified = PackageURL(
+                type=base_purl.type,
+                namespace=base_purl.namespace,
+                name=base_purl.name,
+                version=base_purl.version,
+                qualifiers=q,
+                subpath=base_purl.subpath,
+            ).to_string()
+        except ValueError:
+            purl_qualified = (
+                f"pkg:maven/{group_id}/{artifact_id}@{version}"
+                f"?repository_url={repo_url}&type=jar"
+            )
         comp["purl"] = purl_qualified
 
         # Add/replace pedigree
@@ -397,6 +414,14 @@ def _enrich_sbom(
             sbom["metadata"]["supplier"] = _DEFAULT_SUPPLIER
     else:
         # Fallback: generate from scratch when no upstream SBOM exists.
+        # Default to type=jar; non-jar GAVs should have an upstream SBOM.
+        fallback_purl = PackageURL(
+            type="maven",
+            namespace=group_id,
+            name=artifact_id,
+            version=version,
+            qualifiers={"type": "jar", "repository_url": repo_url},
+        ).to_string()
         bom_ref = purl_bare
 
         hashes = []
@@ -419,7 +444,7 @@ def _enrich_sbom(
                     "group": group_id,
                     "name": artifact_id,
                     "version": version,
-                    "purl": purl_qualified,
+                    "purl": fallback_purl,
                     "hashes": hashes,
                     "licenses": [],
                     "pedigree": pedigree,
@@ -494,19 +519,36 @@ def _generate_sboms_from_index(
         version = coord.version
         base_version = coord.base_version
 
-        # Read SHA-256 from sidecar if available
-        jar_relative = (
-            f"{group_id.replace('.', '/')}/{artifact_id}"
-            f"/{version}/{artifact_id}-{version}.jar"
-        )
-        sha256_hash = (
-            _read_sha256_sidecar(repo_dir, jar_relative) if repo_dir else None
-        )
-
         # Load upstream SBOM (enrich if present, generate if absent)
         upstream_sbom = _load_upstream_sbom(
             repo_dir, group_id, artifact_id, version
         )
+
+        # Derive artifact extension from upstream PURL when available;
+        # default to .jar for the sidecar hash lookup.
+        artifact_ext = "jar"
+        if upstream_sbom and upstream_sbom.get("components"):
+            try:
+                from packageurl import PackageURL
+
+                up = PackageURL.from_string(
+                    upstream_sbom["components"][0].get("purl", "")
+                )
+                artifact_ext = (up.qualifiers or {}).get("type", "jar")
+            except (ValueError, IndexError):
+                pass
+
+        # Read SHA-256 from sidecar if available
+        artifact_relative = (
+            f"{group_id.replace('.', '/')}/{artifact_id}"
+            f"/{version}/{artifact_id}-{version}.{artifact_ext}"
+        )
+        sha256_hash = (
+            _read_sha256_sidecar(repo_dir, artifact_relative)
+            if repo_dir
+            else None
+        )
+
         repo_url = _resolve_repo_url(vulns, explicit_repo_url)
 
         serial_number, used_bom_ref, sbom = _enrich_sbom(
