@@ -1067,11 +1067,11 @@ def test_override_divergence_warning(
 # --- Regression tests for reviewer findings ---
 
 
-def test_clean_build_pedigree_sidecar(ctx: GlobalContext, tmp_path: Path) -> None:
-    """A clean build (no vulns) produces a pedigree sidecar in output_dir.
+def test_clean_build_enriched_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A clean build (no vulns) produces an enriched SBOM in enriched-sboms/.
 
-    The sidecar must have empty pedigree.patches and "validated build"
-    notes. No repo_dir is required.
+    The enriched SBOM must have empty pedigree.patches and "validated
+    build" notes. No repo_dir is required.
     """
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -1103,22 +1103,25 @@ def test_clean_build_pedigree_sidecar(ctx: GlobalContext, tmp_path: Path) -> Non
 
     assert result.exit_code == 0, result.output
 
-    sidecar_path = output_dir / "org.example.lib-1.0.0.rhlw-00001.pedigree.json"
-    assert sidecar_path.exists(), f"Expected sidecar at {sidecar_path}"
-    sidecar = json.loads(sidecar_path.read_text())
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists(), f"Expected enriched SBOM at {sbom_path}"
+    sbom = json.loads(sbom_path.read_text())
 
-    pedigree = sidecar["pedigree"]
+    assert sbom["bomFormat"] == "CycloneDX"
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
     assert pedigree["patches"] == []
     assert "validated build" in pedigree["notes"].lower()
     assert "remediation" not in pedigree["notes"].lower()
 
     # PURL must use the validated repository URL
-    assert "/validated/" in sidecar["purl_qualified"]
-    assert "/remediated/" not in sidecar["purl_qualified"]
-
-    # No full SBOMs in output_dir
-    bom_files = list(output_dir.glob("*.bom.json"))
-    assert bom_files == [], f"SBOMs must not appear in output_dir: {bom_files}"
+    assert "/validated/" in comp["purl"]
+    assert "/remediated/" not in comp["purl"]
 
 
 def test_clean_build_skips_vex(ctx: GlobalContext, tmp_path: Path) -> None:
@@ -1160,8 +1163,8 @@ def test_clean_build_skips_vex(ctx: GlobalContext, tmp_path: Path) -> None:
     mock_vex.assert_not_called()
 
 
-def test_remediation_pedigree_sidecar(ctx: GlobalContext, tmp_path: Path) -> None:
-    """Remediation builds produce a pedigree sidecar with correct notes."""
+def test_remediation_enriched_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
+    """Remediation builds produce an enriched SBOM with correct notes."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     data = {
@@ -1198,21 +1201,27 @@ def test_remediation_pedigree_sidecar(ctx: GlobalContext, tmp_path: Path) -> Non
     assert result.exit_code == 0, result.output
     mock_vex.assert_called_once()
 
-    sidecar_path = output_dir / "com.example.core-2.0.0.rhlw-00001.pedigree.json"
-    assert sidecar_path.exists(), f"Expected sidecar at {sidecar_path}"
-    sidecar = json.loads(sidecar_path.read_text())
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "com/example/core/2.0.0.rhlw-00001"
+        / "core-2.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists(), f"Expected enriched SBOM at {sbom_path}"
+    sbom = json.loads(sbom_path.read_text())
 
-    pedigree = sidecar["pedigree"]
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
     assert "backported security fixes" in pedigree["notes"].lower()
     assert len(pedigree["patches"]) == 1
     assert pedigree["patches"][0]["resolves"][0]["id"] == "CVE-2024-1234"
 
-    assert "/remediated/" in sidecar["purl_qualified"]
-    assert "/validated/" not in sidecar["purl_qualified"]
+    assert "/remediated/" in comp["purl"]
+    assert "/validated/" not in comp["purl"]
 
 
 def test_repo_dir_missing_succeeds(ctx: GlobalContext, tmp_path: Path) -> None:
-    """Generate succeeds without repository/ — sidecars go to output_dir."""
+    """Generate succeeds without repository/ — enriched SBOMs still written."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     data = {
@@ -1242,8 +1251,13 @@ def test_repo_dir_missing_succeeds(ctx: GlobalContext, tmp_path: Path) -> None:
         result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
-    sidecar = output_dir / "org.example.lib-1.0.0.rhlw-00001.pedigree.json"
-    assert sidecar.exists(), "Sidecar must be written without repo_dir"
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists(), "Enriched SBOM must be written without repo_dir"
 
 
 def test_lw_only_vulns_novel_notes(ctx: GlobalContext, tmp_path: Path) -> None:
@@ -1288,19 +1302,25 @@ def test_lw_only_vulns_novel_notes(ctx: GlobalContext, tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
 
-    sidecar_path = output_dir / "org.example.lib-1.0.0.rhlw-00001.pedigree.json"
-    assert sidecar_path.exists()
-    sidecar = json.loads(sidecar_path.read_text())
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists()
+    sbom = json.loads(sbom_path.read_text())
 
-    pedigree = sidecar["pedigree"]
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
     assert pedigree["patches"] == [], "LW- IDs must not appear in patches"
     assert "novel fix" in pedigree["notes"].lower()
     assert "embargoed" in pedigree["notes"].lower()
     assert "backported" not in pedigree["notes"].lower()
 
-    assert "/predisclosure/" in sidecar["purl_qualified"]
-    assert "/remediated/" not in sidecar["purl_qualified"]
-    assert "/validated/" not in sidecar["purl_qualified"]
+    assert "/predisclosure/" in comp["purl"]
+    assert "/remediated/" not in comp["purl"]
+    assert "/validated/" not in comp["purl"]
 
 
 def test_lw_only_vulns_calls_vex(ctx: GlobalContext, tmp_path: Path) -> None:
@@ -1381,14 +1401,20 @@ def test_mixed_cve_lw_build_uses_predisclosure(
 
     assert result.exit_code == 0, result.output
 
-    sidecar_path = output_dir / "org.example.lib-1.0.0.rhlw-00001.pedigree.json"
-    assert sidecar_path.exists()
-    sidecar = json.loads(sidecar_path.read_text())
-    pedigree = sidecar["pedigree"]
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists()
+    sbom = json.loads(sbom_path.read_text())
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
 
-    assert "/predisclosure/" in sidecar["purl_qualified"]
-    assert "/remediated/" not in sidecar["purl_qualified"]
-    assert "/validated/" not in sidecar["purl_qualified"]
+    assert "/predisclosure/" in comp["purl"]
+    assert "/remediated/" not in comp["purl"]
+    assert "/validated/" not in comp["purl"]
 
     assert "novel fix" in pedigree["notes"].lower()
     assert "embargoed" in pedigree["notes"].lower()
@@ -1431,24 +1457,122 @@ def test_multi_purl_generates_multiple_sidecars(
 
     assert result.exit_code == 0, result.output
 
-    core_sidecar = (
-        output_dir / "org.example.lib-core-1.0.0.rhlw-00001.pedigree.json"
+    core_sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib-core/1.0.0.rhlw-00001"
+        / "lib-core-1.0.0.rhlw-00001.bom.json"
     )
-    util_sidecar = (
-        output_dir / "org.example.lib-util-1.0.0.rhlw-00001.pedigree.json"
+    util_sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib-util/1.0.0.rhlw-00001"
+        / "lib-util-1.0.0.rhlw-00001.bom.json"
     )
-    assert core_sidecar.exists(), f"Expected sidecar at {core_sidecar}"
-    assert util_sidecar.exists(), f"Expected sidecar at {util_sidecar}"
+    assert core_sbom_path.exists(), f"Expected SBOM at {core_sbom_path}"
+    assert util_sbom_path.exists(), f"Expected SBOM at {util_sbom_path}"
 
-    core = json.loads(core_sidecar.read_text())
-    util = json.loads(util_sidecar.read_text())
-    assert core["artifact_id"] == "lib-core"
-    assert util["artifact_id"] == "lib-util"
-    assert core["serial_number"] != util["serial_number"]
+    core = json.loads(core_sbom_path.read_text())
+    util = json.loads(util_sbom_path.read_text())
+    assert core["components"][0]["name"] == "lib-core"
+    assert util["components"][0]["name"] == "lib-util"
+    assert core["serialNumber"] != util["serialNumber"]
+
+
+def test_upstream_sbom_enriched(ctx: GlobalContext, tmp_path: Path) -> None:
+    """When an upstream SBOM exists, its fields are preserved after enrichment."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "enrich-test",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    # Create an upstream SBOM in upstream-sboms/
+    upstream_sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "version": 1,
+        "metadata": {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "supplier": {"name": "PNC"},
+        },
+        "components": [
+            {
+                "type": "library",
+                "group": "org.example",
+                "name": "lib",
+                "version": "1.0.0.rhlw-00001",
+                "purl": (
+                    "pkg:maven/org.example/lib@1.0.0.rhlw-00001"
+                    "?type=jar"
+                ),
+                "hashes": [
+                    {"alg": "SHA-256", "content": "abc123upstream"}
+                ],
+                "licenses": [
+                    {"license": {"id": "Apache-2.0"}}
+                ],
+            }
+        ],
+    }
+    upstream_dir = (
+        workdir
+        / "upstream-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+    )
+    upstream_dir.mkdir(parents=True)
+    (upstream_dir / "lib-1.0.0.rhlw-00001.bom.json").write_text(
+        json.dumps(upstream_sbom)
+    )
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists()
+    sbom = json.loads(sbom_path.read_text())
+
+    # Upstream fields preserved
+    assert sbom["specVersion"] == "1.6"
+    comp = sbom["components"][0]
+    assert comp["hashes"] == [{"alg": "SHA-256", "content": "abc123upstream"}]
+    assert comp["licenses"] == [{"license": {"id": "Apache-2.0"}}]
+
+    # Enrichment applied
+    assert "pedigree" in comp
+    assert "validated build" in comp["pedigree"]["notes"].lower()
+    assert "/validated/" in comp["purl"]
+    assert "serialNumber" in sbom
 
 
 def test_version_traversal_rejected(ctx: GlobalContext, tmp_path: Path) -> None:
-    """A PURL with '..' in version is rejected by the sidecar guard."""
+    """A PURL with '..' in version is rejected by the enrichment guard."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     traversal_version = "..%2F..%2F..%2F..%2Fetc"
@@ -1528,14 +1652,17 @@ def test_osgi_qualified_version_sidecar(
 
     assert result.exit_code == 0, result.output
 
-    sidecar_path = (
+    sbom_path = (
         output_dir
-        / "io.netty.netty-codec-dns-4.1.132.Final-rhlw-00002.pedigree.json"
+        / "enriched-sboms"
+        / "io/netty/netty-codec-dns/4.1.132.Final-rhlw-00002"
+        / "netty-codec-dns-4.1.132.Final-rhlw-00002.bom.json"
     )
-    assert sidecar_path.exists(), f"Expected sidecar at {sidecar_path}"
-    sidecar = json.loads(sidecar_path.read_text())
+    assert sbom_path.exists(), f"Expected enriched SBOM at {sbom_path}"
+    sbom = json.loads(sbom_path.read_text())
 
-    pedigree = sidecar["pedigree"]
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
     ancestor = pedigree["ancestors"][0]
     assert ancestor["version"] == "4.1.132.Final"
     assert "rhlw" not in ancestor["version"]
@@ -1543,4 +1670,4 @@ def test_osgi_qualified_version_sidecar(
     assert "backported security fixes" in pedigree["notes"].lower()
     assert len(pedigree["patches"]) == 1
 
-    assert "/remediated/" in sidecar["purl_qualified"]
+    assert "/remediated/" in comp["purl"]
