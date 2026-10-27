@@ -145,7 +145,7 @@ spec:
         fi
 
         count=0
-        find "$ENRICHED_DIR" -name '*.bom.json' | while read -r enriched; do
+        while IFS= read -r enriched; do
           rel="${enriched#$ENRICHED_DIR/}"
 
           # Path-traversal guard: reject .. segments in relative path.
@@ -166,7 +166,7 @@ spec:
           fi
 
           count=$((count + 1))
-        done
+        done < <(find "$ENRICHED_DIR" -name '*.bom.json')
 
         # Re-zip in place.
         rm "$ZIP"
