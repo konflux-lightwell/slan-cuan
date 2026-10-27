@@ -34,6 +34,14 @@ spec:
       description: The directory to output the OSV and VEX documents to, which is the extracted directory + security_metadata.
       type: string
       default: $(params.WORKDIR)/security_metadata
+    - name: REPOSITORY_URL
+      description: >-
+        Distribution target URL for the SBOM PURL repository_url qualifier.
+        When set, overrides the vuln-based inference. Typically the Pulp
+        Maven distribution URL (e.g. https://packages.redhat.com/lightwell/java/remediated/).
+        Leave empty to use the default vuln-based routing.
+      type: string
+      default: ""
     - name: OSIDB_API_URL
       description: The URL of the OSIDB API to use for authentication on OSIDB.
       type: string
@@ -135,6 +143,8 @@ spec:
           value: $(params.OSIDB_KERBEROS_KEYTAB_PATH)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_KERBEROS_PRINCIPAL
           value: $(params.OSIDB_KERBEROS_PRINCIPAL)
+        - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_REPOSITORY_URL
+          value: $(params.REPOSITORY_URL)
         - name: SLAN_CUAN_GENERATE_SECURITY_METADATA_OSIDB_API_URL
           value: $(params.OSIDB_API_URL)
         - name: SLAN_CUAN_TEKTON_RESULTS_DIR
