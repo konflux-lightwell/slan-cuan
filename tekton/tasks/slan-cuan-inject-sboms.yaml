@@ -1,0 +1,204 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-inject-sboms
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Build
+    tekton.dev/displayName: "slan-cuan: Inject Enriched SBOMs"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,maven,sbom"
+spec:
+  description: >-
+    Inject enriched CycloneDX SBOMs from generate-security-metadata
+    into build-output.zip before signing. When no enriched SBOMs are
+    present, passes through the original signing artifact unchanged.
+  params:
+    - name: signingDataArtifact
+      description: >-
+        Trusted Artifact URI containing build-output.zip from extract.
+      type: string
+    - name: securityMetadataArtifact
+      description: >-
+        Trusted Artifact URI containing security metadata (enriched
+        SBOMs, OSV, VEX) from generate-security-metadata. When empty,
+        no injection occurs.
+      type: string
+      default: ""
+    - name: ZIP_ROOT_PATH
+      description: Root directory inside build-output.zip.
+      type: string
+      default: "repository"
+    - name: ociStorage
+      description: The OCI repository where the Trusted Artifact is stored.
+      type: string
+      default: "empty"
+    - name: orasOptions
+      description: oras options to pass to Trusted Artifacts calls.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: "trusted-ca"
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: "ca-bundle.crt"
+    - name: catalogGitUrl
+      description: The url to the git repo where the release-service-catalog stepactions are stored.
+      type: string
+      default: https://github.com/konflux-ci/release-service-catalog.git
+    - name: catalogGitRevision
+      description: The revision in the catalogGitUrl repo to be used.
+      type: string
+      default: production
+  results:
+    - name: signingDataArtifact
+      description: >-
+        Trusted Artifact URI of the (possibly modified) build-output.zip.
+        Passed to the sign task as its signingDataArtifact input.
+      type: string
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+      - name: trusted-ca
+        mountPath: /mnt/trusted-ca
+        readOnly: true
+    securityContext:
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+  steps:
+    - name: use-signing-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: /var/workdir/extracted
+        - name: sourceDataArtifact
+          value: $(params.signingDataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: use-security-metadata-artifact
+      when:
+        - input: $(params.securityMetadataArtifact)
+          operator: notin
+          values: [""]
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: /var/workdir/security-metadata
+        - name: sourceDataArtifact
+          value: $(params.securityMetadataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: inject-enriched-sboms
+      image: quay.io/konflux-ci/konflux-test:latest
+      env:
+        - name: ZIP_ROOT_PATH
+          value: $(params.ZIP_ROOT_PATH)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        ENRICHED_DIR="/var/workdir/security-metadata/enriched-sboms"
+        ZIP="/var/workdir/extracted/build-output.zip"
+        WORK="/tmp/inject-sboms"
+
+        if [ ! -d "$ENRICHED_DIR" ] || \
+           [ -z "$(find "$ENRICHED_DIR" -name '*.bom.json' 2>/dev/null | head -1)" ]; then
+          echo "No enriched SBOMs to inject; passing through original artifact"
+          exit 0
+        fi
+
+        echo "Injecting enriched SBOMs into build-output.zip"
+        mkdir -p "$WORK"
+        unzip -q "$ZIP" -d "$WORK"
+
+        # Zip-slip guard: reject entries that escaped the work tree.
+        if find "$WORK" -path '*/..*' -print -quit | grep -q .; then
+          echo "ERROR: zip-slip detected in build-output.zip" >&2
+          exit 1
+        fi
+
+        count=0
+        while IFS= read -r enriched; do
+          rel="${enriched#$ENRICHED_DIR/}"
+
+          # Path-traversal guard: reject .. segments in relative path.
+          if [[ "$rel" == *".."* ]]; then
+            echo "ERROR: path traversal in enriched SBOM path: $rel" >&2
+            exit 1
+          fi
+
+          target="$WORK/${ZIP_ROOT_PATH}/$rel"
+          mkdir -p "$(dirname "$target")"
+          cp "$enriched" "$target"
+
+          # Remove legacy .cyclonedx.json at the same GAV path.
+          legacy="${target%.bom.json}.cyclonedx.json"
+          if [ -f "$legacy" ]; then
+            echo "  Removing legacy $(basename "$legacy")"
+            rm "$legacy"
+          fi
+
+          count=$((count + 1))
+        done < <(find "$ENRICHED_DIR" -name '*.bom.json')
+
+        # Re-zip in place.
+        rm "$ZIP"
+        (cd "$WORK" && zip -qr "$ZIP" .)
+        rm -rf "$WORK"
+
+        echo "Injected $count enriched SBOMs into build-output.zip"
+    - name: create-trusted-artifact
+      ref:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: /var/workdir/extracted
+        - name: sourceDataArtifact
+          value: $(results.signingDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        optional: true

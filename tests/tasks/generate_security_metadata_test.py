@@ -66,8 +66,12 @@ def _create_index_file(directory: Path, name: str = "gav-index.json") -> Path:
     return path
 
 
-def _create_extract_result(workdir: Path) -> None:
-    """Write a minimal extract-result.json into *workdir*."""
+def _create_extract_result(workdir: Path, create_repo: bool = False) -> None:
+    """Write a minimal extract-result.json into *workdir*.
+
+    When *create_repo* is True, also create the ``repository/``
+    subdirectory so that ``repo_dir`` resolves in production code.
+    """
     data = {
         "image": {
             "registry": "quay.io",
@@ -84,6 +88,9 @@ def _create_extract_result(workdir: Path) -> None:
     }
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / EXTRACT_RESULT_FILENAME).write_text(json.dumps(data, indent=2))
+    if create_repo:
+        repo_dir = workdir / "TEST-build-output" / "repository"
+        repo_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _invoke(
@@ -1060,13 +1067,11 @@ def test_override_divergence_warning(
 # --- Regression tests for reviewer findings ---
 
 
-def test_clean_build_index_produces_no_sbom(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
-    """A build-index with no vulns must produce zero .bom.json files.
+def test_clean_build_enriched_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A clean build (no vulns) produces an enriched SBOM in enriched-sboms/.
 
-    Regression for finding #1: SBOM generation on clean builds
-    caused publish to raise ValueError.
+    The enriched SBOM must have empty pedigree.patches and "validated
+    build" notes. No repo_dir is required.
     """
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -1079,14 +1084,14 @@ def test_clean_build_index_produces_no_sbom(
             "b": 1,
             "n": 0,
         },
-        "primaryPurl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001"),
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
         "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
         "vulns": [],
     }
     (index_dir / "gav-index.json").write_text(json.dumps(data))
 
     workdir = tmp_path / "workdir"
-    _create_extract_result(workdir)
+    _create_extract_result(workdir, create_repo=False)
     output_dir = workdir / "security_metadata"
 
     with patch(
@@ -1097,42 +1102,572 @@ def test_clean_build_index_produces_no_sbom(
         result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
-    bom_files = list(output_dir.glob("*.bom.json"))
-    assert bom_files == [], f"Clean build must not produce .bom.json: {bom_files}"
+
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists(), f"Expected enriched SBOM at {sbom_path}"
+    sbom = json.loads(sbom_path.read_text())
+
+    assert sbom["bomFormat"] == "CycloneDX"
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
+    assert pedigree["patches"] == []
+    assert "validated build" in pedigree["notes"].lower()
+    assert "remediation" not in pedigree["notes"].lower()
+
+    # PURL must use the validated repository URL
+    assert "/validated/" in comp["purl"]
+    assert "/remediated/" not in comp["purl"]
 
 
-def test_sidecar_present_populates_hashes(tmp_path: Path) -> None:
-    """When a .sha256 sidecar exists, the SBOM hashes[] is non-empty.
+def test_clean_build_skips_vex(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A clean build (no vulns) must not call _generate_vex_from_index."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "clean-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
 
-    Regression for finding #2: sidecar path was wrong, hashes
-    were always empty.
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    mock_vex.assert_not_called()
+
+
+def test_remediation_enriched_sbom(ctx: GlobalContext, tmp_path: Path) -> None:
+    """Remediation builds produce an enriched SBOM with correct notes."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "remediation-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "2.0.0",
+            "full": "2.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": "pkg:maven/com.example/core@2.0.0.rhlw-00001",
+        "purls": ["pkg:maven/com.example/core@2.0.0.rhlw-00001"],
+        "vulns": ["CVE-2024-1234"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    mock_vex.assert_called_once()
+
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "com/example/core/2.0.0.rhlw-00001"
+        / "core-2.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists(), f"Expected enriched SBOM at {sbom_path}"
+    sbom = json.loads(sbom_path.read_text())
+
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
+    assert "backported security fixes" in pedigree["notes"].lower()
+    assert len(pedigree["patches"]) == 1
+    assert pedigree["patches"][0]["resolves"][0]["id"] == "CVE-2024-1234"
+
+    assert "/remediated/" in comp["purl"]
+    assert "/validated/" not in comp["purl"]
+
+
+def test_repo_dir_missing_succeeds(ctx: GlobalContext, tmp_path: Path) -> None:
+    """Generate succeeds without repository/ — enriched SBOMs still written."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "no-repo-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists(), "Enriched SBOM must be written without repo_dir"
+
+
+def test_lw_only_vulns_novel_notes(ctx: GlobalContext, tmp_path: Path) -> None:
+    """LW-only vulns produce novel-fix notes with empty patches.
+
+    LW- IDs denote embargoed/novel fixes, not backports of publicly
+    disclosed CVEs. The pedigree notes must say "novel fix," and
+    LW- IDs are excluded from patches (no NVD entry).
     """
-    from slan_cuan.tasks.generate_security_metadata import (
-        _generate_sbom,
-        _read_sha256_sidecar,
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "novel-only-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["LW-novel-001"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists()
+    sbom = json.loads(sbom_path.read_text())
+
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
+    assert pedigree["patches"] == [], "LW- IDs must not appear in patches"
+    assert "novel fix" in pedigree["notes"].lower()
+    assert "embargoed" in pedigree["notes"].lower()
+    assert "backported" not in pedigree["notes"].lower()
+
+    assert "/predisclosure/" in comp["purl"]
+    assert "/remediated/" not in comp["purl"]
+    assert "/validated/" not in comp["purl"]
+
+
+def test_lw_only_vulns_calls_vex(ctx: GlobalContext, tmp_path: Path) -> None:
+    """LW-only builds (truthy vulns) must still invoke VEX generation."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "novel-vex-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["LW-novel-001"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    mock_vex.assert_called_once()
+
+
+def test_mixed_cve_lw_build_uses_predisclosure(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """Mixed CVE+LW build is contaminated — predisclosure only."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "mixed-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 1,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["CVE-2024-1234", "LW-novel-001"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
+    )
+    assert sbom_path.exists()
+    sbom = json.loads(sbom_path.read_text())
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
+
+    assert "/predisclosure/" in comp["purl"]
+    assert "/remediated/" not in comp["purl"]
+    assert "/validated/" not in comp["purl"]
+
+    assert "novel fix" in pedigree["notes"].lower()
+    assert "embargoed" in pedigree["notes"].lower()
+
+
+def test_multi_purl_generates_multiple_sidecars(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A build index with multiple purls produces one sidecar per artifact."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "multi-purl-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib-core@1.0.0.rhlw-00001",
+        "purls": [
+            "pkg:maven/org.example/lib-core@1.0.0.rhlw-00001",
+            "pkg:maven/org.example/lib-util@1.0.0.rhlw-00001",
+        ],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    core_sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib-core/1.0.0.rhlw-00001"
+        / "lib-core-1.0.0.rhlw-00001.bom.json"
+    )
+    util_sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib-util/1.0.0.rhlw-00001"
+        / "lib-util-1.0.0.rhlw-00001.bom.json"
+    )
+    assert core_sbom_path.exists(), f"Expected SBOM at {core_sbom_path}"
+    assert util_sbom_path.exists(), f"Expected SBOM at {util_sbom_path}"
+
+    core = json.loads(core_sbom_path.read_text())
+    util = json.loads(util_sbom_path.read_text())
+    assert core["components"][0]["name"] == "lib-core"
+    assert util["components"][0]["name"] == "lib-util"
+    assert core["serialNumber"] != util["serialNumber"]
+
+
+def test_upstream_sbom_enriched(ctx: GlobalContext, tmp_path: Path) -> None:
+    """When an upstream SBOM exists, its fields are preserved after enrichment."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "enrich-test",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    # Create an upstream SBOM in upstream-sboms/
+    upstream_sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "version": 1,
+        "metadata": {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "supplier": {"name": "PNC"},
+        },
+        "components": [
+            {
+                "type": "library",
+                "group": "org.example",
+                "name": "lib",
+                "version": "1.0.0.rhlw-00001",
+                "purl": (
+                    "pkg:maven/org.example/lib@1.0.0.rhlw-00001"
+                    "?type=jar"
+                ),
+                "hashes": [
+                    {"alg": "SHA-256", "content": "abc123upstream"}
+                ],
+                "licenses": [
+                    {"license": {"id": "Apache-2.0"}}
+                ],
+            }
+        ],
+    }
+    upstream_dir = (
+        workdir
+        / "upstream-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+    )
+    upstream_dir.mkdir(parents=True)
+    (upstream_dir / "lib-1.0.0.rhlw-00001.bom.json").write_text(
+        json.dumps(upstream_sbom)
     )
 
-    repo_dir = tmp_path / "com" / "example" / "lib" / "1.0.0.rhlw-00001"
-    repo_dir.mkdir(parents=True)
-    sidecar = repo_dir / "lib-1.0.0.rhlw-00001.jar.sha256"
-    sidecar.write_text("abcd1234deadbeef  lib-1.0.0.rhlw-00001.jar")
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
-    result = _read_sha256_sidecar(
-        tmp_path,
-        "com/example/lib/1.0.0.rhlw-00001/lib-1.0.0.rhlw-00001.jar",
-    )
-    assert result == "abcd1234deadbeef"
+    assert result.exit_code == 0, result.output
 
-    _, _, sbom = _generate_sbom(
-        group_id="com.example",
-        artifact_id="lib",
-        version="1.0.0.rhlw-00001",
-        base_version="1.0.0",
-        cve_ids=["CVE-2024-0001"],
-        sha256_hash=result,
-        timestamp="2026-01-01T00:00:00Z",
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "org/example/lib/1.0.0.rhlw-00001"
+        / "lib-1.0.0.rhlw-00001.bom.json"
     )
-    hashes = sbom["components"][0]["hashes"]
-    assert len(hashes) == 1
-    assert hashes[0]["alg"] == "SHA-256"
-    assert hashes[0]["content"] == "abcd1234deadbeef"
+    assert sbom_path.exists()
+    sbom = json.loads(sbom_path.read_text())
+
+    # Upstream fields preserved
+    assert sbom["specVersion"] == "1.6"
+    comp = sbom["components"][0]
+    assert comp["hashes"] == [{"alg": "SHA-256", "content": "abc123upstream"}]
+    assert comp["licenses"] == [{"license": {"id": "Apache-2.0"}}]
+
+    # Enrichment applied
+    assert "pedigree" in comp
+    assert "validated build" in comp["pedigree"]["notes"].lower()
+    assert "/validated/" in comp["purl"]
+    assert "serialNumber" in sbom
+
+
+def test_version_traversal_rejected(ctx: GlobalContext, tmp_path: Path) -> None:
+    """A PURL with '..' in version is rejected by the enrichment guard."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    traversal_version = "..%2F..%2F..%2F..%2Fetc"
+    data = {
+        "buildId": "traversal-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "../../../../etc",
+            "b": 0,
+            "n": 0,
+        },
+        "primaryPurl": f"pkg:maven/org.example/artifact@{traversal_version}",
+        "purls": [f"pkg:maven/org.example/artifact@{traversal_version}"],
+        "vulns": [],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_osv",
+        return_value=[],
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code != 0, "Should reject unsafe version"
+    assert "unsafe characters" in result.output.lower()
+
+
+def test_osgi_qualified_version_sidecar(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """OSGi-qualified versions (hyphen rhlw suffix) produce correct sidecars.
+
+    ADR-0026 §1.1: versions like 4.1.132.Final use a hyphen separator
+    (4.1.132.Final-rhlw-00002) because the qualifier already occupies
+    the fourth dot segment.
+    """
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "osgi-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "4.1.132.Final",
+            "full": "4.1.132.Final-rhlw-00002",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": (
+            "pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"
+        ),
+        "purls": ["pkg:maven/io.netty/netty-codec-dns@4.1.132.Final-rhlw-00002"],
+        "vulns": ["CVE-2025-99999"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+
+    sbom_path = (
+        output_dir
+        / "enriched-sboms"
+        / "io/netty/netty-codec-dns/4.1.132.Final-rhlw-00002"
+        / "netty-codec-dns-4.1.132.Final-rhlw-00002.bom.json"
+    )
+    assert sbom_path.exists(), f"Expected enriched SBOM at {sbom_path}"
+    sbom = json.loads(sbom_path.read_text())
+
+    comp = sbom["components"][0]
+    pedigree = comp["pedigree"]
+    ancestor = pedigree["ancestors"][0]
+    assert ancestor["version"] == "4.1.132.Final"
+    assert "rhlw" not in ancestor["version"]
+
+    assert "backported security fixes" in pedigree["notes"].lower()
+    assert len(pedigree["patches"]) == 1
+
+    assert "/remediated/" in comp["purl"]

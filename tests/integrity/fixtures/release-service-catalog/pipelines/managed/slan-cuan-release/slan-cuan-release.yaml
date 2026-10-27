@@ -409,6 +409,39 @@ spec:
       runAfter:
         - collect-data
 
+    - name: inject-enriched-sboms
+      taskRef:
+        resolver: "git"
+        params:
+          - name: url
+            value: $(params.slanCuanGitUrl)
+          - name: revision
+            value: $(params.slanCuanGitRevision)
+          - name: pathInRepo
+            value: tekton/tasks/slan-cuan-inject-sboms.yaml
+      runAfter:
+        - extract
+        - generate-security-metadata
+      params:
+        - name: signingDataArtifact
+          value: $(tasks.extract.results.signingDataArtifact)
+        - name: securityMetadataArtifact
+          value: $(tasks.generate-security-metadata.results.securityMetadataArtifact)
+        - name: ZIP_ROOT_PATH
+          value: $(params.zip-root-path)
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caTrustConfigMapName
+          value: $(params.caTrustConfigMapName)
+        - name: caTrustConfigMapKey
+          value: $(params.caTrustConfigMapKey)
+        - name: catalogGitUrl
+          value: $(params.taskGitUrl)
+        - name: catalogGitRevision
+          value: $(params.taskGitRevision)
+
     - name: sign
       taskRef:
         resolver: "git"
@@ -424,6 +457,8 @@ spec:
         - collect-task-params
         - verify-conforma
         - extract-requester-from-release
+        - inject-enriched-sboms
+        - generate-security-metadata
       params:
         - name: REGISTRY_AUTH_SECRET
           value: $(params.registry-auth-secret)
@@ -446,7 +481,7 @@ spec:
         - name: sourceDataArtifact
           value: $(tasks.extract.results.sourceDataArtifact)
         - name: signingDataArtifact
-          value: $(tasks.extract.results.signingDataArtifact)
+          value: $(tasks.inject-enriched-sboms.results.signingDataArtifact)
         - name: ociStorage
           value: $(params.ociStorage)
         - name: orasOptions
@@ -478,6 +513,8 @@ spec:
       params:
         - name: INDEX_BASEDIR
           value: "$(tasks.extract.results.ATTACHMENT_DIR)"
+        - name: REPOSITORY_URL
+          value: "$(tasks.collect-task-params.results.extractedValues[0])/pulp/maven/$(tasks.collect-task-params.results.extractedValues[1])/"
         - name: OSIDB_API_URL
           value: $(tasks.collect-task-params.results.extractedValues[8])
         - name: OSIDB_KERBEROS_PRINCIPAL

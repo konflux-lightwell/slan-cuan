@@ -398,6 +398,13 @@ class BuildOutput:
 
         """
         deliverable_path = output_dir / result.deliverable_dir
+        try:
+            deliverable_path.resolve().relative_to(output_dir.resolve())
+        except ValueError:
+            raise ValueError(
+                f"deliverable_dir escapes artifact directory: "
+                f"{result.deliverable_dir!r}"
+            )
         repo_dir = deliverable_path / "repository"
 
         security_metadata_path: Path | None = None
@@ -611,6 +618,22 @@ class ExtractResult:
             extracted_at=data["extracted_at"],
             attachment_files=data.get("attachment_files", []),
         )
+
+    def resolve_repo_dir(self, base_dir: Path) -> Path | None:
+        """Resolve the Maven repository directory from this extract result.
+
+        Returns the path if it exists as a directory, otherwise None.
+        Raises ValueError if deliverable_dir escapes base_dir.
+        """
+        candidate = base_dir / self.deliverable_dir / "repository"
+        try:
+            candidate.resolve().relative_to(base_dir.resolve())
+        except ValueError:
+            raise ValueError(
+                f"deliverable_dir escapes base directory: "
+                f"{self.deliverable_dir!r}"
+            )
+        return candidate if candidate.is_dir() else None
 
     def save(self, path: Path) -> None:
         """Write JSON to file.

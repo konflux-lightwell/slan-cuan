@@ -32,11 +32,37 @@ from slan_cuan.pulp import (
 )
 from slan_cuan.utils import safe_json_load, write_tekton_result
 
+_DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
 _OSV_ID_PREFIX = "x_RHLW-"
 _DIAG_MAX_ENTRIES = 50
 _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
 GAV_INDEX_FILENAME = "gav-index.json"
+
+
+def _load_upstream_sbom(
+    repo_dir: Path,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+) -> tuple[dict | None, Path | None]:
+    """Load the upstream SBOM from the repository directory.
+
+    Searches for ``.bom.json`` (new PNC convention) then
+    ``.cyclonedx.json`` (legacy). Returns ``(parsed_dict, source_path)``
+    or ``(None, None)`` when no upstream SBOM is found.
+    """
+    gav_dir = repo_dir / group_id.replace(".", "/") / artifact_id / version
+    for suffix in (".bom.json", ".cyclonedx.json"):
+        candidate = gav_dir / f"{artifact_id}-{version}{suffix}"
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate) as f:
+                return json.load(f), candidate
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None, None
 
 
 def _verify_gav_index_attachment(attachment_files: list[str]) -> None:
@@ -275,12 +301,33 @@ def _classify_osv_source(file_path: Path) -> str | None:
     return _source_from_osv_id(file_path.stem)
 
 
+def _source_from_vuln_id(vuln_id: str) -> str | None:
+    """Classify a raw vulnerability ID by prefix.
+
+    Handles both OSV-format IDs (``RHLW-*``, ``x_RHLW-*``) and raw
+    CVE/LW IDs found in CycloneDX documents.
+    """
+    osv_result = _source_from_osv_id(vuln_id)
+    if osv_result is not None:
+        return osv_result
+    if vuln_id.startswith("CVE-"):
+        return "pnc-build"
+    if vuln_id.startswith("LW-"):
+        return "novel-pipeline"
+    return None
+
+
+def _source_from_vuln_id_has_embargo(vulns: tuple[str, ...] | list[str]) -> bool:
+    """Return True if any vulnerability ID indicates embargoed content."""
+    return any(v.startswith("LW-") for v in vulns)
+
+
 def _classify_cdx_source(record: dict[str, Any], file_path: Path) -> str | None:
-    """Classify a CycloneDX SBOM or VEX by its CVE content.
+    """Classify a CycloneDX SBOM or VEX by its vulnerability content.
 
     VEX: extracts vuln IDs from ``vulnerabilities[].id``.
     SBOM: extracts vuln IDs from ``pedigree.patches[].resolves[].id``.
-    Classifies using ``_source_from_osv_id`` (CVE- -> pnc-build,
+    Classifies using ``_source_from_vuln_id`` (CVE- -> pnc-build,
     LW- -> novel-pipeline). Returns None when no IDs are found.
     """
     ids: list[str] = []
@@ -307,22 +354,23 @@ def _classify_cdx_source(record: dict[str, Any], file_path: Path) -> str | None:
                         ids.append(rid)
 
     if not ids:
-        # Filename may carry a CVE prefix (e.g. CVE-2024-1234-...)
         stem = file_path.stem
         if stem.endswith(".bom"):
             stem = stem[: -len(".bom")]
-        by_stem = _source_from_osv_id(stem)
+        by_stem = _source_from_vuln_id(stem)
         if by_stem:
             return by_stem
         return None
 
-    sources = {_source_from_osv_id(i) for i in ids} - {None}
+    sources = {_source_from_vuln_id(i) for i in ids} - {None}
     if len(sources) == 1:
         return sources.pop()
     if not sources:
         return None
-    # Mixed sources — default to pnc-build (CVE backports are
-    # the dominant case; novel-only VEX is less common).
+    # Mixed sources — any novel-pipeline presence contaminates
+    # the document (embargo rule: LW- takes precedence).
+    if "novel-pipeline" in sources:
+        return "novel-pipeline"
     return "pnc-build"
 
 
@@ -842,6 +890,7 @@ def publish(
     )
     try:
         extract_result = _validate_load_extract_result(ctx, artifact_dir)
+
         build = BuildOutput.from_extract_result(
             extract_result, artifact_dir, require_supply_chain_metadata
         )
@@ -850,9 +899,28 @@ def publish(
         vulns = _gav_index_vulnerabilities(
             extract_result.attachment_files, artifact_dir
         )
+
+        # Embargo safety: LW- IDs indicate embargoed content that must
+        # only publish to predisclosure repos. Reject if the target
+        # Maven repo name does not contain "predisclosure".
+        has_lw = _source_from_vuln_id_has_embargo(vulns)
+        if has_lw and "predisclosure" not in pulp_repository.lower():
+            raise click.ClickException(
+                f"Build contains embargoed (LW-) vulnerabilities but "
+                f"--pulp-repository '{pulp_repository}' is not a "
+                f"predisclosure repository. Aborting to prevent "
+                f"disclosure of embargoed content."
+            )
+
         security_metadata_files = (
             tuple(
-                f for f in build.security_metadata_dir.rglob("*") if f.is_file()
+                f
+                for f in build.security_metadata_dir.rglob("*")
+                if f.is_file()
+                and not f.name.endswith(".pedigree.json")
+                and "enriched-sboms" not in f.relative_to(
+                    build.security_metadata_dir
+                ).parts
             )
             if build.security_metadata_dir
             else ()
