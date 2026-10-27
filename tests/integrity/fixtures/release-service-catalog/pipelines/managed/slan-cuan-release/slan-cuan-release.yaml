@@ -513,6 +513,8 @@ spec:
       params:
         - name: INDEX_BASEDIR
           value: "$(tasks.extract.results.ATTACHMENT_DIR)"
+        - name: REPOSITORY_URL
+          value: "$(tasks.collect-task-params.results.extractedValues[0])/pulp/maven/$(tasks.collect-task-params.results.extractedValues[1])/"
         - name: OSIDB_API_URL
           value: $(tasks.collect-task-params.results.extractedValues[8])
         - name: OSIDB_KERBEROS_PRINCIPAL
