@@ -166,6 +166,8 @@ def _warn_override_divergence(override_id: str, index_data: dict) -> None:
         )
 
 
+_DEFAULT_SUPPLIER = {"name": "Red Hat Lightwell"}
+
 _MAVEN_REPO_URL_REMEDIATED = os.environ.get(
     "SLAN_CUAN_REPOSITORY_URL_MAVEN_REMEDIATED",
     "https://packages.redhat.com/lightwell/java/remediated/",
@@ -299,18 +301,132 @@ def _build_pedigree(
     }
 
 
+def _load_upstream_sbom(
+    upstream_sboms_dir: Path,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+) -> tuple[dict | None, Path | None]:
+    """Load an upstream SBOM from the upstream-sboms directory.
+
+    Searches for ``.bom.json`` (PNC convention) then ``.cyclonedx.json``
+    (legacy) at the GAV-relative path. Returns ``(parsed_dict,
+    source_path)`` or ``(None, None)`` when no upstream SBOM is found.
+    """
+    gav_dir = (
+        upstream_sboms_dir / group_id.replace(".", "/") / artifact_id / version
+    )
+    for suffix in (".bom.json", ".cyclonedx.json"):
+        candidate = gav_dir / f"{artifact_id}-{version}{suffix}"
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate) as f:
+                return json.load(f), candidate
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None, None
+
+
+def _enrich_sbom(
+    upstream_sbom: dict | None,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+    pedigree: dict,
+    repo_url: str,
+    purl_qualified: str,
+    serial_number: str,
+    timestamp: str,
+) -> dict:
+    """Enrich an upstream SBOM or generate a minimal one from scratch.
+
+    When *upstream_sbom* has components, mutates it in place: sets
+    ``pedigree``, updates the PURL with ``repository_url``, and sets
+    ``serialNumber``. All other upstream fields are preserved.
+
+    When no upstream SBOM is available (or its components list is
+    empty/malformed), generates a minimal CycloneDX 1.7 SBOM.
+    """
+    from packageurl import PackageURL
+
+    components = upstream_sbom.get("components", []) if upstream_sbom else []
+
+    if components and isinstance(components[0], dict):
+        comp = components[0]
+
+        # Derive enriched PURL from upstream, preserving type/classifier.
+        upstream_purl_str = comp.get("purl", "")
+        try:
+            base_purl = PackageURL.from_string(upstream_purl_str)
+            q = dict(base_purl.qualifiers or {})
+            q["repository_url"] = repo_url
+            enriched_purl = PackageURL(
+                type=base_purl.type,
+                namespace=base_purl.namespace,
+                name=base_purl.name,
+                version=base_purl.version,
+                qualifiers=q,
+                subpath=base_purl.subpath,
+            ).to_string()
+        except ValueError:
+            enriched_purl = purl_qualified
+
+        comp["purl"] = enriched_purl
+        comp["pedigree"] = pedigree
+
+        upstream_sbom["serialNumber"] = serial_number
+        if "metadata" not in upstream_sbom:
+            upstream_sbom["metadata"] = {}
+        if not upstream_sbom["metadata"].get("timestamp"):
+            upstream_sbom["metadata"]["timestamp"] = timestamp
+        if not upstream_sbom["metadata"].get("supplier"):
+            upstream_sbom["metadata"]["supplier"] = _DEFAULT_SUPPLIER
+
+        return upstream_sbom
+
+    # Fallback: generate a minimal SBOM from scratch.
+    purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.7",
+        "serialNumber": serial_number,
+        "version": 1,
+        "metadata": {
+            "timestamp": timestamp,
+            "supplier": _DEFAULT_SUPPLIER,
+        },
+        "components": [
+            {
+                "type": "library",
+                "bom-ref": purl_bare,
+                "group": group_id,
+                "name": artifact_id,
+                "version": version,
+                "purl": purl_qualified,
+                "hashes": [],
+                "licenses": [],
+                "pedigree": pedigree,
+            }
+        ],
+    }
+
+
 def _generate_sboms_from_index(
     index_data: dict,
     output_dir: Path,
     timestamp: str,
+    upstream_sboms_dir: Path | None = None,
     explicit_repo_url: str | None = None,
 ) -> dict[str, str]:
-    """Generate per-artifact pedigree sidecar files from build-index data.
+    """Generate per-artifact enriched CycloneDX SBOMs from build-index data.
 
-    Writes pedigree sidecar JSON files to output_dir. The publish task
-    reads these sidecars and merges the enrichment data (pedigree, PURL
-    ``repository_url``, serial number) into the upstream SBOMs in the
-    signed repository tree.
+    Reads upstream SBOMs from *upstream_sboms_dir* (populated by the
+    extract task), enriches them with pedigree data, and writes the
+    enriched SBOMs to ``output_dir / "enriched-sboms" / {GAV path}``.
+
+    When no upstream SBOM exists for an artifact, generates a minimal
+    SBOM from scratch.
 
     Returns a dict mapping PURL -> SBOM serialNumber for VEX
     cross-referencing.
@@ -322,6 +438,9 @@ def _generate_sboms_from_index(
 
     if ecosystem != "maven" or not purls:
         return sbom_serial_numbers
+
+    enriched_root = output_dir / "enriched-sboms"
+    enriched_root.mkdir(parents=True, exist_ok=True)
 
     version_info = index_data.get("version", {})
     upstream_version = version_info.get("upstream", "")
@@ -346,8 +465,9 @@ def _generate_sboms_from_index(
         version = coord.version
         base_version = coord.base_version
 
-        # Guard against path traversal in sidecar filename.
+        # Guard against path traversal in GAV components.
         for label, value in (
+            ("group_id", group_id),
             ("artifact_id", artifact_id),
             ("version", version),
         ):
@@ -361,8 +481,15 @@ def _generate_sboms_from_index(
             group_id, artifact_id, version, base_version, vulns
         )
 
-        # Build the qualified PURL. Default to type=jar at generate
-        # time; publish derives the actual type from the upstream SBOM.
+        # Load upstream SBOM if available.
+        upstream_sbom: dict | None = None
+        if upstream_sboms_dir and upstream_sboms_dir.is_dir():
+            upstream_sbom, _ = _load_upstream_sbom(
+                upstream_sboms_dir, group_id, artifact_id, version
+            )
+
+        # Build the qualified PURL. Default to type=jar; _enrich_sbom
+        # preserves the upstream type/classifier when available.
         purl_qualified = PackageURL(
             type="maven",
             namespace=group_id,
@@ -371,45 +498,48 @@ def _generate_sboms_from_index(
             qualifiers={"type": "jar", "repository_url": repo_url},
         ).to_string()
 
+        # Enrich the upstream SBOM (or generate from scratch).
+        enriched = _enrich_sbom(
+            upstream_sbom,
+            group_id,
+            artifact_id,
+            version,
+            pedigree,
+            repo_url,
+            purl_qualified,
+            "",  # serial_number placeholder — derived below
+            timestamp,
+        )
+
+        serial_number = _content_derived_serial(enriched)
+        enriched["serialNumber"] = serial_number
+
         purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
-
-        # Content-derived serial from the enrichment fields.
-        sidecar_sbom = {
-            "components": [
-                {
-                    "group": group_id,
-                    "name": artifact_id,
-                    "version": version,
-                    "purl": purl_qualified,
-                    "hashes": [],
-                    "licenses": [],
-                    "pedigree": pedigree,
-                }
-            ]
-        }
-        serial_number = _content_derived_serial(sidecar_sbom)
-
         sbom_serial_numbers[purl] = serial_number
         if purl_bare != purl:
             sbom_serial_numbers[purl_bare] = serial_number
 
-        # Write pedigree sidecar to output_dir.
-        sidecar_data = {
-            "group_id": group_id,
-            "artifact_id": artifact_id,
-            "version": version,
-            "base_version": base_version,
-            "repository_url": repo_url,
-            "pedigree": pedigree,
-            "serial_number": serial_number,
-            "purl_qualified": purl_qualified,
-            "timestamp": timestamp,
-        }
-        sidecar_filename = f"{group_id}.{artifact_id}-{version}.pedigree.json"
-        sidecar_path = output_dir / sidecar_filename
-        click.echo(f"Writing pedigree sidecar to {sidecar_path}")
-        with open(sidecar_path, "w") as f:
-            json.dump(sidecar_data, f, indent=2)
+        # Write enriched SBOM at GAV-relative path.
+        gav_rel = (
+            Path(group_id.replace(".", "/"))
+            / artifact_id
+            / version
+            / f"{artifact_id}-{version}.bom.json"
+        )
+        sbom_path = enriched_root / gav_rel
+
+        # Path-traversal guard on the output path.
+        try:
+            sbom_path.resolve().relative_to(enriched_root.resolve())
+        except ValueError:
+            raise click.ClickException(
+                f"Enriched SBOM path escapes output tree: {gav_rel}"
+            ) from None
+
+        sbom_path.parent.mkdir(parents=True, exist_ok=True)
+        click.echo(f"Writing enriched SBOM to {sbom_path}")
+        with open(sbom_path, "w") as f:
+            json.dump(enriched, f, indent=2)
 
     return sbom_serial_numbers
 
@@ -680,7 +810,7 @@ def generate_security_metadata(
         with open(osv_output_path, "w") as f:
             json.dump(record, f, indent=2)
 
-    # Generate pedigree sidecars (build-index only, all builds)
+    # Generate enriched SBOMs (build-index only, all builds)
     # and VEX (gated on vulns — clean builds have no vulnerabilities to declare).
     sbom_serial_numbers: dict[str, str] = {}
     if _is_build_index(index_data):
@@ -692,10 +822,16 @@ def generate_security_metadata(
             ts_now = build_created
         else:
             ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Upstream SBOMs are copied by the extract task into
+        # workdir/upstream-sboms/. This directory may not exist
+        # (first-time builds, non-maven).
+        upstream_sboms_dir = workdir / "upstream-sboms"
         sbom_serial_numbers = _generate_sboms_from_index(
             index_data,
             output_dir,
             ts_now,
+            upstream_sboms_dir=upstream_sboms_dir,
             explicit_repo_url=repository_url or None,
         )
 

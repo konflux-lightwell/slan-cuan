@@ -62,16 +62,17 @@ def _slan_cuan_pipeline_tasks() -> list[tuple[str, str]]:
     return result
 
 
-def test_exactly_four_pipeline_tasks_map_to_local_slan_cuan_tasks() -> None:
-    """Pin: only 4 of the fixture's 9 pipeline tasks map to a local Task file.
+def test_exactly_five_pipeline_tasks_map_to_local_slan_cuan_tasks() -> None:
+    """Pin: only 5 of the fixture's pipeline tasks map to a local Task file.
 
-    The 4 are extract, sign, generate-security-metadata, and publish.
-    register is not currently wired into this pipeline at all.
+    The 5 are extract, generate-security-metadata, inject-enriched-sboms,
+    sign, and publish. register is not currently wired into this pipeline.
     """
     mapped = _slan_cuan_pipeline_tasks()
     assert sorted(name for name, _ in mapped) == [
         "extract",
         "generate-security-metadata",
+        "inject-enriched-sboms",
         "publish",
         "sign",
     ]

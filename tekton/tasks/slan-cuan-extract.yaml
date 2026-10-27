@@ -123,6 +123,23 @@ spec:
         if [ -d /var/workdir/extracted/attachments ]; then
           cp -a /var/workdir/extracted/attachments /var/workdir/source-data/
         fi
+
+        # Copy upstream SBOMs (kilobytes of JSON) into the
+        # sourceDataArtifact so generate-security-metadata can
+        # enrich them without needing the full repository tree.
+        DELIVERABLE_DIR=$(jq -r .deliverable_dir \
+          /var/workdir/extracted/extract-result.json)
+        REPO_DIR="/var/workdir/extracted/${DELIVERABLE_DIR}/repository"
+        if [ -d "$REPO_DIR" ]; then
+          count=$(cd "$REPO_DIR" && \
+            find . \( -name '*.bom.json' -o -name '*.cyclonedx.json' \) | wc -l)
+          if [ "$count" -gt 0 ]; then
+            (cd "$REPO_DIR" && \
+              find . \( -name '*.bom.json' -o -name '*.cyclonedx.json' \) \
+                -exec install -D {} /var/workdir/source-data/upstream-sboms/{} \;)
+            echo "Copied $count upstream SBOM(s) to source-data/upstream-sboms/"
+          fi
+        fi
     - name: create-signing-trusted-artifact
       ref:
         resolver: git

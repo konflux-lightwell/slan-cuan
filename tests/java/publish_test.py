@@ -4037,196 +4037,19 @@ def _create_pedigree_sidecar(
     return path
 
 
-def test_apply_pedigree_enrichment_enriches_upstream_sbom(
+def test_enriched_sboms_filtered_from_security_metadata(
     tmp_path: Path,
 ) -> None:
-    """Pedigree sidecar merges into an upstream SBOM at the GAV path."""
-    from slan_cuan.java.publish import _apply_pedigree_enrichment
-    from slan_cuan.models import ExtractResult, ImageReference
-
-    artifact_dir = tmp_path / "artifact"
-    deliverable = artifact_dir / "TEST-build-output"
-    repo_dir = deliverable / "repository"
-    gav_dir = repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
-    gav_dir.mkdir(parents=True)
-
-    # Seed an upstream SBOM
-    upstream = {
-        "bomFormat": "CycloneDX",
-        "specVersion": "1.7",
-        "serialNumber": "urn:uuid:upstream-serial",
-        "version": 1,
-        "metadata": {
-            "timestamp": "2026-01-01T00:00:00Z",
-            "supplier": {"name": "PNC"},
-        },
-        "components": [
-            {
-                "type": "library",
-                "bom-ref": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
-                "group": "org.example",
-                "name": "lib",
-                "version": "1.0.0.rhlw-00001",
-                "purl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001?type=jar"),
-                "hashes": [{"alg": "SHA-256", "content": "aabbccdd"}],
-                "licenses": [{"license": {"id": "Apache-2.0"}}],
-            }
-        ],
-    }
-    (gav_dir / "lib-1.0.0.rhlw-00001.bom.json").write_text(json.dumps(upstream))
-
-    # Write pedigree sidecar
-    sec_dir = artifact_dir / "security_metadata"
-    _create_pedigree_sidecar(sec_dir)
-
-    er = ExtractResult(
-        image=ImageReference(
-            registry="quay.io",
-            repository="test/img",
-            tag=None,
-            digest="sha256:abc",
-        ),
-        manifest_digest="sha256:m",
-        layers=[],
-        annotations={},
-        deliverable_dir="TEST-build-output",
-        files=[],
-        extracted_at="2026-01-01T00:00:00Z",
-    )
-
-    _apply_pedigree_enrichment(er, artifact_dir)
-
-    enriched_path = gav_dir / "lib-1.0.0.rhlw-00001.bom.json"
-    assert enriched_path.exists()
-    enriched = json.loads(enriched_path.read_text())
-
-    # Upstream fields preserved
-    assert enriched["metadata"]["supplier"] == {"name": "PNC"}
-    comp = enriched["components"][0]
-    assert comp["hashes"] == [{"alg": "SHA-256", "content": "aabbccdd"}]
-    assert comp["licenses"] == [{"license": {"id": "Apache-2.0"}}]
-
-    # Enrichment applied
-    assert "pedigree" in comp
-    assert "validated build" in comp["pedigree"]["notes"].lower()
-    assert enriched["serialNumber"] == "urn:uuid:test-serial-00001"
-
-    # PURL has repository_url
-    assert "repository_url=" in comp["purl"]
-    # type=jar preserved from upstream
-    assert "type=jar" in comp["purl"]
-
-
-def test_apply_pedigree_enrichment_from_scratch(
-    tmp_path: Path,
-) -> None:
-    """When no upstream SBOM exists, a minimal SBOM is generated."""
-    from slan_cuan.java.publish import _apply_pedigree_enrichment
-    from slan_cuan.models import ExtractResult, ImageReference
-
-    artifact_dir = tmp_path / "artifact"
-    deliverable = artifact_dir / "TEST-build-output"
-    repo_dir = deliverable / "repository"
-    repo_dir.mkdir(parents=True)
-
-    sec_dir = artifact_dir / "security_metadata"
-    _create_pedigree_sidecar(sec_dir)
-
-    er = ExtractResult(
-        image=ImageReference(
-            registry="quay.io",
-            repository="test/img",
-            tag=None,
-            digest="sha256:abc",
-        ),
-        manifest_digest="sha256:m",
-        layers=[],
-        annotations={},
-        deliverable_dir="TEST-build-output",
-        files=[],
-        extracted_at="2026-01-01T00:00:00Z",
-    )
-
-    _apply_pedigree_enrichment(er, artifact_dir)
-
-    gav_dir = repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
-    sbom_path = gav_dir / "lib-1.0.0.rhlw-00001.bom.json"
-    assert sbom_path.exists()
-    sbom = json.loads(sbom_path.read_text())
-
-    assert sbom["bomFormat"] == "CycloneDX"
-    assert sbom["serialNumber"] == "urn:uuid:test-serial-00001"
-    comp = sbom["components"][0]
-    assert comp["group"] == "org.example"
-    assert comp["name"] == "lib"
-    assert "pedigree" in comp
-
-
-def test_apply_pedigree_enrichment_removes_legacy_cyclonedx(
-    tmp_path: Path,
-) -> None:
-    """Legacy .cyclonedx.json is removed after writing enriched .bom.json."""
-    from slan_cuan.java.publish import _apply_pedigree_enrichment
-    from slan_cuan.models import ExtractResult, ImageReference
-
-    artifact_dir = tmp_path / "artifact"
-    deliverable = artifact_dir / "TEST-build-output"
-    repo_dir = deliverable / "repository"
-    gav_dir = repo_dir / "org" / "example" / "lib" / "1.0.0.rhlw-00001"
-    gav_dir.mkdir(parents=True)
-
-    # Seed a legacy .cyclonedx.json
-    legacy_sbom = {
-        "bomFormat": "CycloneDX",
-        "components": [
-            {
-                "type": "library",
-                "group": "org.example",
-                "name": "lib",
-                "version": "1.0.0.rhlw-00001",
-                "purl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
-            }
-        ],
-    }
-    legacy_path = gav_dir / "lib-1.0.0.rhlw-00001.cyclonedx.json"
-    legacy_path.write_text(json.dumps(legacy_sbom))
-
-    sec_dir = artifact_dir / "security_metadata"
-    _create_pedigree_sidecar(sec_dir)
-
-    er = ExtractResult(
-        image=ImageReference(
-            registry="quay.io",
-            repository="test/img",
-            tag=None,
-            digest="sha256:abc",
-        ),
-        manifest_digest="sha256:m",
-        layers=[],
-        annotations={},
-        deliverable_dir="TEST-build-output",
-        files=[],
-        extracted_at="2026-01-01T00:00:00Z",
-    )
-
-    _apply_pedigree_enrichment(er, artifact_dir)
-
-    # Legacy file removed
-    assert not legacy_path.exists(), "Legacy .cyclonedx.json not removed"
-
-    # Enriched .bom.json created
-    bom_path = gav_dir / "lib-1.0.0.rhlw-00001.bom.json"
-    assert bom_path.exists()
-    enriched = json.loads(bom_path.read_text())
-    assert "pedigree" in enriched["components"][0]
-
-
-def test_pedigree_sidecars_filtered_from_security_metadata(
-    tmp_path: Path,
-) -> None:
-    """Pedigree sidecars must not appear in security_metadata_files."""
+    """enriched-sboms/ directory must not appear in security_metadata_files."""
     sec_dir = tmp_path / "security_metadata"
     sec_dir.mkdir()
+
+    # Write an enriched SBOM in the enriched-sboms/ subdirectory
+    enriched_dir = (
+        sec_dir / "enriched-sboms" / "org" / "example" / "lib" / "1.0.0"
+    )
+    enriched_dir.mkdir(parents=True)
+    (enriched_dir / "lib-1.0.0.bom.json").write_text('{"bomFormat":"CycloneDX"}')
 
     # Write a pedigree sidecar and a regular OSV record
     _create_pedigree_sidecar(sec_dir)
@@ -4240,10 +4063,13 @@ def test_pedigree_sidecars_filtered_from_security_metadata(
     # Simulate the filtering logic from publish
     all_files = tuple(f for f in sec_dir.rglob("*") if f.is_file())
     filtered = tuple(
-        f for f in all_files if not f.name.endswith(".pedigree.json")
+        f
+        for f in all_files
+        if f.is_file()
+        and not f.name.endswith(".pedigree.json")
+        and "enriched-sboms" not in f.relative_to(sec_dir).parts
     )
 
-    assert len(all_files) == 2
+    assert len(all_files) == 3  # enriched SBOM + sidecar + OSV
     assert len(filtered) == 1
-    assert filtered[0].name.endswith(".json")
-    assert not filtered[0].name.endswith(".pedigree.json")
+    assert filtered[0].name == "x_RHLW-CVE-2024-1234-1.0.0.json"
