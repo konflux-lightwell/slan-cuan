@@ -27,6 +27,8 @@ TASK_YAML_FILENAMES = sorted(
     p.relative_to(TEKTON_TASKS_DIR).as_posix()
     for p in TEKTON_TASKS_DIR.rglob("*.yaml")
     if p.name not in _NO_CLI_TASKS
+    # TODO: delete this skip once tekton/tasks/npm/ is wired to the slan-cuan CLI
+    and not p.relative_to(TEKTON_TASKS_DIR).as_posix().startswith("npm/")
 )
 
 
