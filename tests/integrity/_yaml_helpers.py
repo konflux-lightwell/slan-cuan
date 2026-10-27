@@ -18,9 +18,15 @@ from slan_cuan.cli import main as cli_main
 
 TEKTON_TASKS_DIR = Path(__file__).resolve().parents[2] / "tekton" / "tasks"
 
+# Tasks that invoke the slan-cuan CLI (have a step named "run").
+# Pure infrastructure tasks (inject-sboms) have no CLI step and are
+# excluded from the CLI integrity tests.
+_NO_CLI_TASKS = {"slan-cuan-inject-sboms.yaml"}
+
 TASK_YAML_FILENAMES = sorted(
     p.relative_to(TEKTON_TASKS_DIR).as_posix()
     for p in TEKTON_TASKS_DIR.rglob("*.yaml")
+    if p.name not in _NO_CLI_TASKS
 )
 
 
