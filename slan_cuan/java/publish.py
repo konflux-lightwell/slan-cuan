@@ -1002,9 +1002,8 @@ def publish(
                 for f in build.security_metadata_dir.rglob("*")
                 if f.is_file()
                 and not f.name.endswith(".pedigree.json")
-                and "enriched-sboms" not in f.relative_to(
-                    build.security_metadata_dir
-                ).parts
+                and "enriched-sboms"
+                not in f.relative_to(build.security_metadata_dir).parts
             )
             if build.security_metadata_dir
             else ()
