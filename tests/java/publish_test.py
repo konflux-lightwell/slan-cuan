@@ -3638,7 +3638,10 @@ _GITHUB_OSV_REPO = "project-lightwell/lightwell-osv"
 
 
 def _run_publish_with_github(
-    artifact_dir: Path, file_repo: str, *github_args: str
+    artifact_dir: Path,
+    file_repo: str,
+    *github_args: str,
+    maven_repo: str = "test-repo",
 ) -> Result:
     """Invoke publish against a Pulp File repo with GitHub OSV options."""
     runner = CliRunner()
@@ -3649,7 +3652,7 @@ def _run_publish_with_github(
             "--pulp-url",
             "https://pulp.example.com",
             "--pulp-repository",
-            "test-repo",
+            maven_repo,
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3754,7 +3757,10 @@ def test_publish_github_excludes_novel_records(
     mock_gh_cls.return_value = mock_gh
 
     result = _run_publish_with_github(
-        artifact_dir, "osv-java-backport", *_GITHUB_ENABLED_ARGS
+        artifact_dir,
+        "osv-java-backport",
+        *_GITHUB_ENABLED_ARGS,
+        maven_repo="lightwell-java-predisclosure",
     )
 
     assert result.exit_code == 0, result.output

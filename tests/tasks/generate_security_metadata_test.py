@@ -1517,24 +1517,13 @@ def test_upstream_sbom_enriched(ctx: GlobalContext, tmp_path: Path) -> None:
                 "group": "org.example",
                 "name": "lib",
                 "version": "1.0.0.rhlw-00001",
-                "purl": (
-                    "pkg:maven/org.example/lib@1.0.0.rhlw-00001"
-                    "?type=jar"
-                ),
-                "hashes": [
-                    {"alg": "SHA-256", "content": "abc123upstream"}
-                ],
-                "licenses": [
-                    {"license": {"id": "Apache-2.0"}}
-                ],
+                "purl": ("pkg:maven/org.example/lib@1.0.0.rhlw-00001?type=jar"),
+                "hashes": [{"alg": "SHA-256", "content": "abc123upstream"}],
+                "licenses": [{"license": {"id": "Apache-2.0"}}],
             }
         ],
     }
-    upstream_dir = (
-        workdir
-        / "upstream-sboms"
-        / "org/example/lib/1.0.0.rhlw-00001"
-    )
+    upstream_dir = workdir / "upstream-sboms" / "org/example/lib/1.0.0.rhlw-00001"
     upstream_dir.mkdir(parents=True)
     (upstream_dir / "lib-1.0.0.rhlw-00001.bom.json").write_text(
         json.dumps(upstream_sbom)
