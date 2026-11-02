@@ -78,7 +78,14 @@ spec:
       type: string
       default: "false"
     - name: PULP_FILE_REPOSITORY
-      description: Pulp File repository name for security metadata (OSV/VEX) upload.
+      description: Pulp File repository name for OSV security metadata upload.
+      type: string
+      default: ""
+    - name: PULP_VEX_REPOSITORY
+      description: >-
+        Pulp File repository name for CycloneDX VEX upload. Required when the
+        build produced VEX documents; VEX is never published to
+        PULP_FILE_REPOSITORY.
       type: string
       default: ""
     - name: PULP_TASK_TIMEOUT
@@ -174,6 +181,12 @@ spec:
       description: >-
         Number of security metadata files skipped because their OSV record type
         did not match the target Pulp File repository.
+    - name: VEX_UPLOADED
+      description: Number of CycloneDX VEX documents uploaded to the Pulp VEX repository.
+    - name: VEX_SKIPPED
+      description: >-
+        Number of CycloneDX VEX documents skipped because their source
+        (backport/novel) did not match the target Pulp VEX repository.
     - name: GITHUB_OSV_CONFIGURED
       description: >-
         "true" when GitHub OSV publication was configured for this run, "false"
@@ -266,6 +279,8 @@ spec:
           value: $(params.REQUIRE_SUPPLY_CHAIN_METADATA)
         - name: SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY
           value: $(params.PULP_FILE_REPOSITORY)
+        - name: SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY
+          value: $(params.PULP_VEX_REPOSITORY)
         - name: SLAN_CUAN_PUBLISH_PULP_TASK_TIMEOUT
           value: $(params.PULP_TASK_TIMEOUT)
         - name: SLAN_CUAN_PUBLISH_PULP_MAX_TOTAL_TASK_TIMEOUT

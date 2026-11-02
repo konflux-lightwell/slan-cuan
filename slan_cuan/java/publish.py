@@ -459,6 +459,59 @@ def _verify_requires_file_repository(
     return requires_file_repository
 
 
+def _is_cdx_vex_file(path: Path) -> bool:
+    """Report whether *path* is a CycloneDX doc with ``vulnerabilities[]``.
+
+    These are VEX documents and must only be published to the dedicated
+    VEX repository, never to the OSV repository.
+    """
+    record = safe_json_load(path, raise_on_err=False)
+    return (
+        isinstance(record, dict)
+        and record.get("bomFormat") == "CycloneDX"
+        and isinstance(record.get("vulnerabilities"), list)
+    )
+
+
+def _partition_vex(
+    security_metadata_files: tuple[Path, ...],
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Split security metadata into ``(osv_files, vex_files)``."""
+    osv_files: list[Path] = []
+    vex_files: list[Path] = []
+    for path in security_metadata_files:
+        (vex_files if _is_cdx_vex_file(path) else osv_files).append(path)
+    return tuple(osv_files), tuple(vex_files)
+
+
+def _verify_requires_vex_repository(
+    vex_files: tuple[Path, ...],
+    pulp_vex_repository: str | None,
+    pulp_file_repository: str | None,
+) -> bool:
+    """Fail closed when VEX is present without a dedicated VEX repository.
+
+    VEX documents never fall back to the OSV File repository: a missing
+    VEX repository, or one that names the OSV repository, aborts the run
+    before anything is uploaded.
+    """
+    if not vex_files:
+        return False
+    if not pulp_vex_repository:
+        raise click.UsageError(
+            f"--pulp-vex-repository is required to publish "
+            f"{len(vex_files)} CycloneDX VEX document(s); VEX is never "
+            f"published to the OSV repository."
+        )
+    if pulp_file_repository and pulp_vex_repository == pulp_file_repository:
+        raise click.UsageError(
+            f"--pulp-vex-repository '{pulp_vex_repository}' must differ from "
+            f"--pulp-file-repository; VEX is never published to the OSV "
+            f"repository."
+        )
+    return True
+
+
 def _retrieve_uploadable_metadata(
     security_metadata_files: tuple[Path, ...],
     expected_source: str | None,
@@ -470,7 +523,7 @@ def _retrieve_uploadable_metadata(
         skipped_metadata: tuple[Path, ...] = ()
         if security_metadata_files and pulp_file_repository:
             click.echo(
-                f"Warning: OSV repository '{pulp_file_repository}' is not "
+                f"Warning: File repository '{pulp_file_repository}' is not "
                 f"a recognized backport/novel repository; uploading all "
                 f"{len(security_metadata_files)} record(s) without type "
                 f"filtering."
@@ -590,6 +643,53 @@ def _upload_one(
     return content_unit
 
 
+def _open_file_repository(
+    clients: ExitStack,
+    config: PulpConfig,
+    repository: str | None,
+    kind: str,
+) -> tuple[PulpFileClient, str]:
+    """Open a Pulp File client and resolve *repository* (fail early)."""
+    try:
+        file_client = clients.enter_context(PulpFileClient(config, repository))
+        return file_client, file_client.resolve_repository(repository)
+    except PulpError as e:
+        raise click.ClickException(
+            f"Unable to verify the required {kind} publication repository."
+        ) from e
+
+
+def _upload_file_metadata(
+    file_client: PulpFileClient,
+    repo_href: str,
+    repository: str | None,
+    files: tuple[Path, ...],
+    kind: str,
+) -> int:
+    """Upload *files* to a Pulp File repository and publish it."""
+    uploaded = 0
+    try:
+        for file_path in files:
+            sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            file_client.upload_content(
+                file_path=file_path,
+                relative_path=file_path.name,
+                sha256=sha256,
+                repository_href=repo_href,
+            )
+            uploaded += 1
+
+        if uploaded > 0:
+            pub_href = file_client.create_publication(repo_href)
+            dist_href = file_client.resolve_distribution(repository)
+            file_client.update_distribution(dist_href, pub_href)
+    except PulpError as e:
+        raise click.ClickException(
+            f"Required {kind} publication did not complete."
+        ) from e
+    return uploaded
+
+
 def _upload_to_pulp(
     ctx: GlobalContext,
     config: PulpConfig,
@@ -602,11 +702,16 @@ def _upload_to_pulp(
     requires_file_repository: bool,
     file_skipped: int,
     upload_workers: int,
+    uploadable_vex: tuple[Path, ...] = (),
+    pulp_vex_repository: str | None = None,
+    requires_vex_repository: bool = False,
+    vex_skipped: int = 0,
 ) -> tuple[PublishResult, int, int, int]:
     """Upload artifacts to Pulp."""
     uploaded = 0
     skipped = 0
     file_uploaded = 0
+    vex_uploaded = 0
     repository_version = None
     content_unit_hrefs: list[str] = []
 
@@ -614,17 +719,15 @@ def _upload_to_pulp(
         file_client: PulpFileClient | None = None
         file_repo_href: str | None = None
         if requires_file_repository:
-            try:
-                file_client = clients.enter_context(
-                    PulpFileClient(config, pulp_file_repository)
-                )
-                file_repo_href = file_client.resolve_repository(
-                    pulp_file_repository
-                )
-            except PulpError as e:
-                raise click.ClickException(
-                    "Unable to verify the required OSV publication repository."
-                ) from e
+            file_client, file_repo_href = _open_file_repository(
+                clients, config, pulp_file_repository, "OSV"
+            )
+        vex_client: PulpFileClient | None = None
+        vex_repo_href: str | None = None
+        if requires_vex_repository:
+            vex_client, vex_repo_href = _open_file_repository(
+                clients, config, pulp_vex_repository, "VEX"
+            )
 
         client = clients.enter_context(PulpMavenClient(config, pulp_repository))
         uploadable: list[MavenArtifact] = []
@@ -677,30 +780,28 @@ def _upload_to_pulp(
                 click.echo(f"  -> repository version: {repository_version}")
 
         if file_client and file_repo_href:
-            try:
-                for file_path in uploadable_metadata:
-                    sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-                    file_client.upload_content(
-                        file_path=file_path,
-                        relative_path=file_path.name,
-                        sha256=sha256,
-                        repository_href=file_repo_href,
-                    )
-                    file_uploaded += 1
-
-                if file_uploaded > 0:
-                    pub_href = file_client.create_publication(file_repo_href)
-                    dist_href = file_client.resolve_distribution(
-                        pulp_file_repository
-                    )
-                    file_client.update_distribution(dist_href, pub_href)
-            except PulpError as e:
-                raise click.ClickException(
-                    "Required OSV publication did not complete."
-                ) from e
+            file_uploaded = _upload_file_metadata(
+                file_client,
+                file_repo_href,
+                pulp_file_repository,
+                uploadable_metadata,
+                "OSV",
+            )
+        if vex_client and vex_repo_href:
+            vex_uploaded = _upload_file_metadata(
+                vex_client,
+                vex_repo_href,
+                pulp_vex_repository,
+                uploadable_vex,
+                "VEX",
+            )
 
     if file_uploaded:
         click.echo(f"Security metadata: {file_uploaded} file(s) uploaded")
+    if vex_uploaded:
+        click.echo(
+            f"VEX: {vex_uploaded} document(s) uploaded to {pulp_vex_repository}"
+        )
 
     publish_result = PublishResult(
         pulp_url=pulp_url,
@@ -715,6 +816,9 @@ def _upload_to_pulp(
         file_repository=pulp_file_repository if file_uploaded else None,
         security_metadata_uploaded=file_uploaded,
         security_metadata_skipped=file_skipped,
+        vex_repository=pulp_vex_repository if vex_uploaded else None,
+        vex_uploaded=vex_uploaded,
+        vex_skipped=vex_skipped,
     )
     return publish_result, uploaded, skipped, file_uploaded
 
@@ -874,7 +978,18 @@ def _print_verbose_artifact_info(
     envvar="SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY",
     type=str,
     default=None,
-    help="Pulp File repository name for security metadata upload.",
+    help="Pulp File repository name for OSV security metadata upload.",
+)
+@click.option(
+    "--pulp-vex-repository",
+    envvar="SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY",
+    type=str,
+    default=None,
+    help=(
+        "Pulp File repository name for CycloneDX VEX upload. Required when "
+        "VEX documents are present; VEX never falls back to "
+        "--pulp-file-repository."
+    ),
 )
 @click.option(
     "--pulp-task-timeout",
@@ -956,6 +1071,7 @@ def publish(
     upload_workers: int,
     require_supply_chain_metadata: bool,
     pulp_file_repository: str | None,
+    pulp_vex_repository: str | None,
     pulp_task_timeout: float,
     pulp_max_total_task_timeout: float | None,
     pulp_custom_headers: str,
@@ -967,6 +1083,9 @@ def publish(
     """Publish Maven artifacts to Pulp."""
     pulp_file_repository = (
         pulp_file_repository.strip() or None if pulp_file_repository else None
+    )
+    pulp_vex_repository = (
+        pulp_vex_repository.strip() or None if pulp_vex_repository else None
     )
     github_osv_repo = github_osv_repo.strip() or None if github_osv_repo else None
     github_osv_token = (
@@ -1009,8 +1128,14 @@ def publish(
             else ()
         )
         _validate_security_metadata(security_metadata_files, vulns)
+        # VEX is routed to its own repository; everything else (OSV) keeps
+        # going to --pulp-file-repository.
+        osv_files, vex_files = _partition_vex(security_metadata_files)
         requires_file_repository = _verify_requires_file_repository(
-            vulns, security_metadata_files, pulp_file_repository
+            vulns, osv_files, pulp_file_repository
+        )
+        requires_vex_repository = _verify_requires_vex_repository(
+            vex_files, pulp_vex_repository, pulp_file_repository
         )
 
         if github_osv_repo and not github_osv_token:
@@ -1034,9 +1159,17 @@ def publish(
             else None
         )
         uploadable_metadata, skipped_metadata = _retrieve_uploadable_metadata(
-            security_metadata_files, expected_source, pulp_file_repository
+            osv_files, expected_source, pulp_file_repository
         )
         file_skipped = len(skipped_metadata)
+        uploadable_vex, skipped_vex = _retrieve_uploadable_metadata(
+            vex_files,
+            _expected_source_for_repo(pulp_vex_repository)
+            if pulp_vex_repository
+            else None,
+            pulp_vex_repository,
+        )
+        vex_skipped = len(skipped_vex)
 
         # Validate GitHub OSV publication up front so a misconfiguration fails
         # before anything is written to Pulp.
@@ -1047,13 +1180,13 @@ def publish(
             assert github_osv_token is not None
             # Fail closed: only the backport stream may feed the public OSV
             # repository, and repo-name inference must positively identify it.
-            if security_metadata_files and expected_source != "pnc-build":
+            if osv_files and expected_source != "pnc-build":
                 raise click.UsageError(
                     "GitHub OSV publication requires --pulp-file-repository "
                     "to be the backport OSV repository; "
                     f"'{pulp_file_repository}' is not recognized as one."
                 )
-            github_records = _select_github_osv_records(security_metadata_files)
+            github_records = _select_github_osv_records(osv_files)
             gh_client = GitHubOsvClient(
                 github_osv_repo,
                 github_osv_token,
@@ -1081,6 +1214,15 @@ def publish(
                 click.echo(
                     f"Security metadata skipped (wrong type): {file_skipped}"
                 )
+            if uploadable_vex:
+                click.echo(
+                    f"VEX ({pulp_vex_repository}): "
+                    f"{len(uploadable_vex)} document(s)"
+                )
+                for f in uploadable_vex:
+                    click.echo(f"  {f.name}")
+            if vex_skipped:
+                click.echo(f"VEX skipped (wrong type): {vex_skipped}")
             if github_records:
                 click.echo(
                     f"GitHub OSV: would push {len(github_records)} "
@@ -1165,6 +1307,10 @@ def publish(
             requires_file_repository=requires_file_repository,
             file_skipped=file_skipped,
             upload_workers=upload_workers,
+            uploadable_vex=uploadable_vex,
+            pulp_vex_repository=pulp_vex_repository,
+            requires_vex_repository=requires_vex_repository,
+            vex_skipped=vex_skipped,
         )
 
         github_osv_uploaded = 0
@@ -1235,6 +1381,16 @@ def publish(
             ctx.tekton_results_dir,
             "SECURITY_METADATA_SKIPPED",
             str(file_skipped),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "VEX_UPLOADED",
+            str(publish_result.vex_uploaded),
+        )
+        write_tekton_result(
+            ctx.tekton_results_dir,
+            "VEX_SKIPPED",
+            str(vex_skipped),
         )
         write_tekton_result(
             ctx.tekton_results_dir,

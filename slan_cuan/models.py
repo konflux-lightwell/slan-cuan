@@ -662,6 +662,9 @@ class PublishResult:
     file_repository: str | None = None
     security_metadata_uploaded: int = 0
     security_metadata_skipped: int = 0
+    vex_repository: str | None = None
+    vex_uploaded: int = 0
+    vex_skipped: int = 0
     github_osv_configured: bool = False
     github_osv_repo: str | None = None
     github_osv_commit: str | None = None
@@ -704,6 +707,9 @@ class PublishResult:
         file_repository = data.get("file_repository")
         security_metadata_uploaded = data.get("security_metadata_uploaded", 0)
         security_metadata_skipped = data.get("security_metadata_skipped", 0)
+        vex_repository = data.get("vex_repository")
+        vex_uploaded = data.get("vex_uploaded", 0)
+        vex_skipped = data.get("vex_skipped", 0)
         github_osv_configured = data.get("github_osv_configured", False)
         github_osv_repo = data.get("github_osv_repo")
         github_osv_commit = data.get("github_osv_commit")
@@ -722,6 +728,9 @@ class PublishResult:
             file_repository=file_repository,
             security_metadata_uploaded=security_metadata_uploaded,
             security_metadata_skipped=security_metadata_skipped,
+            vex_repository=vex_repository,
+            vex_uploaded=vex_uploaded,
+            vex_skipped=vex_skipped,
             github_osv_configured=github_osv_configured,
             github_osv_repo=github_osv_repo,
             github_osv_commit=github_osv_commit,
