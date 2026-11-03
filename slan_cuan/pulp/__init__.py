@@ -11,6 +11,7 @@ from slan_cuan.pulp.constants import (
     FILE_DISTRIBUTION_API_PATH_TEMPLATE,
     FILE_PUBLICATION_API_PATH_TEMPLATE,
     FILE_REPO_API_PATH_TEMPLATE,
+    MAVEN_DISTRIBUTION_API_PATH_TEMPLATE,
     METADATA_API_PATH_TEMPLATE,
     REPO_API_PATH_TEMPLATE,
     TASK_CANCEL_TIMEOUT_SECONDS,
@@ -20,6 +21,7 @@ from slan_cuan.pulp.exceptions import PulpError
 from slan_cuan.pulp.models import (
     ContentUnit,
     FileContentUnit,
+    MavenDistribution,
     ModifyResult,
     PulpConfig,
 )
@@ -44,6 +46,8 @@ __all__ = [
     "FILE_REPO_API_PATH_TEMPLATE",
     "FileContentUnit",
     "METADATA_API_PATH_TEMPLATE",
+    "MAVEN_DISTRIBUTION_API_PATH_TEMPLATE",
+    "MavenDistribution",
     "ModifyResult",
     "PulpClientBase",
     "PulpConfig",

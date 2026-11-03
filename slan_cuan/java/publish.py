@@ -40,6 +40,7 @@ _DIAG_MAX_ENTRIES = 50
 _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
 GAV_INDEX_FILENAME = "gav-index.json"
+MAVEN_PREDISCLOSURE_BASE_PATH = "java/predisclosure"
 
 
 def _load_upstream_sbom(
@@ -590,6 +591,17 @@ def _upload_one(
     return content_unit
 
 
+def _repository_has_predisclosure_distribution(
+    client: PulpMavenClient, repository_href: str
+) -> bool:
+    """Check whether a repository is served by the predisclosure route."""
+    distributions = client.list_distributions(repository_href)
+    return any(
+        distribution.base_path.strip("/") == MAVEN_PREDISCLOSURE_BASE_PATH
+        for distribution in distributions
+    )
+
+
 def _upload_to_pulp(
     ctx: GlobalContext,
     config: PulpConfig,
@@ -602,12 +614,14 @@ def _upload_to_pulp(
     requires_file_repository: bool,
     file_skipped: int,
     upload_workers: int,
+    has_embargoed_vulns: bool,
 ) -> tuple[PublishResult, int, int, int]:
     """Upload artifacts to Pulp."""
     uploaded = 0
     skipped = 0
     file_uploaded = 0
     repository_version = None
+    repo_href: str | None = None
     content_unit_hrefs: list[str] = []
 
     with ExitStack() as clients:
@@ -627,6 +641,25 @@ def _upload_to_pulp(
                 ) from e
 
         client = clients.enter_context(PulpMavenClient(config, pulp_repository))
+        if has_embargoed_vulns:
+            try:
+                click.echo(f"Resolving repository: {pulp_repository}")
+                repo_href = client.resolve_repository(pulp_repository)
+                if not _repository_has_predisclosure_distribution(
+                    client, repo_href
+                ):
+                    raise click.ClickException(
+                        f"Build contains embargoed (LW-) vulnerabilities but "
+                        f"repository '{pulp_repository}' is not associated "
+                        f"with a predisclosure distribution. Aborting to "
+                        f"prevent disclosure of embargoed content."
+                    )
+            except PulpError as e:
+                raise click.ClickException(
+                    "Unable to verify the predisclosure distribution for an "
+                    "embargoed build."
+                ) from e
+
         uploadable: list[MavenArtifact] = []
         for artifact in build.artifacts:
             if not artifact.file_path.exists():
@@ -662,8 +695,9 @@ def _upload_to_pulp(
                 uploaded += 1
 
         if content_unit_hrefs:
-            click.echo(f"Resolving repository: {pulp_repository}")
-            repo_href = client.resolve_repository(pulp_repository)
+            if repo_href is None:
+                click.echo(f"Resolving repository: {pulp_repository}")
+                repo_href = client.resolve_repository(pulp_repository)
 
             click.echo(
                 f"Adding {len(content_unit_hrefs)} content unit(s) to repository"
@@ -984,17 +1018,7 @@ def publish(
             extract_result.attachment_files, artifact_dir
         )
 
-        # Embargo safety: LW- IDs indicate embargoed content that must
-        # only publish to predisclosure repos. Reject if the target
-        # Maven repo name does not contain "predisclosure".
         has_lw = _source_from_vuln_id_has_embargo(vulns)
-        if has_lw and "predisclosure" not in pulp_repository.lower():
-            raise click.ClickException(
-                f"Build contains embargoed (LW-) vulnerabilities but "
-                f"--pulp-repository '{pulp_repository}' is not a "
-                f"predisclosure repository. Aborting to prevent "
-                f"disclosure of embargoed content."
-            )
 
         security_metadata_files = (
             tuple(
@@ -1165,6 +1189,7 @@ def publish(
             requires_file_repository=requires_file_repository,
             file_skipped=file_skipped,
             upload_workers=upload_workers,
+            has_embargoed_vulns=has_lw,
         )
 
         github_osv_uploaded = 0

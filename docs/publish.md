@@ -17,6 +17,18 @@ is resolved before Maven content is uploaded or its repository is modified.
 A clean GAV index with no generated OSV files does not require a File
 repository.
 
+## Embargo And Predisclosure Routing
+
+When the GAV index contains an `LW-` vulnerability ID, the build is treated as
+security-embargoed. `publish` resolves `--pulp-repository` and verifies that
+the backend Maven repository is served by the `java/predisclosure` Maven
+distribution before uploading any content. A repository with no distribution,
+a non-predisclosure distribution, or an unreadable distribution lookup fails
+closed.
+
+A backend repository is valid for embargoed content when its associated
+distribution serves `java/predisclosure`.
+
 When `--pulp-domain` is set, the deploy URL includes the domain segment (`/pulp/maven/{domain}/{distribution}/{path}`). When not set, it uses the standard path (`/pulp/maven/{distribution}/{path}`).
 
 The artifact directory must be the output of the `extract` stage, containing a valid `extract-result.json`.
@@ -40,7 +52,7 @@ Labels are also:
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `--pulp-url` | string | Yes | -- | Pulp instance base URL |
-| `--pulp-repository` | string | Yes | -- | Maven distribution name |
+| `--pulp-repository` | string | Yes | -- | Backend Maven repository name |
 | `--pulp-domain` | string | No | -- | Pulp domain for domain-scoped deployments (e.g. `lightwell`) |
 | `--artifact-dir` | path | Yes | -- | Extract stage output directory |
 | `--insecure` | flag | No | `False` | Disable TLS certificate verification |
