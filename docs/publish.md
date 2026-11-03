@@ -26,6 +26,10 @@ distribution before uploading any content. A repository with no distribution,
 a non-predisclosure distribution, or an unreadable distribution lookup fails
 closed.
 
+Embargoed dry runs perform this same read-only Pulp validation and therefore
+require Pulp credentials. Dry runs for builds without `LW-` IDs remain
+offline and do not create a Pulp client.
+
 A backend repository is valid for embargoed content when its associated
 distribution serves `java/predisclosure`.
 
