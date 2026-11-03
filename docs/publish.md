@@ -158,11 +158,16 @@ are published to the dedicated Pulp File repository named by
 `--pulp-vex-repository`, never to `--pulp-file-repository`. The command fails
 closed before anything is uploaded when:
 
-- VEX documents are present and `--pulp-vex-repository` is unset, or
-- `--pulp-vex-repository` names the same repository as `--pulp-file-repository`.
+- VEX documents are present and `--pulp-vex-repository` is unset,
+- `--pulp-vex-repository` names the same repository as `--pulp-file-repository`,
+- the `--pulp-vex-repository` name contains neither `backport` nor `novel`, or
+- any VEX document carries an embargoed (`LW-`) identifier and the
+  `--pulp-vex-repository` name does not contain `predisclosure`.
 
 VEX documents are routed backport/novel against the VEX repository name the
-same way OSV records are against the OSV repository name. Counts are recorded
+same way OSV records are against the OSV repository name. CycloneDX documents
+without `vulnerabilities[]` (e.g. SBOMs) are rejected as security metadata;
+enriched SBOMs live under `enriched-sboms/` and are never published here. Counts are recorded
 in `publish-result.json` (`vex_repository`, `vex_uploaded`, `vex_skipped`) and
 exposed as the `VEX_UPLOADED` and `VEX_SKIPPED` Tekton results. VEX is never
 pushed to the GitHub OSV repository.

@@ -132,8 +132,7 @@ def _gav_index_vulnerabilities(
 def _validate_load_json_security_metadata(path: Path) -> dict[str, Any]:
     """Validate and load the JSON security metadata from the given file path.
 
-    Accepts OSV (.json), CycloneDX SBOM (.bom.json), and CycloneDX VEX
-    (.bom.json) files.
+    Accepts OSV (.json) and CycloneDX VEX (.bom.json) files.
     """
     if path.suffix != ".json":
         raise ValueError(
@@ -155,21 +154,22 @@ def _validate_security_metadata(
     for path in security_metadata_files:
         record = _validate_load_json_security_metadata(path)
 
-        # CycloneDX document: SBOM has components[], VEX has vulnerabilities[]
-        is_cyclonedx = record.get("bomFormat") == "CycloneDX"
-        is_cdx_vex = is_cyclonedx and isinstance(
-            record.get("vulnerabilities"), list
-        )
-        is_cdx_sbom = is_cyclonedx and isinstance(record.get("components"), list)
-        if is_cdx_vex or is_cdx_sbom:
-            # CycloneDX SBOM and VEX are valid security metadata
-            if is_cdx_vex:
-                for vuln in record["vulnerabilities"]:
-                    if not isinstance(vuln, dict):
-                        continue
-                    vuln_id = vuln.get("id", "")
-                    if vuln_id:
-                        osv_vulnerability_ids.add(vuln_id)
+        # CycloneDX: only VEX (vulnerabilities[]) is publishable security
+        # metadata. Anything else (e.g. an SBOM) is rejected rather than
+        # routed to the OSV repository; SBOMs live in enriched-sboms/.
+        if record.get("bomFormat") == "CycloneDX":
+            if not isinstance(record.get("vulnerabilities"), list):
+                raise ValueError(
+                    f"CycloneDX document {path.name} is not VEX (no "
+                    f"vulnerabilities[]); only OSV records and CycloneDX VEX "
+                    f"are published as security metadata."
+                )
+            for vuln in record["vulnerabilities"]:
+                if not isinstance(vuln, dict):
+                    continue
+                vuln_id = vuln.get("id", "")
+                if vuln_id:
+                    osv_vulnerability_ids.add(vuln_id)
             continue
 
         osv_id = record.get("id")
@@ -484,16 +484,33 @@ def _partition_vex(
     return tuple(osv_files), tuple(vex_files)
 
 
+def _vex_vuln_ids(path: Path) -> list[str]:
+    """Return the ``vulnerabilities[].id`` values of a CycloneDX VEX file."""
+    record = safe_json_load(path, raise_on_err=False)
+    if not isinstance(record, dict):
+        return []
+    return [
+        v["id"]
+        for v in record.get("vulnerabilities") or []
+        if isinstance(v, dict) and isinstance(v.get("id"), str)
+    ]
+
+
 def _verify_requires_vex_repository(
     vex_files: tuple[Path, ...],
     pulp_vex_repository: str | None,
     pulp_file_repository: str | None,
 ) -> bool:
-    """Fail closed when VEX is present without a dedicated VEX repository.
+    """Fail closed unless VEX has a dedicated, recognized, safe repository.
 
-    VEX documents never fall back to the OSV File repository: a missing
-    VEX repository, or one that names the OSV repository, aborts the run
-    before anything is uploaded.
+    Checked before anything is uploaded. VEX never falls back to the OSV
+    File repository, and the run aborts when the VEX repository is:
+
+    * missing, or the same as the OSV repository;
+    * not recognizable as a backport/novel repository by name (VEX would
+      otherwise upload unfiltered);
+    * not a predisclosure repository while any VEX carries embargoed
+      (``LW-``) identifiers.
     """
     if not vex_files:
         return False
@@ -508,6 +525,24 @@ def _verify_requires_vex_repository(
             f"--pulp-vex-repository '{pulp_vex_repository}' must differ from "
             f"--pulp-file-repository; VEX is never published to the OSV "
             f"repository."
+        )
+    if _expected_source_for_repo(pulp_vex_repository) is None:
+        raise click.UsageError(
+            f"--pulp-vex-repository '{pulp_vex_repository}' is not recognized "
+            f"as a backport or novel VEX repository (its name must contain "
+            f"'backport' or 'novel'); refusing to upload VEX unfiltered."
+        )
+    embargoed = sorted(
+        f.name
+        for f in vex_files
+        if _source_from_vuln_id_has_embargo(_vex_vuln_ids(f))
+    )
+    if embargoed and "predisclosure" not in pulp_vex_repository.lower():
+        raise click.UsageError(
+            f"VEX document(s) {', '.join(embargoed)} contain embargoed (LW-) "
+            f"vulnerabilities but --pulp-vex-repository "
+            f"'{pulp_vex_repository}' is not a predisclosure repository. "
+            f"Aborting to prevent disclosure of embargoed content."
         )
     return True
 

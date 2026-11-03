@@ -3687,11 +3687,13 @@ def _setup_pulp_mocks(mock_maven_cls: Mock, mock_file_cls: Mock) -> Mock:
     return mock_file
 
 
-def _add_cyclonedx_sbom(artifact_dir: Path) -> None:
-    """Drop a CycloneDX SBOM next to the OSV records, as generation does."""
+def _add_cyclonedx_vex(artifact_dir: Path, cve_id: str) -> None:
+    """Drop a CycloneDX VEX next to the OSV records, as generation does."""
     sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
-    (sec_dir / "org.example.artifact-1.0.0.bom.json").write_text(
-        json.dumps({"bomFormat": "CycloneDX", "components": []})
+    (sec_dir / f"{cve_id}-2026-10-30T20:34:00Z.bom.json").write_text(
+        json.dumps(
+            {"bomFormat": "CycloneDX", "vulnerabilities": [{"id": cve_id}]}
+        )
     )
 
 
@@ -3710,18 +3712,22 @@ def test_publish_pushes_only_backport_osv_records_to_github(
         include_security_metadata=True,
         osv_records=[("CVE-2026-1111", "pnc-build")],
     )
-    _add_cyclonedx_sbom(artifact_dir)
+    _add_cyclonedx_vex(artifact_dir, "CVE-2026-1111")
     mock_file = _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
     mock_gh = Mock()
     mock_gh.publish.return_value = "abc123"
     mock_gh_cls.return_value = mock_gh
 
     result = _run_publish_with_github(
-        artifact_dir, "osv-java-backport", *_GITHUB_ENABLED_ARGS
+        artifact_dir,
+        "osv-java-backport",
+        *_GITHUB_ENABLED_ARGS,
+        "--pulp-vex-repository",
+        "vex-java-backport",
     )
 
     assert result.exit_code == 0, result.output
-    # Pulp still receives both the OSV record and the SBOM.
+    # Pulp still receives both the OSV record (OSV repo) and the VEX (VEX repo).
     assert mock_file.upload_content.call_count == 2
     assert mock_gh_cls.call_args.args == (_GITHUB_OSV_REPO, "ghp_secret")
     assert mock_gh_cls.call_args.kwargs["path"] == "advisories"
@@ -4157,7 +4163,7 @@ def test_publish_routes_vex_to_vex_repository(
 
     osv_client = _file_client_mock(_FILE_REPO_HREF)
     vex_client = _file_client_mock(_VEX_REPO_HREF)
-    clients = {"osv-repo": osv_client, "vex-repo": vex_client}
+    clients = {"osv-repo": osv_client, "vex-java-backport": vex_client}
     mock_file_cls.side_effect = lambda _config, repo: clients[repo]
 
     result = CliRunner().invoke(
@@ -4167,7 +4173,7 @@ def test_publish_routes_vex_to_vex_repository(
             "--pulp-file-repository",
             "osv-repo",
             "--pulp-vex-repository",
-            "vex-repo",
+            "vex-java-backport",
         ),
     )
 
@@ -4179,15 +4185,15 @@ def test_publish_routes_vex_to_vex_repository(
     assert osv_names == ["gav-index.osv.json"]
     assert vex_names == ["CVE-2026-1234-2026-10-30T20:34:00Z.bom.json"]
     assert all(c.kwargs["repository_href"] == _VEX_REPO_HREF for c in vex_calls)
-    vex_client.resolve_distribution.assert_called_once_with("vex-repo")
-    assert "VEX: 1 document(s) uploaded to vex-repo" in result.output
+    vex_client.resolve_distribution.assert_called_once_with("vex-java-backport")
+    assert "VEX: 1 document(s) uploaded to vex-java-backport" in result.output
 
     from slan_cuan.models import PublishResult
 
     publish_result = PublishResult.from_file(artifact_dir / "publish-result.json")
     assert publish_result.security_metadata_uploaded == 1
     assert publish_result.vex_uploaded == 1
-    assert publish_result.vex_repository == "vex-repo"
+    assert publish_result.vex_repository == "vex-java-backport"
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -4243,30 +4249,147 @@ def test_publish_vex_repository_env_var(tmp_path: Path) -> None:
         ["--dry-run", *_publish_args(artifact_dir)],
         env={
             "SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY": "osv-repo",
-            "SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY": "vex-repo",
+            "SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY": "vex-java-backport",
         },
     )
 
     assert result.exit_code == 0, result.output
-    assert "VEX (vex-repo): 1 document(s)" in result.output
+    assert "VEX (vex-java-backport): 1 document(s)" in result.output
     assert "CVE-2026-1234-2026-10-30T20:34:00Z.bom.json" in result.output
 
 
-def test_partition_vex_keeps_cdx_sbom_with_osv(tmp_path: Path) -> None:
-    """Only CycloneDX documents with vulnerabilities[] are VEX."""
+def test_partition_vex_splits_osv_and_vex(tmp_path: Path) -> None:
+    """CycloneDX documents with vulnerabilities[] are VEX; OSV is not."""
     from slan_cuan.java.publish import _partition_vex
 
     osv = tmp_path / "x_RHLW-CVE-1.json"
     osv.write_text(
         json.dumps({"id": "x", "affected": [{}], "aliases": ["CVE-1"]})
     )
-    sbom = tmp_path / "sbom.bom.json"
-    sbom.write_text(json.dumps({"bomFormat": "CycloneDX", "components": []}))
     vex = _write_vex(
         tmp_path, "2026-10-30T20:34:00Z.bom.json", ["CVE-1", "CVE-2"]
     )
 
-    osv_files, vex_files = _partition_vex((osv, sbom, vex))
+    osv_files, vex_files = _partition_vex((osv, vex))
 
-    assert osv_files == (osv, sbom)
+    assert osv_files == (osv,)
     assert vex_files == (vex,)
+
+
+def _invoke_vex_publish(
+    artifact_dir: Path, vex_repo: str, maven_repo: str
+) -> Result:
+    args = _publish_args(
+        artifact_dir,
+        "--pulp-file-repository",
+        "osv-repo",
+        "--pulp-vex-repository",
+        vex_repo,
+    )
+    args[args.index("test-repo")] = maven_repo
+    return CliRunner().invoke(main, args)
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_vex_repository_must_be_recognized(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """An unrecognized VEX repo name would upload unfiltered: fail closed."""
+    artifact_dir = _vex_artifact_dir(tmp_path)
+
+    result = _invoke_vex_publish(artifact_dir, "vex-java-remediated", "test-repo")
+
+    assert result.exit_code != 0
+    assert "not recognized as a backport or novel VEX repository" in (
+        result.output
+    )
+    mock_file_cls.assert_not_called()
+    mock_maven_cls.assert_not_called()
+
+
+def _embargoed_vex_artifact_dir(tmp_path: Path) -> Path:
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[("LW-2026-00001", "novel-pipeline")],
+    )
+    sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
+    _write_vex(sec_dir, "2026-10-30T20:34:00Z.bom.json", ["LW-2026-00001"])
+    return artifact_dir
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_embargoed_vex_requires_predisclosure_vex_repo(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """LW- VEX to a non-predisclosure VEX repo is rejected before upload."""
+    artifact_dir = _embargoed_vex_artifact_dir(tmp_path)
+
+    result = _invoke_vex_publish(
+        artifact_dir, "vex-java-novel", "lightwell-java-predisclosure"
+    )
+
+    assert result.exit_code != 0
+    assert "embargoed (LW-)" in result.output
+    assert "'vex-java-novel' is not a predisclosure repository" in result.output
+    mock_file_cls.assert_not_called()
+    mock_maven_cls.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_embargoed_vex_to_predisclosure_vex_repo(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """LW- VEX is published when the VEX repo is novel + predisclosure."""
+    artifact_dir = _embargoed_vex_artifact_dir(tmp_path)
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    vex_client = _file_client_mock(_VEX_REPO_HREF)
+    osv_client = _file_client_mock(_FILE_REPO_HREF)
+    clients = {"osv-repo": osv_client, "vex-java-novel-predisclosure": vex_client}
+    mock_file_cls.side_effect = lambda _config, repo: clients[repo]
+
+    result = _invoke_vex_publish(
+        artifact_dir,
+        "vex-java-novel-predisclosure",
+        "lightwell-java-predisclosure",
+    )
+
+    assert result.exit_code == 0, result.output
+    vex_names = [
+        c.kwargs["file_path"].name
+        for c in vex_client.upload_content.call_args_list
+    ]
+    assert vex_names == ["2026-10-30T20:34:00Z.bom.json"]
+
+
+def test_publish_rejects_cyclonedx_sbom_in_security_metadata(
+    tmp_path: Path,
+) -> None:
+    """A CycloneDX doc without vulnerabilities[] is never routed to OSV."""
+    artifact_dir = _vex_artifact_dir(tmp_path)
+    sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
+    (sec_dir / "lib-1.0.0.bom.json").write_text(
+        json.dumps({"bomFormat": "CycloneDX", "components": []})
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            *_publish_args(
+                artifact_dir,
+                "--pulp-file-repository",
+                "osv-repo",
+                "--pulp-vex-repository",
+                "vex-java-backport",
+            ),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "lib-1.0.0.bom.json is not VEX" in result.output
