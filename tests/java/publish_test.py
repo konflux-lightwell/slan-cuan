@@ -58,6 +58,12 @@ _PUBLIC_DISTRIBUTION = MavenDistribution(
     base_path="java/public",
     repository=_REPO_HREF,
 )
+_FOREIGN_PREDISCLOSURE_DISTRIBUTION = MavenDistribution(
+    pulp_href="/api/v3/distributions/maven/maven/other/",
+    name="java-predisclosure",
+    base_path="java/predisclosure",
+    repository="/api/v3/repositories/maven/maven/other/",
+)
 
 _FILE_MODIFY_RESULT = ModifyResult(
     task_href="/api/v3/tasks/file-abc/",
@@ -2939,6 +2945,139 @@ def test_publish_fails_closed_when_distribution_lookup_fails(
 
     assert result.exit_code != 0
     assert "Unable to verify the predisclosure distribution" in result.output
+    mock_maven.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_rejects_predisclosure_distribution_for_foreign_repository(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """A predisclosure path cannot validate a different repository."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.return_value = (
+        _FOREIGN_PREDISCLOSURE_DISTRIBUTION,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-novel-landing",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "not associated with a predisclosure distribution" in result.output
+    mock_maven.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_dry_run_validates_embargoed_predisclosure_route(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed dry runs validate routing before reporting success."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-novel-landing",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "dry-run: would upload" in result.output
+    mock_maven.resolve_repository.assert_called_once_with("test-novel-landing")
+    mock_maven.list_distributions.assert_called_once_with(_REPO_HREF)
+    mock_maven.upload_content.assert_not_called()
+    mock_maven.modify_repository.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_dry_run_rejects_embargoed_non_predisclosure_route(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed dry runs fail closed on unsafe routing."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.return_value = (_PUBLIC_DISTRIBUTION,)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--dry-run",
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-novel-landing",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "not associated with a predisclosure distribution" in result.output
+    assert "dry-run: would upload" not in result.output
     mock_maven.upload_content.assert_not_called()
 
 
