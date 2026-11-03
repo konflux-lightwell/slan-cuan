@@ -11,7 +11,101 @@ import pytest
 
 from slan_cuan.pulp.clients.maven import PulpMavenClient
 from slan_cuan.pulp.exceptions import PulpError
-from slan_cuan.pulp.models import PulpConfig
+from slan_cuan.pulp.models import MavenDistribution, PulpConfig
+
+
+class TestListDistributions:
+    """Tests for list_distributions()."""
+
+    def test_list_distributions_success_and_request(self) -> None:
+        """The repository filter is sent and distributions are parsed."""
+        captured_url = None
+        captured_params = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_url, captured_params
+            captured_url = str(request.url)
+            captured_params = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "pulp_href": "/api/v3/distributions/maven/maven/1/",
+                            "name": "java-predisclosure",
+                            "base_path": "java/predisclosure",
+                            "repository": _REPO_HREF,
+                        }
+                    ]
+                },
+            )
+
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="lightwell",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-novel-landing")
+        client._client = httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="https://pulp.example.com",
+        )
+
+        result = client.list_distributions(_REPO_HREF)
+
+        assert captured_url is not None
+        assert (
+            "/api/pulp/lightwell/api/v3/distributions/maven/maven/"
+            in captured_url
+        )
+        assert captured_params == {"repository": _REPO_HREF}
+        assert result == (
+            MavenDistribution(
+                pulp_href="/api/v3/distributions/maven/maven/1/",
+                name="java-predisclosure",
+                base_path="java/predisclosure",
+                repository=_REPO_HREF,
+            ),
+        )
+
+    @pytest.mark.parametrize(
+        "response_body",
+        [
+            {"results": "invalid"},
+            {"results": ["invalid"]},
+            {"results": [{"name": "missing-href"}]},
+            {"results": [{"pulp_href": "/api/v3/distributions/1/"}]},
+            {"results": [{"pulp_href": "/1/", "name": "missing-path"}]},
+        ],
+    )
+    def test_list_distributions_malformed_response(
+        self, response_body: dict[str, object]
+    ) -> None:
+        """Malformed or incomplete distributions fail closed."""
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="lightwell",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-novel-landing")
+        client._client = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=response_body)
+            ),
+            base_url="https://pulp.example.com",
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.list_distributions(_REPO_HREF)
+
+        assert "Failed to parse Maven distribution" in exc_info.value.message
+
+
+_REPO_HREF = "/api/v3/repositories/maven/maven/abc/"
 
 
 def _content_handler(

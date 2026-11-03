@@ -10,7 +10,13 @@ import pytest
 from click.testing import CliRunner, Result
 
 from slan_cuan.cli import main
-from slan_cuan.pulp import ContentUnit, FileContentUnit, ModifyResult, PulpError
+from slan_cuan.pulp import (
+    ContentUnit,
+    FileContentUnit,
+    MavenDistribution,
+    ModifyResult,
+    PulpError,
+)
 
 _CONTENT_UNIT = ContentUnit(
     pulp_href="/api/v3/content/maven/artifact/abc/",
@@ -40,6 +46,18 @@ _FILE_PUB_HREF = "/api/v3/publications/file/file/pub-abc/"
 _FILE_DIST_HREF = "/api/v3/distributions/file/file/dist-abc/"
 
 _FILE_REPO_HREF = "/api/v3/repositories/file/file/abc/"
+_PREDISCLOSURE_DISTRIBUTION = MavenDistribution(
+    pulp_href="/api/v3/distributions/maven/maven/predisclosure/",
+    name="java-predisclosure",
+    base_path="java/predisclosure",
+    repository=_REPO_HREF,
+)
+_PUBLIC_DISTRIBUTION = MavenDistribution(
+    pulp_href="/api/v3/distributions/maven/maven/public/",
+    name="java-public",
+    base_path="java/public",
+    repository=_REPO_HREF,
+)
 
 _FILE_MODIFY_RESULT = ModifyResult(
     task_href="/api/v3/tasks/file-abc/",
@@ -62,6 +80,7 @@ def _setup_client_mock(mock_client: Mock) -> None:
     mock_client.upload_content.return_value = _CONTENT_UNIT
     mock_client.resolve_repository.return_value = _REPO_HREF
     mock_client.modify_repository.return_value = _MODIFY_RESULT
+    mock_client.list_distributions.return_value = (_PREDISCLOSURE_DISTRIBUTION,)
 
 
 def create_test_artifact_dir(
@@ -2658,6 +2677,7 @@ def test_publish_preflights_file_repo_before_maven_mutation(
     mock_maven = _make_ctx_mock()
     mock_maven_cls.return_value = mock_maven
     _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.return_value = ()
     mock_file = _make_ctx_mock()
     mock_file_cls.return_value = mock_file
     mock_file.resolve_repository.side_effect = PulpError(
@@ -2731,19 +2751,28 @@ def test_publish_skips_file_repo_for_clean_gav_index_without_osv_files(
     )
 
     assert result.exit_code == 0, result.output
+    mock_maven.list_distributions.assert_not_called()
 
 
+@patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
-    mock_maven_cls: Mock, tmp_path: Path
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
 ) -> None:
     """Embargoed (LW-) builds must not publish to non-predisclosure repos."""
     artifact_dir = create_test_artifact_dir(
-        tmp_path, gav_index_vulns=["LW-2026-0001"]
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
     )
     mock_maven = _make_ctx_mock()
     mock_maven_cls.return_value = mock_maven
     _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.return_value = (_PUBLIC_DISTRIBUTION,)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
 
     result = CliRunner().invoke(
         main,
@@ -2752,7 +2781,9 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
             "--pulp-url",
             "https://pulp.example.com",
             "--pulp-repository",
-            "lightwell-java-remediated",
+            "test-novel-landing",
+            "--pulp-file-repository",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -2768,6 +2799,7 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
         "Should reject LW- vulns to non-predisclosure repo"
     )
     assert "embargoed" in result.output.lower()
+    mock_maven.upload_content.assert_not_called()
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -2785,6 +2817,7 @@ def test_publish_allows_lw_vulns_to_predisclosure_repo(
     mock_maven = _make_ctx_mock()
     mock_maven_cls.return_value = mock_maven
     _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.return_value = (_PREDISCLOSURE_DISTRIBUTION,)
     mock_file = _make_ctx_mock()
     mock_file_cls.return_value = mock_file
     _setup_file_client(mock_file)
@@ -2796,7 +2829,7 @@ def test_publish_allows_lw_vulns_to_predisclosure_repo(
             "--pulp-url",
             "https://pulp.example.com",
             "--pulp-repository",
-            "lightwell-java-predisclosure",
+            "test-novel-landing",
             "--pulp-file-repository",
             "osv-java-novel",
             "--artifact-dir",
@@ -2811,6 +2844,102 @@ def test_publish_allows_lw_vulns_to_predisclosure_repo(
     )
 
     assert result.exit_code == 0, result.output
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_rejects_lw_vulns_when_repository_has_no_distribution(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed builds fail closed when no distribution serves the repo."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.return_value = ()
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-novel-landing",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "not associated with a predisclosure distribution" in result.output
+    mock_maven.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_fails_closed_when_distribution_lookup_fails(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed builds fail closed when distribution lookup errors."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        gav_index_vulns=["LW-2026-0001"],
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0001", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_maven.list_distributions.side_effect = PulpError(
+        "Maven distribution lookup failed",
+        status_code=500,
+        response_body="Internal Server Error",
+    )
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-novel-landing",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unable to verify the predisclosure distribution" in result.output
+    mock_maven.upload_content.assert_not_called()
 
 
 @pytest.mark.parametrize(

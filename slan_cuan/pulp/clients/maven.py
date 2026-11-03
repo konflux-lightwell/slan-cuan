@@ -10,11 +10,12 @@ from slan_cuan.http import parse_json_dict
 from slan_cuan.pulp.clients.base import PulpClientBase
 from slan_cuan.pulp.constants import (
     CONTENT_API_PATH_TEMPLATE,
+    MAVEN_DISTRIBUTION_API_PATH_TEMPLATE,
     METADATA_API_PATH_TEMPLATE,
     REPO_API_PATH_TEMPLATE,
 )
 from slan_cuan.pulp.exceptions import PulpError
-from slan_cuan.pulp.models import ContentUnit
+from slan_cuan.pulp.models import ContentUnit, MavenDistribution
 
 
 class PulpMavenClient(PulpClientBase):
@@ -24,6 +25,69 @@ class PulpMavenClient(PulpClientBase):
     _repo_not_found_message = (
         "Repository '{name}' not found. Check --pulp-repository."
     )
+
+    def list_distributions(
+        self, repository_href: str
+    ) -> tuple[MavenDistribution, ...]:
+        """List Maven distributions serving a repository.
+
+        Args:
+            repository_href: The pulp_href of the Maven repository.
+
+        Returns:
+            Maven distributions associated with the repository.
+
+        Raises:
+            PulpError: If the lookup fails or returns invalid data.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for distribution lookup. Set --pulp-domain.",
+                status_code=0,
+                response_body="",
+            )
+
+        url = MAVEN_DISTRIBUTION_API_PATH_TEMPLATE.format(
+            domain=self._config.domain
+        )
+        response = self._request(
+            "GET",
+            url,
+            "Maven distribution lookup",
+            params={"repository": repository_href},
+        )
+
+        try:
+            response_data = parse_json_dict(
+                response, "Maven distribution", PulpError
+            )
+            results = response_data.get("results", [])
+            if not isinstance(results, list):
+                raise ValueError("results is not a list")
+
+            distributions: list[MavenDistribution] = []
+            for result in results:
+                if not isinstance(result, dict):
+                    raise ValueError("distribution result is not an object")
+                repository = result.get("repository")
+                distributions.append(
+                    MavenDistribution(
+                        pulp_href=str(result["pulp_href"]),
+                        name=str(result["name"]),
+                        base_path=str(result["base_path"]),
+                        repository=(
+                            str(repository) if repository is not None else None
+                        ),
+                    )
+                )
+            return tuple(distributions)
+        except (ValueError, KeyError, TypeError) as e:
+            raise PulpError(
+                f"Failed to parse Maven distribution lookup response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
 
     def upload_content(
         self,

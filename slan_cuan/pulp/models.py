@@ -38,6 +38,16 @@ class ContentUnit:
 
 
 @dataclass(frozen=True)
+class MavenDistribution:
+    """A Maven distribution returned by the Pulp distribution API."""
+
+    pulp_href: str
+    name: str
+    base_path: str
+    repository: str | None = None
+
+
+@dataclass(frozen=True)
 class FileContentUnit:
     """A content unit returned by the Pulp File upload endpoint."""
 
