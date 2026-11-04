@@ -21,6 +21,9 @@ METADATA_API_PATH_TEMPLATE: str = (
 REPO_API_PATH_TEMPLATE: str = (
     "/api/pulp/{domain}/api/v3/repositories/maven/maven/"
 )
+MAVEN_DISTRIBUTION_API_PATH_TEMPLATE: str = (
+    "/api/pulp/{domain}/api/v3/distributions/maven/maven/"
+)
 
 # Pulp File plugin API URL path templates
 FILE_CONTENT_API_PATH_TEMPLATE: str = (

@@ -40,6 +40,7 @@ _DIAG_MAX_ENTRIES = 50
 _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
 GAV_INDEX_FILENAME = "gav-index.json"
+MAVEN_PREDISCLOSURE_BASE_PATH = "java/predisclosure"
 
 
 def _load_upstream_sbom(
@@ -686,6 +687,93 @@ def _publish_file_records(
     return uploaded
 
 
+def _repository_has_predisclosure_distribution(
+    client: PulpMavenClient, repository_href: str
+) -> bool:
+    """Check whether a repository is served by the predisclosure route."""
+    distributions = client.list_distributions(repository_href)
+    return any(
+        distribution.repository == repository_href
+        and distribution.base_path.strip("/") == MAVEN_PREDISCLOSURE_BASE_PATH
+        for distribution in distributions
+    )
+
+
+def _validate_predisclosure_distribution(
+    client: PulpMavenClient, repository_name: str
+) -> str:
+    """Resolve and validate the repository's predisclosure distribution."""
+    try:
+        click.echo(f"Resolving repository: {repository_name}")
+        repository_href = client.resolve_repository(repository_name)
+        if not _repository_has_predisclosure_distribution(
+            client, repository_href
+        ):
+            raise click.ClickException(
+                f"Build contains embargoed (LW-) vulnerabilities but "
+                f"repository '{repository_name}' is not associated "
+                f"with a predisclosure distribution. Aborting to "
+                f"prevent disclosure of embargoed content."
+            )
+    except PulpError as e:
+        raise click.ClickException(
+            "Unable to verify the predisclosure distribution for an "
+            "embargoed build."
+        ) from e
+
+    return repository_href
+
+
+def _print_dry_run(
+    *,
+    build: BuildOutput,
+    uploadable_metadata: tuple[Path, ...],
+    uploadable_vex: tuple[Path, ...],
+    file_skipped: int,
+    github_records: tuple[Path, ...],
+    github_osv_repo: str | None,
+    github_osv_branch: str,
+    github_osv_path: str,
+    pulp_repository: str,
+    pulp_url: str,
+    pulp_auth_type: str,
+    upload_workers: int,
+) -> None:
+    """Print the actions a dry run would take."""
+    click.echo(f"Distribution: {pulp_repository}")
+    click.echo(f"Pulp URL: {pulp_url}")
+    click.echo(f"Auth type: {pulp_auth_type}")
+    click.echo(f"Artifacts: {len(build.artifacts)}")
+    click.echo(f"Coordinates: {len(build.coordinates)}")
+    click.echo(f"Upload workers: {upload_workers}")
+    for artifact in build.artifacts:
+        click.echo(f"  {artifact.relative_path}")
+    if uploadable_metadata:
+        click.echo(f"Security metadata: {len(uploadable_metadata)} file(s)")
+        for metadata_file in uploadable_metadata:
+            click.echo(f"  {metadata_file.name}")
+    if uploadable_vex:
+        click.echo(f"VEX metadata: {len(uploadable_vex)} file(s)")
+        for metadata_file in uploadable_vex:
+            click.echo(f"  {metadata_file.name}")
+    if file_skipped:
+        click.echo(f"Security metadata skipped (wrong type): {file_skipped}")
+    if github_records:
+        click.echo(
+            f"GitHub OSV: would push {len(github_records)} "
+            f"record(s) to {github_osv_repo} "
+            f"(branch {github_osv_branch}, "
+            f"path {github_osv_path or '/'})"
+        )
+        for metadata_file in github_records:
+            click.echo(f"  {metadata_file.name}")
+    click.echo(
+        f"\ndry-run: would upload "
+        f"{len(build.artifacts)} artifact(s) "
+        f"to {pulp_url}"
+    )
+
+
 def _upload_to_pulp(
     ctx: GlobalContext,
     config: PulpConfig,
@@ -701,6 +789,7 @@ def _upload_to_pulp(
     requires_vex_repository: bool,
     file_skipped: int,
     upload_workers: int,
+    repository_href: str | None = None,
 ) -> tuple[PublishResult, int, int, int, int]:
     """Upload artifacts to Pulp."""
     uploaded = 0
@@ -762,14 +851,15 @@ def _upload_to_pulp(
                 uploaded += 1
 
         if content_unit_hrefs:
-            click.echo(f"Resolving repository: {pulp_repository}")
-            repo_href = client.resolve_repository(pulp_repository)
+            if repository_href is None:
+                click.echo(f"Resolving repository: {pulp_repository}")
+                repository_href = client.resolve_repository(pulp_repository)
 
             click.echo(
                 f"Adding {len(content_unit_hrefs)} content unit(s) to repository"
             )
             modify_result = client.modify_repository(
-                repo_href, content_unit_hrefs
+                repository_href, content_unit_hrefs
             )
             repository_version = modify_result.repository_version
 
@@ -1093,17 +1183,7 @@ def publish(
             extract_result.attachment_files, artifact_dir
         )
 
-        # Embargo safety: LW- IDs indicate embargoed content that must
-        # only publish to predisclosure repos. Reject if the target
-        # Maven repo name does not contain "predisclosure".
         has_lw = _source_from_vuln_id_has_embargo(vulns)
-        if has_lw and "predisclosure" not in pulp_repository.lower():
-            raise click.ClickException(
-                f"Build contains embargoed (LW-) vulnerabilities but "
-                f"--pulp-repository '{pulp_repository}' is not a "
-                f"predisclosure repository. Aborting to prevent "
-                f"disclosure of embargoed content."
-            )
 
         security_metadata_files = (
             tuple(
@@ -1188,42 +1268,20 @@ def publish(
                 verbose=ctx.verbose,
             )
 
-        if ctx.dry_run:
-            click.echo(f"Distribution: {pulp_repository}")
-            click.echo(f"Pulp URL: {pulp_url}")
-            click.echo(f"Auth type: {pulp_auth_type}")
-            click.echo(f"Artifacts: {len(build.artifacts)}")
-            click.echo(f"Coordinates: {len(build.coordinates)}")
-            click.echo(f"Upload workers: {upload_workers}")
-            for artifact in build.artifacts:
-                click.echo(f"  {artifact.relative_path}")
-            if uploadable_metadata:
-                click.echo(
-                    f"Security metadata: {len(uploadable_metadata)} file(s)"
-                )
-                for f in uploadable_metadata:
-                    click.echo(f"  {f.name}")
-            if uploadable_vex:
-                click.echo(f"VEX metadata: {len(uploadable_vex)} file(s)")
-                for f in uploadable_vex:
-                    click.echo(f"  {f.name}")
-            if file_skipped:
-                click.echo(
-                    f"Security metadata skipped (wrong type): {file_skipped}"
-                )
-            if github_records:
-                click.echo(
-                    f"GitHub OSV: would push {len(github_records)} "
-                    f"record(s) to {github_osv_repo} "
-                    f"(branch {github_osv_branch}, "
-                    f"path {github_osv_path or '/'})"
-                )
-                for f in github_records:
-                    click.echo(f"  {f.name}")
-            click.echo(
-                f"\ndry-run: would upload "
-                f"{len(build.artifacts)} artifact(s) "
-                f"to {pulp_url}"
+        if ctx.dry_run and not has_lw:
+            _print_dry_run(
+                build=build,
+                uploadable_metadata=uploadable_metadata,
+                uploadable_vex=uploadable_vex,
+                file_skipped=file_skipped,
+                github_records=github_records,
+                github_osv_repo=github_osv_repo,
+                github_osv_branch=github_osv_branch,
+                github_osv_path=github_osv_path,
+                pulp_repository=pulp_repository,
+                pulp_url=pulp_url,
+                pulp_auth_type=pulp_auth_type,
+                upload_workers=upload_workers,
             )
             return
 
@@ -1278,6 +1336,30 @@ def publish(
             pulp_max_total_task_timeout=pulp_max_total_task_timeout,
         )
 
+        repository_href: str | None = None
+        if has_lw:
+            with PulpMavenClient(config, pulp_repository) as client:
+                repository_href = _validate_predisclosure_distribution(
+                    client, pulp_repository
+                )
+
+        if ctx.dry_run:
+            _print_dry_run(
+                build=build,
+                uploadable_metadata=uploadable_metadata,
+                uploadable_vex=uploadable_vex,
+                file_skipped=file_skipped,
+                github_records=github_records,
+                github_osv_repo=github_osv_repo,
+                github_osv_branch=github_osv_branch,
+                github_osv_path=github_osv_path,
+                pulp_repository=pulp_repository,
+                pulp_url=pulp_url,
+                pulp_auth_type=pulp_auth_type,
+                upload_workers=upload_workers,
+            )
+            return
+
         pulp_labels: dict[str, str] = {
             "source_image": str(extract_result.image),
         }
@@ -1304,6 +1386,7 @@ def publish(
             requires_vex_repository=requires_vex_repository,
             file_skipped=file_skipped,
             upload_workers=upload_workers,
+            repository_href=repository_href,
         )
 
         github_osv_uploaded = 0
