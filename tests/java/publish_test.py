@@ -2712,6 +2712,68 @@ def test_publish_vex_repo_routes_like_osv(
     assert osv_name.startswith("x_RHLW-LW-")
 
 
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_keeps_sbom_with_empty_vulnerabilities_on_osv_repo(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """An SBOM with ``vulnerabilities: []`` is not a VEX document."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
+    sbom_name = "org.example.artifact-1.0.0.bom.json"
+    (sec_dir / sbom_name).write_text(
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "components": [{"name": "artifact"}],
+                "vulnerabilities": [],
+            }
+        )
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = _run_publish_with_file_repo(artifact_dir, "test-file-repo")
+
+    assert result.exit_code == 0, result.output
+    uploaded = {
+        call.kwargs["relative_path"]
+        for call in mock_file.upload_content.call_args_list
+    }
+    assert uploaded == {"gav-index.osv.json", sbom_name}
+    mock_file_cls.assert_called_once()
+    assert "VEX metadata" not in result.output
+
+
+def test_record_is_vex_rejects_sbom_shapes() -> None:
+    """CycloneDX SBOMs stay false even when vulnerabilities is present."""
+    from slan_cuan.java.publish import _record_is_vex
+
+    empty_vulns = {
+        "bomFormat": "CycloneDX",
+        "components": [{"name": "artifact"}],
+        "vulnerabilities": [],
+    }
+    mixed = {
+        "bomFormat": "CycloneDX",
+        "components": [{"name": "artifact"}],
+        "vulnerabilities": [{"id": "CVE-2026-1234"}],
+    }
+    vex = {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [{"id": "CVE-2026-1234"}],
+    }
+    assert _record_is_vex(empty_vulns) is False
+    assert _record_is_vex(mixed) is False
+    assert _record_is_vex(vex) is True
+
+
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_skips_file_upload_when_no_security_metadata(
     mock_maven_cls: Mock,

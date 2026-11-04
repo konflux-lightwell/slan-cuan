@@ -111,8 +111,10 @@ Generated OSV/VEX records are published to two destinations:
 - **Pulp VEX repository** (`--pulp-vex-repository`) — required when generated
   VEX documents are present. VEX uses the same upload, publication, and
   backport/novel routing as OSV, against the VEX repository name
-  (for example `vex/java/remediated`). VEX documents are not written to the
-  OSV repository.
+  (for example `vex/java/remediated`). A CycloneDX file is VEX when
+  `vulnerabilities` is a non-empty list and `components` is absent.
+  An SBOM, including one with `"vulnerabilities": []`, stays on the OSV
+  repository.
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under

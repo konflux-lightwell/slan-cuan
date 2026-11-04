@@ -267,15 +267,22 @@ def _source_from_osv_id(osv_id: str) -> str | None:
     return None
 
 
-def _classify_osv_source(file_path: Path) -> str | None:
+def _classify_osv_source(
+    file_path: Path, record: dict[str, Any] | None = None
+) -> str | None:
     """Determine an OSV record's source: authoritative field, then id prefix.
 
     Returns ``"pnc-build"``, ``"novel-pipeline"``, or ``None`` when the record
     cannot be classified (malformed, non-OSV, or an unrecognized id).
+
+    ``record`` is an already-parsed document. When it is omitted, the file
+    is loaded.
     """
-    record = safe_json_load(file_path, raise_on_err=False)
     if record is None:
-        return None
+        loaded = safe_json_load(file_path, raise_on_err=False)
+        if not isinstance(loaded, dict):
+            return None
+        record = loaded
 
     database_specific = record.get("database_specific")
     lightwell = (
@@ -460,14 +467,19 @@ def _verify_requires_file_repository(
     return requires_file_repository
 
 
-def _is_vex_document(path: Path) -> bool:
-    """Return True when the file is a CycloneDX or OpenVEX document."""
-    record = safe_json_load(path, raise_on_err=False)
-    if not isinstance(record, dict):
-        return False
-    if record.get("bomFormat") == "CycloneDX" and isinstance(
-        record.get("vulnerabilities"), list
-    ):
+def _record_is_vex(record: dict[str, Any]) -> bool:
+    """Return True for a CycloneDX VEX or OpenVEX document.
+
+    A CycloneDX document is VEX only when ``vulnerabilities`` is a
+    non-empty list and ``components`` is absent. An SBOM that carries
+    ``"vulnerabilities": []`` stays on the OSV repository.
+    """
+    if record.get("bomFormat") == "CycloneDX":
+        vulnerabilities = record.get("vulnerabilities")
+        if not isinstance(vulnerabilities, list) or not vulnerabilities:
+            return False
+        if "components" in record:
+            return False
         return True
     return isinstance(record.get("statements"), list) and (
         "@context" in record or "document" in record
@@ -476,20 +488,28 @@ def _is_vex_document(path: Path) -> bool:
 
 def _partition_security_metadata(
     security_metadata_files: tuple[Path, ...],
-) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+) -> tuple[tuple[Path, ...], tuple[Path, ...], dict[Path, dict[str, Any]]]:
     """Split security metadata into non-VEX files and VEX documents.
 
     Non-VEX files (OSV records and CycloneDX SBOMs) stay on the OSV
     file repository. VEX documents publish to the VEX file repository.
+
+    The returned mapping holds one parse of each JSON object so later
+    routing does not read the file again.
     """
+    records: dict[Path, dict[str, Any]] = {}
     osv_files: list[Path] = []
     vex_files: list[Path] = []
     for path in security_metadata_files:
-        if _is_vex_document(path):
+        loaded = safe_json_load(path, raise_on_err=False)
+        record = loaded if isinstance(loaded, dict) else None
+        if record is not None:
+            records[path] = record
+        if record is not None and _record_is_vex(record):
             vex_files.append(path)
         else:
             osv_files.append(path)
-    return tuple(osv_files), tuple(vex_files)
+    return tuple(osv_files), tuple(vex_files), records
 
 
 def _verify_requires_vex_repository(
@@ -509,6 +529,7 @@ def _retrieve_uploadable_metadata(
     security_metadata_files: tuple[Path, ...],
     expected_source: str | None,
     pulp_file_repository: str | None,
+    records: dict[Path, dict[str, Any]],
     record_kind: str = "OSV",
 ) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     """Retrieve uploadable metadata."""
@@ -539,7 +560,7 @@ def _retrieve_uploadable_metadata(
     for metadata_file in security_metadata_files:
         # CycloneDX SBOM/VEX: classify by CVE content, not by
         # database_specific (which CycloneDX files lack).
-        cdx_record = safe_json_load(metadata_file, raise_on_err=False)
+        cdx_record = records.get(metadata_file)
         if (
             isinstance(cdx_record, dict)
             and cdx_record.get("bomFormat") == "CycloneDX"
@@ -558,7 +579,7 @@ def _retrieve_uploadable_metadata(
                 )
             continue
 
-        record_source = _classify_osv_source(metadata_file)
+        record_source = _classify_osv_source(metadata_file, cdx_record)
         if record_source == expected_source:
             kept.append(metadata_file)
         else:
@@ -577,6 +598,7 @@ def _retrieve_uploadable_metadata(
 
 def _select_github_osv_records(
     security_metadata_files: tuple[Path, ...],
+    records: dict[Path, dict[str, Any]] | None = None,
 ) -> tuple[Path, ...]:
     """Select the records to publish to the GitHub OSV repository.
 
@@ -592,10 +614,13 @@ def _select_github_osv_records(
     """
     selected: list[Path] = []
     for metadata_file in security_metadata_files:
-        record = safe_json_load(metadata_file, raise_on_err=False)
+        record = None if records is None else records.get(metadata_file)
+        if record is None:
+            loaded = safe_json_load(metadata_file, raise_on_err=False)
+            record = loaded if isinstance(loaded, dict) else None
         if isinstance(record, dict) and record.get("bomFormat") == "CycloneDX":
             continue
-        source = _classify_osv_source(metadata_file)
+        source = _classify_osv_source(metadata_file, record)
         if source is None:
             raise ValueError(
                 f"GitHub OSV: cannot classify the source of "
@@ -1198,7 +1223,7 @@ def publish(
             else ()
         )
         _validate_security_metadata(security_metadata_files, vulns)
-        osv_files, vex_files = _partition_security_metadata(
+        osv_files, vex_files, metadata_records = _partition_security_metadata(
             security_metadata_files
         )
         requires_file_repository = _verify_requires_file_repository(
@@ -1229,7 +1254,7 @@ def publish(
             else None
         )
         uploadable_metadata, skipped_metadata = _retrieve_uploadable_metadata(
-            osv_files, expected_source, pulp_file_repository
+            osv_files, expected_source, pulp_file_repository, metadata_records
         )
         vex_expected_source = (
             _expected_source_for_repo(pulp_vex_repository)
@@ -1240,6 +1265,7 @@ def publish(
             vex_files,
             vex_expected_source,
             pulp_vex_repository,
+            metadata_records,
             record_kind="VEX",
         )
         file_skipped = len(skipped_metadata) + len(skipped_vex)
@@ -1259,7 +1285,9 @@ def publish(
                     "to be the backport OSV repository; "
                     f"'{pulp_file_repository}' is not recognized as one."
                 )
-            github_records = _select_github_osv_records(osv_files)
+            github_records = _select_github_osv_records(
+                osv_files, metadata_records
+            )
             gh_client = GitHubOsvClient(
                 github_osv_repo,
                 github_osv_token,
