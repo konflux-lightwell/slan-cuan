@@ -12,10 +12,10 @@ Upload Maven artifacts to a Pulp repository for distribution via `packages.redha
 6. Saves `publish-result.json` with upload summary
 
 If extracted GAV index data lists vulnerability IDs (`vulns`), or generated
-security metadata files are present, `--pulp-file-repository` is required and
-is resolved before Maven content is uploaded or its repository is modified.
-A clean GAV index with no generated OSV files does not require a File
-repository.
+OSV files are present, `--pulp-file-repository` is required and is resolved
+before Maven content is uploaded or its repository is modified. Generated
+VEX documents require `--pulp-vex-repository` the same way. A clean GAV
+index with no generated OSV files does not require a File repository.
 
 When `--pulp-domain` is set, the deploy URL includes the domain segment (`/pulp/maven/{domain}/{distribution}/{path}`). When not set, it uses the standard path (`/pulp/maven/{distribution}/{path}`).
 
@@ -50,7 +50,8 @@ Labels are also:
 | `--pulp-client-cert` | path | When `cert` | -- | Client certificate for entitlement cert auth |
 | `--pulp-client-key` | path | When `cert` | -- | Client key for entitlement cert auth |
 | `--upload-workers` | integer | No | `4` | Number of concurrent upload threads |
-| `--pulp-file-repository` | string | When OSV present | -- | Pulp File repository name for OSV/VEX upload |
+| `--pulp-file-repository` | string | When OSV present | -- | Pulp File repository name for OSV upload |
+| `--pulp-vex-repository` | string | When VEX present | -- | Pulp File repository name for VEX upload |
 | `--github-osv-repo` | string | No | -- | GitHub repo (`owner/name`) to also publish OSV records to |
 | `--github-osv-token` | string | With `--github-osv-repo` | -- | Token with write access to the OSV repo |
 | `--github-osv-branch` | string | No | `main` | Branch to commit records onto |
@@ -76,6 +77,7 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 | `--pulp-client-key` | `SLAN_CUAN_PUBLISH_PULP_CLIENT_KEY` |
 | `--upload-workers` | `SLAN_CUAN_PUBLISH_UPLOAD_WORKERS` |
 | `--pulp-file-repository` | `SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY` |
+| `--pulp-vex-repository` | `SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY` |
 | `--github-osv-repo` | `SLAN_CUAN_PUBLISH_GITHUB_OSV_REPO` |
 | `--github-osv-token` | `SLAN_CUAN_PUBLISH_GITHUB_OSV_TOKEN` |
 | `--github-osv-branch` | `SLAN_CUAN_PUBLISH_GITHUB_OSV_BRANCH` |
@@ -86,10 +88,15 @@ See [CLI Reference](cli.md#environment-variables) for naming conventions.
 Generated OSV/VEX records are published to two destinations:
 
 - **Pulp File repository** (`--pulp-file-repository`) — required whenever the
-  GAV index lists vulnerabilities or generated security metadata is present.
+  GAV index lists vulnerabilities or generated OSV metadata is present.
   Records are routed by type against the repository name
   (`osv-java-backport`/`osv-java-novel`); see the routing note in
-  `slan_cuan/publish.py`.
+  `slan_cuan/java/publish.py`.
+- **Pulp VEX repository** (`--pulp-vex-repository`) — required when generated
+  VEX documents are present. VEX uses the same upload, publication, and
+  backport/novel routing as OSV, against the VEX repository name
+  (for example `vex/java/remediated`). VEX documents are not written to the
+  OSV repository.
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under
