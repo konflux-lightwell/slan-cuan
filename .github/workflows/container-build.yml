@@ -28,7 +28,7 @@ jobs:
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "tag=latest ${{ github.sha }}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             safe_ref="${{ github.head_ref }}"
             safe_ref="${safe_ref//\//-}"
