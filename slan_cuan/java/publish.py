@@ -203,6 +203,12 @@ def _validate_security_metadata(
         if is_osv:
             osv_vulnerability_ids.update((osv_id, *aliases, *upstream))
 
+    # An LW- id marks a predisclosure build. OSV and VEX files are not
+    # generated for that build. The Maven artifacts still publish. The
+    # caller rejects a non-predisclosure repository before this check.
+    if any(vuln_id.startswith("LW-") for vuln_id in vulns):
+        return
+
     if vulns and not osv_vulnerability_ids:
         raise ValueError("Vulnerable GAV index has no generated OSV metadata.")
     if not vulns and security_metadata_files:
@@ -459,6 +465,14 @@ def _verify_requires_file_repository(
     security_metadata_files: tuple[Path, ...],
     pulp_file_repository: str | None,
 ) -> bool:
+    # A predisclosure build has no OSV or VEX files. Do not require an
+    # OSV file repository when there is nothing to upload.
+    has_lw = any(
+        isinstance(vuln_id, str) and vuln_id.startswith("LW-")
+        for vuln_id in vulns
+    )
+    if has_lw and not security_metadata_files:
+        return False
     requires_file_repository = bool(vulns or security_metadata_files)
     if requires_file_repository and not pulp_file_repository:
         raise click.UsageError(

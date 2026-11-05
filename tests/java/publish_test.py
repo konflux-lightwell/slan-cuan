@@ -3062,6 +3062,49 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
     mock_maven.upload_content.assert_not_called()
 
 
+def test_lw_build_without_osv_passes_metadata_check() -> None:
+    """A predisclosure build with no OSV or VEX files does not fail coverage."""
+    from slan_cuan.java.publish import _validate_security_metadata
+
+    _validate_security_metadata((), ("LW-2026-0001",))
+    _validate_security_metadata((), ("CVE-2024-25710", "LW-2026-0001"))
+
+
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_lw_build_without_osv_to_predisclosure(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed builds publish to predisclosure when OSV and VEX are absent."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, gav_index_vulns=["LW-2026-0001"]
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-predisclosure",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_maven_cls.assert_called()
+
+
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_allows_lw_vulns_to_predisclosure_repo(
