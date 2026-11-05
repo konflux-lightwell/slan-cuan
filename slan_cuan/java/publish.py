@@ -174,12 +174,9 @@ def _validate_security_metadata(
                     f"components[]); only OSV records and CycloneDX VEX are "
                     f"published as security metadata."
                 )
-            for vuln in record["vulnerabilities"]:
-                if not isinstance(vuln, dict):
-                    continue
-                vuln_id = vuln.get("id", "")
-                if vuln_id:
-                    osv_vulnerability_ids.add(vuln_id)
+            osv_vulnerability_ids.update(
+                vuln_id for vuln_id in _vex_vulnerability_ids(record) if vuln_id
+            )
             continue
 
         osv_id = record.get("id")
@@ -241,6 +238,12 @@ def _expected_source_for_repo(repo_name: str) -> str | None:
     silently disabling filtering rather than erroring. This is safe for the
     current inventory (``osv-java-backport``/``osv-java-novel``); revisit if
     the naming scheme changes.
+
+    ``_is_predisclosure_repository_name`` applies the same name-substring
+    convention for the orthogonal "is this a predisclosure repo" question.
+    The two are independent classifiers over the same repo name and must be
+    kept in sync by hand if the naming scheme changes; see the module-level
+    TODO in that function for the tracked follow-up to unify them.
     """
     lowered = repo_name.lower()
     if "backport" in lowered:
@@ -532,6 +535,18 @@ def _is_predisclosure_repository_name(repository_name: str | None) -> bool:
     Pulp File repositories are recognized by name (for example
     ``osv-java-novel-predisclosure``), the same way backport/novel routing
     is inferred in ``_expected_source_for_repo``.
+
+    TODO: this is a third independent name-substring classifier over the
+    same repository name (``_expected_source_for_repo`` is the first; OSV-id
+    prefix classification in ``_source_from_osv_id``/``_source_from_vuln_id``
+    is a separate, non-name-based one). All of the embargo helpers below
+    (``_source_from_vuln_id_has_embargo``, ``_metadata_has_embargo``,
+    ``_verify_requires_vex_repository``, ``_verify_embargo_destinations``)
+    depend on this one agreeing with ``_expected_source_for_repo`` on what
+    counts as a safe destination. Consider folding ``predisclosure`` into a
+    single repo-name classifier (e.g. returning a small dataclass of
+    source/predisclosure flags) rather than growing further independent
+    keyword checks.
     """
     return (
         bool(repository_name) and "predisclosure" in str(repository_name).lower()
@@ -567,9 +582,30 @@ def _metadata_has_embargo(records: dict[Path, dict[str, Any]]) -> bool:
 
 
 def _vex_vulnerability_ids(record: dict[str, Any] | None) -> list[str]:
-    """Return the ``vulnerabilities[].id`` values of a CycloneDX VEX record."""
+    """Return the vulnerability IDs named by a VEX document.
+
+    CycloneDX VEX: ``vulnerabilities[].id``. OpenVEX (recognized by
+    ``_record_is_vex`` via its ``statements[]`` shape): each statement's
+    ``vulnerability.name``.
+    """
     if not isinstance(record, dict):
         return []
+    if isinstance(record.get("statements"), list):
+        ids: list[str] = []
+        for statement in record["statements"]:
+            vulnerability = (
+                statement.get("vulnerability")
+                if isinstance(statement, dict)
+                else None
+            )
+            name = (
+                vulnerability.get("name")
+                if isinstance(vulnerability, dict)
+                else None
+            )
+            if isinstance(name, str):
+                ids.append(name)
+        return ids
     return [
         vuln["id"]
         for vuln in record.get("vulnerabilities") or []
@@ -651,20 +687,24 @@ def _verify_embargo_destinations(
     """
     if not has_lw:
         return
-    for required, option, repository in (
-        (
-            requires_file_repository,
-            "--pulp-file-repository",
-            pulp_file_repository,
-        ),
-        (requires_vex_repository, "--pulp-vex-repository", pulp_vex_repository),
+    if requires_file_repository and not _is_predisclosure_repository_name(
+        pulp_file_repository
     ):
-        if required and not _is_predisclosure_repository_name(repository):
-            raise click.UsageError(
-                f"Build contains embargoed (LW-) vulnerabilities but "
-                f"{option} '{repository}' is not a predisclosure repository. "
-                f"Aborting to prevent disclosure of embargoed content."
-            )
+        raise click.UsageError(
+            f"Build contains embargoed (LW-) vulnerabilities but "
+            f"--pulp-file-repository '{pulp_file_repository}' is not a "
+            f"predisclosure repository. Aborting to prevent disclosure of "
+            f"embargoed content."
+        )
+    if requires_vex_repository and not _is_predisclosure_repository_name(
+        pulp_vex_repository
+    ):
+        raise click.UsageError(
+            f"Build contains embargoed (LW-) vulnerabilities but "
+            f"--pulp-vex-repository '{pulp_vex_repository}' is not a "
+            f"predisclosure repository. Aborting to prevent disclosure of "
+            f"embargoed content."
+        )
 
 
 def _retrieve_uploadable_metadata(
@@ -683,26 +723,25 @@ def _retrieve_uploadable_metadata(
     dropped as ``pnc-build``, so the predisclosure repository has the
     complete set.
     """
-    if embargoed_build:
-        if security_metadata_files:
-            click.echo(
-                f"Embargoed build: uploading all "
-                f"{len(security_metadata_files)} {record_kind} record(s) to "
-                f"predisclosure repository '{pulp_file_repository}' without "
-                f"source filtering."
-            )
+    if not security_metadata_files:
         return security_metadata_files, ()
-    if not security_metadata_files or expected_source is None:
-        uploadable_metadata = security_metadata_files
-        skipped_metadata: tuple[Path, ...] = ()
-        if security_metadata_files and pulp_file_repository:
+    if embargoed_build:
+        click.echo(
+            f"Embargoed build: uploading all "
+            f"{len(security_metadata_files)} {record_kind} record(s) to "
+            f"predisclosure repository '{pulp_file_repository}' without "
+            f"source filtering."
+        )
+        return security_metadata_files, ()
+    if expected_source is None:
+        if pulp_file_repository:
             click.echo(
                 f"Warning: {record_kind} repository '{pulp_file_repository}' "
                 f"is not a recognized backport/novel repository; uploading "
                 f"all {len(security_metadata_files)} record(s) without type "
                 f"filtering."
             )
-        return uploadable_metadata, skipped_metadata
+        return security_metadata_files, ()
 
     # Mismatched records are dropped (warned, not errored) under the
     # disjoint-repo model: each record type is published to its own

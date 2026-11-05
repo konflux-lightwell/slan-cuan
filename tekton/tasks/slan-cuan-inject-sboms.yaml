@@ -148,7 +148,12 @@ spec:
             done
         }
 
-        if [ -z "$(list_sboms)" ]; then
+        # Captured once: list_sboms() re-walks and re-classifies every
+        # candidate file, duplicating the find/classify cost (and its
+        # "Skipping non-SBOM ..." log lines) if called a second time below.
+        sbom_list="$(list_sboms)"
+
+        if [ -z "$sbom_list" ]; then
           echo "No enriched SBOMs to inject; passing through original artifact"
           exit 0
         fi
@@ -185,7 +190,7 @@ spec:
           fi
 
           count=$((count + 1))
-        done < <(list_sboms)
+        done <<< "$sbom_list"
 
         # Re-zip in place.
         rm "$ZIP"

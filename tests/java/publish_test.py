@@ -2792,6 +2792,27 @@ def test_record_is_vex_rejects_sbom_shapes() -> None:
     assert _record_is_vex(vex) is True
 
 
+def test_vex_vulnerability_ids_handles_openvex() -> None:
+    """OpenVEX IDs come from statements[], not the CycloneDX vulnerabilities[]."""
+    from slan_cuan.java.publish import _vex_vulnerability_ids
+
+    cdx_vex = {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [{"id": "CVE-2026-1234"}],
+    }
+    open_vex = {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "statements": [
+            {"vulnerability": {"name": "LW-2026-0087"}},
+            {"vulnerability": {"name": "CVE-2026-1234"}},
+        ],
+    }
+    assert _vex_vulnerability_ids(cdx_vex) == ["CVE-2026-1234"]
+    assert _vex_vulnerability_ids(open_vex) == ["LW-2026-0087", "CVE-2026-1234"]
+    assert _vex_vulnerability_ids({"@context": "...", "statements": []}) == []
+    assert _vex_vulnerability_ids(None) == []
+
+
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_skips_file_upload_when_no_security_metadata(
     mock_maven_cls: Mock,
@@ -4796,6 +4817,7 @@ def test_verify_requires_vex_repository_checks() -> None:
 
     cve_vex = Path("CVE-2026-1-2026-08-06T16:00:00Z.bom.json")
     lw_vex = Path("LW-2026-1-2026-08-06T16:00:00Z.bom.json")
+    lw_openvex = Path("openvex-2026-08-06T16:00:00Z.bom.json")
     records = {
         cve_vex: {
             "bomFormat": "CycloneDX",
@@ -4804,6 +4826,10 @@ def test_verify_requires_vex_repository_checks() -> None:
         lw_vex: {
             "bomFormat": "CycloneDX",
             "vulnerabilities": [{"id": "LW-2026-1"}],
+        },
+        lw_openvex: {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "statements": [{"vulnerability": {"name": "LW-2026-1"}}],
         },
     }
 
@@ -4823,6 +4849,10 @@ def test_verify_requires_vex_repository_checks() -> None:
     with pytest.raises(click.UsageError, match="contain embargoed"):
         _verify_requires_vex_repository(
             (lw_vex,), "vex-java-novel", "osv-java-novel", records
+        )
+    with pytest.raises(click.UsageError, match="contain embargoed"):
+        _verify_requires_vex_repository(
+            (lw_openvex,), "vex-java-novel", "osv-java-novel", records
         )
     assert _verify_requires_vex_repository(
         (cve_vex,), "vex-java-backport", "osv-java-backport", records
@@ -4872,6 +4902,18 @@ def test_metadata_has_embargo_detects_lw_content() -> None:
     assert has({"id": "x_RHLW-CVE-2026-1-1.0.0", "aliases": ["LW-2026-1"]})
     assert has(
         {"bomFormat": "CycloneDX", "vulnerabilities": [{"id": "LW-2026-1"}]}
+    )
+    assert has(
+        {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "statements": [{"vulnerability": {"name": "LW-2026-1"}}],
+        }
+    )
+    assert not has(
+        {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "statements": [{"vulnerability": {"name": "CVE-2026-1"}}],
+        }
     )
     # The LW inside RHLW is never mistaken for an LW- ID.
     assert not has(

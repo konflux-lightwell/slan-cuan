@@ -1720,6 +1720,25 @@ def test_two_cve_build_writes_multi_cve_vex(tmp_path: Path) -> None:
     ]
 
 
+def test_multi_cve_zero_statements_logs_accurate_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The skip message reports the real statement count, not 'only one'.
+
+    A truthy ``multi_cve`` lacking a usable ``vulnerabilities`` key has zero
+    statements, not one, so the log must not claim otherwise.
+    """
+    _run_vex(
+        tmp_path,
+        [("CVE-2024-1", _vex_doc("CVE-2024-1"))],
+        {"bomFormat": "CycloneDX"},
+    )
+
+    captured = capsys.readouterr()
+    assert "Skipping multi-CVE VEX: 0 statements" in captured.out
+    assert "only one statement" not in captured.out
+
+
 @pytest.mark.parametrize(
     ("created", "expected"),
     [

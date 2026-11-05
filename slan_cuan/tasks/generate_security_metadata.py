@@ -577,10 +577,16 @@ def _generate_vex_from_index(
         with open(path, "w") as f:
             json.dump(vex_result.multi_cve, f, indent=2)
     elif vex_result.multi_cve:
-        click.echo(
-            "Skipping multi-CVE VEX: only one statement "
-            "(already covered by the per-CVE document)"
-        )
+        if len(multi_vulns) == 1:
+            click.echo(
+                "Skipping multi-CVE VEX: only one statement "
+                "(already covered by the per-CVE document)"
+            )
+        else:
+            click.echo(
+                f"Skipping multi-CVE VEX: {len(multi_vulns)} statements "
+                "(multi_cve present but has no usable vulnerabilities)"
+            )
 
     click.echo(
         f"VEX generation complete: {len(vex_result.per_cve)} per-CVE, "
