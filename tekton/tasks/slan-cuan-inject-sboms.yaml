@@ -128,8 +128,27 @@ spec:
         ZIP="/var/workdir/extracted/build-output.zip"
         WORK="/tmp/inject-sboms"
 
-        if [ ! -d "$ENRICHED_DIR" ] || \
-           [ -z "$(find "$ENRICHED_DIR" -name '*.bom.json' 2>/dev/null | head -1)" ]; then
+        # Only GAV-shaped SBOMs are injected:
+        #   <group path>/<artifactId>/<version>/<artifactId>-<version>.bom.json
+        # CycloneDX VEX documents share the .bom.json suffix but are named
+        # CVE-<id>-<datetime>.bom.json / <datetime>.bom.json and must never
+        # be injected as SBOMs.
+        list_sboms() {
+          [ -d "$ENRICHED_DIR" ] || return 0
+          find "$ENRICHED_DIR" -mindepth 4 -type f -name '*.bom.json' |
+            while IFS= read -r f; do
+              version_dir="$(dirname "$f")"
+              version="$(basename "$version_dir")"
+              artifact="$(basename "$(dirname "$version_dir")")"
+              if [ "$(basename "$f")" = "${artifact}-${version}.bom.json" ]; then
+                printf '%s\n' "$f"
+              else
+                echo "  Skipping non-SBOM $(basename "$f")" >&2
+              fi
+            done
+        }
+
+        if [ -z "$(list_sboms)" ]; then
           echo "No enriched SBOMs to inject; passing through original artifact"
           exit 0
         fi
@@ -166,7 +185,7 @@ spec:
           fi
 
           count=$((count + 1))
-        done < <(find "$ENRICHED_DIR" -name '*.bom.json')
+        done < <(list_sboms)
 
         # Re-zip in place.
         rm "$ZIP"
