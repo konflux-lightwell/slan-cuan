@@ -57,18 +57,34 @@ jobs:
           username: ${{ secrets.CONTAINER_REGISTRY_USER }}
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
 
-      # - name: Install Tekton CLI
-      #   uses: tektoncd/actions/setup-tektoncd-cli@main
-      #   with:
-      #     version: latest
+      # Installed directly (pinned + checksum-verified) instead of
+      # tektoncd/actions/setup-tektoncd-cli@main: that action runs
+      # `sudo --preserve-env`, which the sudo on ubuntu-latest (Ubuntu 26.04)
+      # rejects, so INPUT_VERSION was lost and the step failed.
+      - name: Install Tekton CLI
+        env:
+          TKN_VERSION: "0.46.2"
+        run: |
+          set -euo pipefail
+          archive="tkn_${TKN_VERSION}_Linux_x86_64.tar.gz"
+          base="https://github.com/tektoncd/cli/releases/download/v${TKN_VERSION}"
+          dir="${RUNNER_TEMP}/tkn"
+          mkdir -p "$dir"
+          cd "$dir"
+          curl -fsSLO "${base}/${archive}"
+          curl -fsSLO "${base}/checksums.txt"
+          grep " ${archive}\$" checksums.txt | sha256sum -c -
+          tar -xzf "$archive" tkn
+          echo "$dir" >> "$GITHUB_PATH"
+          ./tkn version --component client
 
-      # - name: Push Tekton bundle
-      #   run: |
-      #     tkn bundle push \
-      #       "${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}-bundle" \
-      #       -f tekton/tasks/slan-cuan-extract.yaml \
-      #       -f tekton/tasks/slan-cuan-sign.yaml \
-      #       -f tekton/tasks/slan-cuan-register.yaml \
-      #       -f tekton/tasks/slan-cuan-publish.yaml \
-      #       --remote-username "${{ secrets.CONTAINER_REGISTRY_USER }}" \
-      #       --remote-password "${{ secrets.CONTAINER_REGISTRY_PASSWORD }}"
+      - name: Push Tekton bundle
+        run: |
+          tkn bundle push \
+            "${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}-bundle" \
+            -f tekton/tasks/slan-cuan-extract.yaml \
+            -f tekton/tasks/slan-cuan-sign.yaml \
+            -f tekton/tasks/slan-cuan-register.yaml \
+            -f tekton/tasks/slan-cuan-publish.yaml \
+            --remote-username "${{ secrets.CONTAINER_REGISTRY_USER }}" \
+            --remote-password "${{ secrets.CONTAINER_REGISTRY_PASSWORD }}"
