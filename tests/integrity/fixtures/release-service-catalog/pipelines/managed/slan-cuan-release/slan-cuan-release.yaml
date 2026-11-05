@@ -254,7 +254,8 @@ spec:
               {"resultIndex": 8, "key": ".osidb.apiUrl"},
               {"resultIndex": 9, "key": ".osidb.kerberosPrincipal"},
               {"resultIndex": 10, "key": ".osidb.kerberosKeytabPath"},
-              {"resultIndex": 11, "key": ".pulp.customHeaders", "default": ""}
+              {"resultIndex": 11, "key": ".pulp.customHeaders", "default": ""},
+              {"resultIndex": 12, "key": ".pulp.vexRepository", "default": ""}
             ]
         - name: ociStorage
           value: $(params.ociStorage)
@@ -572,6 +573,8 @@ spec:
           value: /certs/ca.crt
         - name: PULP_FILE_REPOSITORY
           value: $(tasks.collect-task-params.results.extractedValues[7])
+        - name: PULP_VEX_REPOSITORY
+          value: $(tasks.collect-task-params.results.extractedValues[12])
         - name: PULP_CUSTOM_HEADERS
           value: $(tasks.collect-task-params.results.extractedValues[11])
         - name: sourceDataArtifact

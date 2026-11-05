@@ -78,7 +78,11 @@ spec:
       type: string
       default: "false"
     - name: PULP_FILE_REPOSITORY
-      description: Pulp File repository name for security metadata (OSV/VEX) upload.
+      description: Pulp File repository name for OSV upload.
+      type: string
+      default: ""
+    - name: PULP_VEX_REPOSITORY
+      description: Pulp File repository name for VEX upload.
       type: string
       default: ""
     - name: PULP_TASK_TIMEOUT
@@ -169,7 +173,9 @@ spec:
         JSON object with source_image label (fully qualified
         OCI reference) attached to each Pulp content unit.
     - name: SECURITY_METADATA_UPLOADED
-      description: Number of security metadata files uploaded to the Pulp File repository.
+      description: Number of OSV security metadata files uploaded to the Pulp File repository.
+    - name: VEX_UPLOADED
+      description: Number of VEX files uploaded to the Pulp VEX File repository.
     - name: SECURITY_METADATA_SKIPPED
       description: >-
         Number of security metadata files skipped because their OSV record type
@@ -266,6 +272,8 @@ spec:
           value: $(params.REQUIRE_SUPPLY_CHAIN_METADATA)
         - name: SLAN_CUAN_PUBLISH_PULP_FILE_REPOSITORY
           value: $(params.PULP_FILE_REPOSITORY)
+        - name: SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY
+          value: $(params.PULP_VEX_REPOSITORY)
         - name: SLAN_CUAN_PUBLISH_PULP_TASK_TIMEOUT
           value: $(params.PULP_TASK_TIMEOUT)
         - name: SLAN_CUAN_PUBLISH_PULP_MAX_TOTAL_TASK_TIMEOUT

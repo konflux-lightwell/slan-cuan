@@ -2520,6 +2520,260 @@ def test_publish_uploads_security_metadata_to_file_repo(
     )
 
 
+def _add_vex_document(artifact_dir: Path, vuln_id: str = "CVE-2026-1234") -> Path:
+    """Write a CycloneDX VEX document next to the OSV records."""
+    sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
+    path = sec_dir / f"{vuln_id}-2026-08-06T16:00:00Z.bom.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "vulnerabilities": [{"id": vuln_id}],
+            }
+        )
+    )
+    return path
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_uploads_vex_to_separate_repository(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """VEX documents go to the VEX repository. OSV stays on the OSV repository."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    vex_path = _add_vex_document(artifact_dir)
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_osv = _make_ctx_mock()
+    mock_vex = _make_ctx_mock()
+    _setup_file_client(mock_osv)
+    _setup_file_client(mock_vex)
+    mock_osv.resolve_repository.return_value = "/osv-repo/"
+    mock_vex.resolve_repository.return_value = "/vex-repo/"
+    mock_file_cls.side_effect = [mock_osv, mock_vex]
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv/java/remediated",
+            "--pulp-vex-repository",
+            "vex/java/remediated",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Security metadata: 1 file(s) uploaded" in result.output
+    assert "VEX metadata: 1 file(s) uploaded" in result.output
+    assert mock_osv.upload_content.call_args.kwargs["relative_path"] == (
+        "gav-index.osv.json"
+    )
+    assert mock_osv.upload_content.call_args.kwargs["repository_href"] == (
+        "/osv-repo/"
+    )
+    assert mock_vex.upload_content.call_args.kwargs["relative_path"] == (
+        vex_path.name
+    )
+    assert mock_vex.upload_content.call_args.kwargs["repository_href"] == (
+        "/vex-repo/"
+    )
+    mock_osv.resolve_repository.assert_called_once_with("osv/java/remediated")
+    mock_vex.resolve_repository.assert_called_once_with("vex/java/remediated")
+    mock_osv.create_publication.assert_called_once_with("/osv-repo/")
+    mock_vex.create_publication.assert_called_once_with("/vex-repo/")
+    assert mock_file_cls.call_args_list[0].args[1] == "osv/java/remediated"
+    assert mock_file_cls.call_args_list[1].args[1] == "vex/java/remediated"
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_requires_vex_repository_when_vex_exists(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """VEX documents fail closed when --pulp-vex-repository is missing."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    _add_vex_document(artifact_dir)
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv/java/remediated",
+            "--pulp-vex-repository",
+            "   ",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "pulp-vex-repository" in result.output
+    mock_maven.upload_content.assert_not_called()
+    mock_file_cls.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_vex_repo_routes_like_osv(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """A novel VEX repository keeps LW- documents and skips CVE documents."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    _add_vex_document(artifact_dir, "LW-2026-0087")
+    cve_vex = _add_vex_document(artifact_dir, "CVE-2025-48924")
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_osv = _make_ctx_mock()
+    mock_vex = _make_ctx_mock()
+    _setup_file_client(mock_osv)
+    _setup_file_client(mock_vex)
+    mock_file_cls.side_effect = [mock_osv, mock_vex]
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-predisclosure",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv-java-novel",
+            "--pulp-vex-repository",
+            "vex-java-novel",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert mock_vex.upload_content.call_count == 1
+    uploaded_name = mock_vex.upload_content.call_args.kwargs["relative_path"]
+    assert uploaded_name.startswith("LW-2026-0087")
+    assert cve_vex.name not in uploaded_name
+    assert f"skipping CycloneDX {cve_vex.name}" in result.output
+    assert "VEX metadata: 1 file(s) uploaded" in result.output
+    osv_name = mock_osv.upload_content.call_args.kwargs["relative_path"]
+    assert osv_name.startswith("x_RHLW-LW-")
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_keeps_sbom_with_empty_vulnerabilities_on_osv_repo(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """An SBOM with ``vulnerabilities: []`` is not a VEX document."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
+    sbom_name = "org.example.artifact-1.0.0.bom.json"
+    (sec_dir / sbom_name).write_text(
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "components": [{"name": "artifact"}],
+                "vulnerabilities": [],
+            }
+        )
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+
+    result = _run_publish_with_file_repo(artifact_dir, "test-file-repo")
+
+    assert result.exit_code == 0, result.output
+    uploaded = {
+        call.kwargs["relative_path"]
+        for call in mock_file.upload_content.call_args_list
+    }
+    assert uploaded == {"gav-index.osv.json", sbom_name}
+    mock_file_cls.assert_called_once()
+    assert "VEX metadata" not in result.output
+
+
+def test_record_is_vex_rejects_sbom_shapes() -> None:
+    """CycloneDX SBOMs stay false even when vulnerabilities is present."""
+    from slan_cuan.java.publish import _record_is_vex
+
+    empty_vulns = {
+        "bomFormat": "CycloneDX",
+        "components": [{"name": "artifact"}],
+        "vulnerabilities": [],
+    }
+    mixed = {
+        "bomFormat": "CycloneDX",
+        "components": [{"name": "artifact"}],
+        "vulnerabilities": [{"id": "CVE-2026-1234"}],
+    }
+    vex = {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [{"id": "CVE-2026-1234"}],
+    }
+    assert _record_is_vex(empty_vulns) is False
+    assert _record_is_vex(mixed) is False
+    assert _record_is_vex(vex) is True
+
+
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_skips_file_upload_when_no_security_metadata(
     mock_maven_cls: Mock,
@@ -2806,6 +3060,49 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
     )
     assert "embargoed" in result.output.lower()
     mock_maven.upload_content.assert_not_called()
+
+
+def test_lw_build_without_osv_passes_metadata_check() -> None:
+    """A predisclosure build with no OSV or VEX files does not fail coverage."""
+    from slan_cuan.java.publish import _validate_security_metadata
+
+    _validate_security_metadata((), ("LW-2026-0001",))
+    _validate_security_metadata((), ("CVE-2024-25710", "LW-2026-0001"))
+
+
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_lw_build_without_osv_to_predisclosure(
+    mock_maven_cls: Mock, tmp_path: Path
+) -> None:
+    """Embargoed builds publish to predisclosure when OSV and VEX are absent."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, gav_index_vulns=["LW-2026-0001"]
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-predisclosure",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_maven_cls.assert_called()
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
