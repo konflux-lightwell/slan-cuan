@@ -133,44 +133,50 @@ def _gav_index_vulnerabilities(
 def _validate_load_json_security_metadata(path: Path) -> dict[str, Any]:
     """Validate and load the JSON security metadata from the given file path.
 
-    Accepts OSV (.json), CycloneDX SBOM (.bom.json), and CycloneDX VEX
-    (.bom.json) files.
+    Accepts OSV (.json) and VEX (.bom.json) files. CycloneDX SBOMs are not
+    security metadata: they are injected next to the artifact in the Maven
+    repository and are rejected by ``_validate_security_metadata``.
     """
     if path.suffix != ".json":
-        raise ValueError(
-            "Generated security metadata is not OSV, VEX, or SBOM JSON."
-        )
+        raise ValueError("Generated security metadata is not OSV or VEX JSON.")
     return safe_json_load(
         path,
         parse_err_msg="Generated security metadata is malformed.",
         expected_type=dict,
-        type_err_msg="Generated security metadata is not OSV, VEX, or SBOM JSON.",
+        type_err_msg="Generated security metadata is not OSV or VEX JSON.",
     )
 
 
 def _validate_security_metadata(
     security_metadata_files: tuple[Path, ...], vulns: tuple[str, ...]
 ) -> None:
-    """Validate generated OSV/VEX/SBOM metadata and its GAV-index relationship."""
+    """Validate generated OSV/VEX metadata and its GAV-index relationship.
+
+    Only OSV records and VEX documents are publishable security metadata.
+    Any other CycloneDX document (an SBOM, or an SBOM carrying
+    ``vulnerabilities``) fails validation instead of being routed to the
+    OSV repository: SBOMs belong next to the artifact in the Maven
+    repository (``enriched-sboms/`` is injected and excluded here).
+
+    The OSV coverage check also applies to builds with ``LW-`` IDs: those
+    builds produce OSV and VEX for the novel fix, published only to
+    predisclosure repositories (see ``_verify_embargo_destinations``).
+    """
     osv_vulnerability_ids: set[str] = set()
     for path in security_metadata_files:
         record = _validate_load_json_security_metadata(path)
 
-        # CycloneDX document: SBOM has components[], VEX has vulnerabilities[]
-        is_cyclonedx = record.get("bomFormat") == "CycloneDX"
-        is_cdx_vex = is_cyclonedx and isinstance(
-            record.get("vulnerabilities"), list
-        )
-        is_cdx_sbom = is_cyclonedx and isinstance(record.get("components"), list)
-        if is_cdx_vex or is_cdx_sbom:
-            # CycloneDX SBOM and VEX are valid security metadata
-            if is_cdx_vex:
-                for vuln in record["vulnerabilities"]:
-                    if not isinstance(vuln, dict):
-                        continue
-                    vuln_id = vuln.get("id", "")
-                    if vuln_id:
-                        osv_vulnerability_ids.add(vuln_id)
+        if record.get("bomFormat") == "CycloneDX":
+            if not _record_is_vex(record):
+                raise ValueError(
+                    f"CycloneDX document {path.name} is not VEX "
+                    f"(VEX needs a non-empty vulnerabilities[] and no "
+                    f"components[]); only OSV records and CycloneDX VEX are "
+                    f"published as security metadata."
+                )
+            osv_vulnerability_ids.update(
+                vuln_id for vuln_id in _vex_vulnerability_ids(record) if vuln_id
+            )
             continue
 
         osv_id = record.get("id")
@@ -198,16 +204,10 @@ def _validate_security_metadata(
         )
         if not is_osv and not is_vex:
             raise ValueError(
-                "Generated security metadata is not OSV, VEX, or SBOM JSON."
+                "Generated security metadata is not OSV or VEX JSON."
             )
         if is_osv:
             osv_vulnerability_ids.update((osv_id, *aliases, *upstream))
-
-    # An LW- id marks a predisclosure build. OSV and VEX files are not
-    # generated for that build. The Maven artifacts still publish. The
-    # caller rejects a non-predisclosure repository before this check.
-    if any(vuln_id.startswith("LW-") for vuln_id in vulns):
-        return
 
     if vulns and not osv_vulnerability_ids:
         raise ValueError("Vulnerable GAV index has no generated OSV metadata.")
@@ -238,6 +238,12 @@ def _expected_source_for_repo(repo_name: str) -> str | None:
     silently disabling filtering rather than erroring. This is safe for the
     current inventory (``osv-java-backport``/``osv-java-novel``); revisit if
     the naming scheme changes.
+
+    ``_is_predisclosure_repository_name`` applies the same name-substring
+    convention for the orthogonal "is this a predisclosure repo" question.
+    The two are independent classifiers over the same repo name and must be
+    kept in sync by hand if the naming scheme changes; see the module-level
+    TODO in that function for the tracked follow-up to unify them.
     """
     lowered = repo_name.lower()
     if "backport" in lowered:
@@ -461,18 +467,14 @@ def _validate_load_extract_result(
 
 
 def _verify_requires_file_repository(
-    vulns: tuple[Path, ...],
+    vulns: tuple[str, ...],
     security_metadata_files: tuple[Path, ...],
     pulp_file_repository: str | None,
 ) -> bool:
-    # A predisclosure build has no OSV or VEX files. Do not require an
-    # OSV file repository when there is nothing to upload.
-    has_lw = any(
-        isinstance(vuln_id, str) and vuln_id.startswith("LW-")
-        for vuln_id in vulns
-    )
-    if has_lw and not security_metadata_files:
-        return False
+    """Require the OSV File repository for any vulnerable build.
+
+    Builds with ``LW-`` IDs are not exempt: they produce OSV records too.
+    """
     requires_file_repository = bool(vulns or security_metadata_files)
     if requires_file_repository and not pulp_file_repository:
         raise click.UsageError(
@@ -503,10 +505,11 @@ def _record_is_vex(record: dict[str, Any]) -> bool:
 def _partition_security_metadata(
     security_metadata_files: tuple[Path, ...],
 ) -> tuple[tuple[Path, ...], tuple[Path, ...], dict[Path, dict[str, Any]]]:
-    """Split security metadata into non-VEX files and VEX documents.
+    """Split security metadata into OSV records and VEX documents.
 
-    Non-VEX files (OSV records and CycloneDX SBOMs) stay on the OSV
-    file repository. VEX documents publish to the VEX file repository.
+    OSV records publish to the OSV File repository and VEX documents to the
+    VEX File repository. Other CycloneDX documents (SBOMs) never get here:
+    ``_validate_security_metadata`` rejects them first.
 
     The returned mapping holds one parse of each JSON object so later
     routing does not read the file again.
@@ -526,17 +529,182 @@ def _partition_security_metadata(
     return tuple(osv_files), tuple(vex_files), records
 
 
+def _is_predisclosure_repository_name(repository_name: str | None) -> bool:
+    """Return True when a File repository name marks a predisclosure repo.
+
+    Pulp File repositories are recognized by name (for example
+    ``osv-java-novel-predisclosure``), the same way backport/novel routing
+    is inferred in ``_expected_source_for_repo``.
+
+    TODO: this is a third independent name-substring classifier over the
+    same repository name (``_expected_source_for_repo`` is the first; OSV-id
+    prefix classification in ``_source_from_osv_id``/``_source_from_vuln_id``
+    is a separate, non-name-based one). All of the embargo helpers below
+    (``_source_from_vuln_id_has_embargo``, ``_metadata_has_embargo``,
+    ``_verify_requires_vex_repository``, ``_verify_embargo_destinations``)
+    depend on this one agreeing with ``_expected_source_for_repo`` on what
+    counts as a safe destination. Consider folding ``predisclosure`` into a
+    single repo-name classifier (e.g. returning a small dataclass of
+    source/predisclosure flags) rather than growing further independent
+    keyword checks.
+    """
+    return (
+        bool(repository_name) and "predisclosure" in str(repository_name).lower()
+    )
+
+
+def _record_vulnerability_ids(record: dict[str, Any] | None) -> list[str]:
+    """Return every vulnerability ID a security-metadata record names.
+
+    OSV: ``id``, ``aliases`` and ``upstream`` (the ``x_RHLW-`` prefix of a
+    legacy per-CVE ID is stripped, so ``x_RHLW-LW-…`` yields ``LW-…``).
+    VEX: ``vulnerabilities[].id``.
+    """
+    if not isinstance(record, dict):
+        return []
+    ids = _vex_vulnerability_ids(record)
+    osv_id = record.get("id")
+    if isinstance(osv_id, str):
+        ids.append(osv_id.removeprefix(_OSV_ID_PREFIX))
+    for key in ("aliases", "upstream"):
+        values = record.get(key)
+        if isinstance(values, list):
+            ids.extend(v for v in values if isinstance(v, str))
+    return ids
+
+
+def _metadata_has_embargo(records: dict[Path, dict[str, Any]]) -> bool:
+    """Return True when any security-metadata record names an ``LW-`` ID."""
+    return any(
+        _source_from_vuln_id_has_embargo(_record_vulnerability_ids(record))
+        for record in records.values()
+    )
+
+
+def _vex_vulnerability_ids(record: dict[str, Any] | None) -> list[str]:
+    """Return the vulnerability IDs named by a VEX document.
+
+    CycloneDX VEX: ``vulnerabilities[].id``. OpenVEX (recognized by
+    ``_record_is_vex`` via its ``statements[]`` shape): each statement's
+    ``vulnerability.name``.
+    """
+    if not isinstance(record, dict):
+        return []
+    if isinstance(record.get("statements"), list):
+        ids: list[str] = []
+        for statement in record["statements"]:
+            vulnerability = (
+                statement.get("vulnerability")
+                if isinstance(statement, dict)
+                else None
+            )
+            name = (
+                vulnerability.get("name")
+                if isinstance(vulnerability, dict)
+                else None
+            )
+            if isinstance(name, str):
+                ids.append(name)
+        return ids
+    return [
+        vuln["id"]
+        for vuln in record.get("vulnerabilities") or []
+        if isinstance(vuln, dict) and isinstance(vuln.get("id"), str)
+    ]
+
+
 def _verify_requires_vex_repository(
     vex_files: tuple[Path, ...],
     pulp_vex_repository: str | None,
+    pulp_file_repository: str | None = None,
+    records: dict[Path, dict[str, Any]] | None = None,
 ) -> bool:
-    """Require a VEX repository when VEX documents are present."""
-    requires_vex_repository = bool(vex_files)
-    if requires_vex_repository and not pulp_vex_repository:
+    """Fail closed unless VEX has a dedicated, recognized, safe repository.
+
+    Checked before anything is uploaded. When VEX documents are present the
+    run aborts if the VEX repository is:
+
+    * missing, or the same as the OSV File repository (VEX never falls back
+      to the OSV repository);
+    * not recognizable as a backport/novel repository by name (VEX would
+      otherwise upload without source filtering);
+    * not a predisclosure repository while any VEX document carries an
+      ``LW-`` ID. The build-level check is ``_verify_embargo_destinations``.
+    """
+    if not vex_files:
+        return False
+    if not pulp_vex_repository:
         raise click.UsageError(
-            "--pulp-vex-repository is required for VEX publication."
+            f"--pulp-vex-repository is required to publish {len(vex_files)} "
+            f"VEX document(s); VEX is never published to the OSV repository."
         )
-    return requires_vex_repository
+    if pulp_file_repository and pulp_vex_repository == pulp_file_repository:
+        raise click.UsageError(
+            f"--pulp-vex-repository '{pulp_vex_repository}' must differ from "
+            f"--pulp-file-repository; VEX is never published to the OSV "
+            f"repository."
+        )
+    if _expected_source_for_repo(pulp_vex_repository) is None:
+        raise click.UsageError(
+            f"--pulp-vex-repository '{pulp_vex_repository}' is not recognized "
+            f"as a backport or novel VEX repository (its name must contain "
+            f"'backport' or 'novel'); refusing to upload VEX unfiltered."
+        )
+    records = records or {}
+    embargoed = sorted(
+        path.name
+        for path in vex_files
+        if _source_from_vuln_id_has_embargo(
+            _vex_vulnerability_ids(records.get(path))
+        )
+    )
+    if embargoed and not _is_predisclosure_repository_name(pulp_vex_repository):
+        raise click.UsageError(
+            f"VEX document(s) {', '.join(embargoed)} contain embargoed (LW-) "
+            f"vulnerabilities but --pulp-vex-repository "
+            f"'{pulp_vex_repository}' is not a predisclosure repository. "
+            f"Aborting to prevent disclosure of embargoed content."
+        )
+    return True
+
+
+def _verify_embargo_destinations(
+    has_lw: bool,
+    requires_file_repository: bool,
+    pulp_file_repository: str | None,
+    requires_vex_repository: bool,
+    pulp_vex_repository: str | None,
+) -> None:
+    """Build-level LW- gate for the OSV and VEX File repositories.
+
+    When the build's vulnerability list contains any ``LW-`` ID, every OSV
+    and VEX file of the build is embargoed content, whatever the IDs or
+    source inside individual files say. Fail closed, before any upload,
+    unless both File repositories that receive files are predisclosure
+    repositories. The Maven repository is checked separately against its
+    ``java/predisclosure`` distribution, and GitHub OSV publication is
+    refused for such builds.
+    """
+    if not has_lw:
+        return
+    if requires_file_repository and not _is_predisclosure_repository_name(
+        pulp_file_repository
+    ):
+        raise click.UsageError(
+            f"Build contains embargoed (LW-) vulnerabilities but "
+            f"--pulp-file-repository '{pulp_file_repository}' is not a "
+            f"predisclosure repository. Aborting to prevent disclosure of "
+            f"embargoed content."
+        )
+    if requires_vex_repository and not _is_predisclosure_repository_name(
+        pulp_vex_repository
+    ):
+        raise click.UsageError(
+            f"Build contains embargoed (LW-) vulnerabilities but "
+            f"--pulp-vex-repository '{pulp_vex_repository}' is not a "
+            f"predisclosure repository. Aborting to prevent disclosure of "
+            f"embargoed content."
+        )
 
 
 def _retrieve_uploadable_metadata(
@@ -545,19 +713,35 @@ def _retrieve_uploadable_metadata(
     pulp_file_repository: str | None,
     records: dict[Path, dict[str, Any]],
     record_kind: str = "OSV",
+    embargoed_build: bool = False,
 ) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """Retrieve uploadable metadata."""
-    if not security_metadata_files or expected_source is None:
-        uploadable_metadata = security_metadata_files
-        skipped_metadata: tuple[Path, ...] = ()
-        if security_metadata_files and pulp_file_repository:
+    """Retrieve uploadable metadata.
+
+    For a build with ``LW-`` IDs (``embargoed_build``) every file is kept:
+    all of them are embargoed content and go to the (already verified)
+    predisclosure repository. A CVE-only file of such a build is not
+    dropped as ``pnc-build``, so the predisclosure repository has the
+    complete set.
+    """
+    if not security_metadata_files:
+        return security_metadata_files, ()
+    if embargoed_build:
+        click.echo(
+            f"Embargoed build: uploading all "
+            f"{len(security_metadata_files)} {record_kind} record(s) to "
+            f"predisclosure repository '{pulp_file_repository}' without "
+            f"source filtering."
+        )
+        return security_metadata_files, ()
+    if expected_source is None:
+        if pulp_file_repository:
             click.echo(
                 f"Warning: {record_kind} repository '{pulp_file_repository}' "
                 f"is not a recognized backport/novel repository; uploading "
                 f"all {len(security_metadata_files)} record(s) without type "
                 f"filtering."
             )
-        return uploadable_metadata, skipped_metadata
+        return security_metadata_files, ()
 
     # Mismatched records are dropped (warned, not errored) under the
     # disjoint-repo model: each record type is published to its own
@@ -1108,7 +1292,11 @@ def _print_verbose_artifact_info(
     envvar="SLAN_CUAN_PUBLISH_PULP_VEX_REPOSITORY",
     type=str,
     default=None,
-    help="Pulp File repository name for VEX upload.",
+    help=(
+        "Pulp File repository name for VEX upload. Required when VEX is "
+        "present; must differ from --pulp-file-repository, contain "
+        "'backport' or 'novel', and contain 'predisclosure' for LW- builds."
+    ),
 )
 @click.option(
     "--pulp-task-timeout",
@@ -1240,11 +1428,26 @@ def publish(
         osv_files, vex_files, metadata_records = _partition_security_metadata(
             security_metadata_files
         )
+        # Fail closed: LW- content in any generated file makes the build
+        # embargoed even if the GAV index does not list the LW- ID.
+        if not has_lw and _metadata_has_embargo(metadata_records):
+            click.echo(
+                "Security metadata contains embargoed (LW-) IDs not listed in "
+                "the GAV index; treating the build as embargoed."
+            )
+            has_lw = True
         requires_file_repository = _verify_requires_file_repository(
             vulns, osv_files, pulp_file_repository
         )
         requires_vex_repository = _verify_requires_vex_repository(
-            vex_files, pulp_vex_repository
+            vex_files, pulp_vex_repository, pulp_file_repository, metadata_records
+        )
+        _verify_embargo_destinations(
+            has_lw,
+            requires_file_repository,
+            pulp_file_repository,
+            requires_vex_repository,
+            pulp_vex_repository,
         )
 
         if github_osv_repo and not github_osv_token:
@@ -1268,7 +1471,11 @@ def publish(
             else None
         )
         uploadable_metadata, skipped_metadata = _retrieve_uploadable_metadata(
-            osv_files, expected_source, pulp_file_repository, metadata_records
+            osv_files,
+            expected_source,
+            pulp_file_repository,
+            metadata_records,
+            embargoed_build=has_lw,
         )
         vex_expected_source = (
             _expected_source_for_repo(pulp_vex_repository)
@@ -1281,6 +1488,7 @@ def publish(
             pulp_vex_repository,
             metadata_records,
             record_kind="VEX",
+            embargoed_build=has_lw,
         )
         file_skipped = len(skipped_metadata) + len(skipped_vex)
 
@@ -1288,7 +1496,15 @@ def publish(
         # before anything is written to Pulp.
         gh_client: GitHubOsvClient | None = None
         github_records: tuple[Path, ...] = ()
-        if github_osv_enabled:
+        if github_osv_enabled and has_lw:
+            # Never publish anything from a build with LW- IDs to the public
+            # GitHub OSV repository, whatever per-record classification says
+            # (the per-release RHLW- advisory would classify as pnc-build).
+            click.echo(
+                f"GitHub OSV: build contains embargoed (LW-) vulnerabilities; "
+                f"not publishing to the public repository {github_osv_repo}."
+            )
+        elif github_osv_enabled:
             assert github_osv_repo is not None
             assert github_osv_token is not None
             # Fail closed: only the backport stream may feed the public OSV

@@ -1660,3 +1660,159 @@ def test_osgi_qualified_version_sidecar(
     assert len(pedigree["patches"]) == 1
 
     assert "/remediated/" in comp["purl"]
+
+
+# ---------------------------------------------------------------------------
+# LWLP-4254: multi-CVE VEX only for >=2 CVEs; one normalized timestamp
+# ---------------------------------------------------------------------------
+
+
+def _vex_doc(*cve_ids: str) -> dict:
+    return {
+        "bomFormat": "CycloneDX",
+        "vulnerabilities": [{"id": c} for c in cve_ids],
+    }
+
+
+def _run_vex(tmp_path: Path, per_cve: list, multi_cve: dict | None) -> Path:
+    from fath_cuan.converters.vex import VEXResult
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _generate_vex_from_index,
+    )
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_vex",
+        return_value=VEXResult(per_cve=per_cve, multi_cve=multi_cve),
+    ):
+        _generate_vex_from_index({}, tmp_path, None, {}, "2026-10-30T20:34:00Z")
+    return tmp_path
+
+
+def test_single_cve_build_writes_no_multi_cve_vex(tmp_path: Path) -> None:
+    """A single-CVE build must not also emit a duplicate multi-CVE file."""
+    out = _run_vex(
+        tmp_path,
+        [("CVE-2024-1", _vex_doc("CVE-2024-1"))],
+        _vex_doc("CVE-2024-1"),
+    )
+
+    assert sorted(p.name for p in out.iterdir()) == [
+        "CVE-2024-1-2026-10-30T20:34:00Z.bom.json"
+    ]
+
+
+def test_two_cve_build_writes_multi_cve_vex(tmp_path: Path) -> None:
+    """Two or more CVEs produce per-CVE files plus one multi-CVE file."""
+    out = _run_vex(
+        tmp_path,
+        [
+            ("CVE-2024-1", _vex_doc("CVE-2024-1")),
+            ("CVE-2024-2", _vex_doc("CVE-2024-2")),
+        ],
+        _vex_doc("CVE-2024-1", "CVE-2024-2"),
+    )
+
+    assert sorted(p.name for p in out.iterdir()) == [
+        "2026-10-30T20:34:00Z.bom.json",
+        "CVE-2024-1-2026-10-30T20:34:00Z.bom.json",
+        "CVE-2024-2-2026-10-30T20:34:00Z.bom.json",
+    ]
+
+
+def test_multi_cve_zero_statements_logs_accurate_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The skip message reports the real statement count, not 'only one'.
+
+    A truthy ``multi_cve`` lacking a usable ``vulnerabilities`` key has zero
+    statements, not one, so the log must not claim otherwise.
+    """
+    _run_vex(
+        tmp_path,
+        [("CVE-2024-1", _vex_doc("CVE-2024-1"))],
+        {"bomFormat": "CycloneDX"},
+    )
+
+    captured = capsys.readouterr()
+    assert "Skipping multi-CVE VEX: 0 statements" in captured.out
+    assert "only one statement" not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("created", "expected"),
+    [
+        ("2026-10-30T20:34:12Z", "2026-10-30T20:34:12Z"),
+        ("2026-10-30T20:34:12+00:00", "2026-10-30T20:34:12Z"),
+        ("2026-10-30T22:34:12+02:00", "2026-10-30T20:34:12Z"),
+        ("2026-10-30T20:34:12.123456Z", "2026-10-30T20:34:12Z"),
+        ("2026-10-30T20:34:12", "2026-10-30T20:34:12Z"),
+        ("2026-10-30", "2026-10-30T00:00:00Z"),
+    ],
+)
+def test_normalize_build_timestamp(created: str, expected: str) -> None:
+    """``created`` is normalized to second-precision UTC with a Z suffix."""
+    from slan_cuan.tasks.generate_security_metadata import (
+        _normalize_build_timestamp,
+    )
+
+    assert _normalize_build_timestamp(created) == expected
+
+
+def test_normalize_build_timestamp_rejects_garbage() -> None:
+    """A non-ISO ``created`` fails instead of silently producing bad dates."""
+    import click
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _normalize_build_timestamp,
+    )
+
+    with pytest.raises(click.ClickException, match="not ISO-8601"):
+        _normalize_build_timestamp("last tuesday")
+
+
+def test_vex_receives_same_timestamp_as_filename(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """fath-cuan sees the normalized ``created`` used for VEX filenames.
+
+    Keeps VEX published/updated identical to the filename datetime even
+    when the build index carries an offset timestamp.
+    """
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "ts-build",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        "purls": ["pkg:maven/org.example/lib@1.0.0.rhlw-00001"],
+        "vulns": ["CVE-2024-1234"],
+        "created": "2026-10-30T22:34:12+02:00",
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index",
+        ) as mock_vex,
+    ):
+        result = _invoke(CliRunner(), index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    index_arg, _, _, _, ts_arg = mock_vex.call_args.args
+    assert ts_arg == "2026-10-30T20:34:12Z"
+    assert index_arg["created"] == ts_arg

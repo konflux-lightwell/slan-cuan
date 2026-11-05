@@ -17,6 +17,12 @@ before Maven content is uploaded or its repository is modified. Generated
 VEX documents require `--pulp-vex-repository` the same way. A clean GAV
 index with no generated OSV files does not require a File repository.
 
+Security metadata may only contain OSV records and VEX documents. Any other
+CycloneDX document (an SBOM, including one with `"vulnerabilities": []` or
+with `components[]`) fails validation before anything is uploaded: SBOMs are
+injected next to the artifact in the Maven repository (`enriched-sboms/`),
+never published to the OSV or VEX File repository.
+
 ## Embargo And Predisclosure Routing
 
 When the GAV index contains an `LW-` vulnerability ID, the build is treated as
@@ -32,6 +38,27 @@ offline and do not create a Pulp client.
 
 A backend repository is valid for embargoed content when its associated
 distribution serves `java/predisclosure`.
+
+`LW-` builds produce OSV records (and VEX documents) for the novel fix, so
+the OSV coverage check and the `--pulp-file-repository` requirement apply to
+them as to any vulnerable build. A build with `LW-` IDs and no OSV metadata
+fails.
+
+For a build with any `LW-` ID (build-level, from the GAV index), **all** of
+its security metadata is embargoed content, whatever the IDs or source inside
+individual files. Before any upload, and also in dry-run mode, `publish`
+fails closed unless:
+
+- `--pulp-file-repository` is a predisclosure repository (its name contains
+  `predisclosure`, e.g. `osv-java-novel-predisclosure`);
+- `--pulp-vex-repository`, when VEX is present, is a predisclosure repository
+  (e.g. `vex-java-novel-predisclosure`).
+
+Every OSV record and VEX document of such a build is uploaded to those
+predisclosure repositories without backport/novel source filtering, so a
+CVE-only file of an `LW-` build is not dropped. GitHub OSV publication is
+skipped for the build, even when configured: nothing from an `LW-` build is
+pushed to the public repository.
 
 When `--pulp-domain` is set, the deploy URL includes the domain segment (`/pulp/maven/{domain}/{distribution}/{path}`). When not set, it uses the standard path (`/pulp/maven/{distribution}/{path}`).
 
@@ -110,11 +137,16 @@ Generated OSV/VEX records are published to two destinations:
   `slan_cuan/java/publish.py`.
 - **Pulp VEX repository** (`--pulp-vex-repository`) — required when generated
   VEX documents are present. VEX uses the same upload, publication, and
-  backport/novel routing as OSV, against the VEX repository name
-  (for example `vex/java/remediated`). A CycloneDX file is VEX when
-  `vulnerabilities` is a non-empty list and `components` is absent.
-  An SBOM, including one with `"vulnerabilities": []`, stays on the OSV
-  repository.
+  backport/novel routing as OSV, against the VEX repository name. A
+  CycloneDX file is VEX when `vulnerabilities` is a non-empty list and
+  `components` is absent. Before any upload the run fails when the VEX
+  repository:
+  - is missing, or equals `--pulp-file-repository` (VEX never goes to the OSV
+    repository);
+  - is not recognized as backport/novel by name (it must contain `backport`
+    or `novel`, e.g. `vex-java-backport`, `vex-java-novel-predisclosure`);
+  - is not a predisclosure repository while any VEX document carries an
+    `LW-` ID (in addition to the build-level `LW-` gate above).
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under
@@ -125,9 +157,10 @@ Generated OSV/VEX records are published to two destinations:
 The GitHub repository is a public feed ingested by osv.dev, so its record set
 is selected independently of the Pulp routing and fails closed:
 
+- Nothing is pushed for a build with any `LW-` ID (build-level); publication
+  to GitHub is skipped with a message.
 - Only OSV records whose source is `pnc-build` (remediated backports) are
-  pushed. CycloneDX SBOM/VEX documents and `novel-pipeline` records are never
-  pushed.
+  pushed. VEX documents and `novel-pipeline` records are never pushed.
 - An OSV record whose source cannot be classified fails the run.
 - When security metadata is present, `--pulp-file-repository` must be
   recognized as the backport repository; a novel or unrecognized repository

@@ -9,6 +9,7 @@ import re
 import socket
 import tempfile
 import time
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 
 _MURMURHASH_SEED = 42
 _LOWER_64_MASK = 0xFFFF_FFFF_FFFF_FFFF
+_TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _ADVISORY_ID_RE = re.compile(r"^RHLW-\d{4}-[0-9a-f]{16}$")
 
 
@@ -121,8 +123,6 @@ def _derive_advisory_id(index_data: dict) -> str | None:
     if created and len(created) >= 4:
         year = created[:4]
     else:
-        from datetime import UTC, datetime
-
         year = str(datetime.now(UTC).year)
 
     return f"RHLW-{year}-{lower64:016x}"
@@ -566,18 +566,63 @@ def _generate_vex_from_index(
         with open(path, "w") as f:
             json.dump(doc, f, indent=2)
 
-    # Write multi-CVE VEX file
-    if vex_result.multi_cve:
+    # Write the multi-CVE VEX file only when it aggregates two or more
+    # statements; for a single CVE it would duplicate the per-CVE document.
+    multi_vulns = (vex_result.multi_cve or {}).get("vulnerabilities") or []
+    write_multi = len(multi_vulns) >= 2
+    if write_multi:
         filename = f"{timestamp}.bom.json"
         path = output_dir / filename
         click.echo(f"Writing multi-CVE VEX to {path}")
         with open(path, "w") as f:
             json.dump(vex_result.multi_cve, f, indent=2)
+    elif vex_result.multi_cve:
+        if len(multi_vulns) == 1:
+            click.echo(
+                "Skipping multi-CVE VEX: only one statement "
+                "(already covered by the per-CVE document)"
+            )
+        else:
+            click.echo(
+                f"Skipping multi-CVE VEX: {len(multi_vulns)} statements "
+                "(multi_cve present but has no usable vulnerabilities)"
+            )
 
     click.echo(
         f"VEX generation complete: {len(vex_result.per_cve)} per-CVE, "
-        f"{'1' if vex_result.multi_cve else '0'} multi-CVE"
+        f"{'1' if write_multi else '0'} multi-CVE"
     )
+
+
+def _normalize_build_timestamp(created: object) -> str:
+    """Normalize a build-index ``created`` value to ``YYYY-MM-DDTHH:MM:SSZ``.
+
+    The result is used both for VEX/SBOM filenames and (via the index
+    handed to fath-cuan) for VEX ``published``/``updated``, so the two
+    always agree. Offsets are converted to UTC; a naive value is taken
+    as UTC. Falls back to the current UTC time when ``created`` is absent.
+    """
+    if not created:
+        return datetime.now(UTC).strftime(_TIMESTAMP_FMT)
+    if not isinstance(created, str):
+        raise click.ClickException(
+            f"Build index 'created' is not a string: {created!r}"
+        )
+    try:
+        parsed = datetime.fromisoformat(created)
+    except ValueError:
+        raise click.ClickException(
+            f"Build index 'created' is not ISO-8601: {created!r}"
+        ) from None
+    if "T" not in created and " " not in created:
+        click.echo(
+            f"WARNING: build index 'created' ({created!r}) has no time "
+            "component; VEX published/updated will be midnight UTC.",
+            err=True,
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).strftime(_TIMESTAMP_FMT)
 
 
 _OSIDB_TOKEN_REQUEST_TIMEOUT = float(
@@ -814,14 +859,10 @@ def generate_security_metadata(
     # and VEX (gated on vulns — clean builds have no vulnerabilities to declare).
     sbom_serial_numbers: dict[str, str] = {}
     if _is_build_index(index_data):
-        from datetime import UTC, datetime
-
         # Pin to build provenance timestamp when available; fall back to now.
-        build_created = index_data.get("created", "")
-        if build_created:
-            ts_now = build_created
-        else:
-            ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Normalize once and feed the same value to fath-cuan so the VEX
+        # filename and its published/updated fields cannot diverge.
+        ts_now = _normalize_build_timestamp(index_data.get("created"))
 
         # Upstream SBOMs are copied by the extract task into
         # workdir/upstream-sboms/. This directory may not exist
@@ -837,7 +878,7 @@ def generate_security_metadata(
 
         if index_data.get("vulns"):
             _generate_vex_from_index(
-                index_data,
+                {**index_data, "created": ts_now},
                 output_dir,
                 osidb_client,
                 sbom_serial_numbers,
