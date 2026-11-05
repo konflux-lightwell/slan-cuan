@@ -2580,7 +2580,7 @@ def test_publish_uploads_vex_to_separate_repository(
             "--pulp-file-repository",
             "osv/java/remediated",
             "--pulp-vex-repository",
-            "vex/java/remediated",
+            "vex-java-backport",
         ],
     )
 
@@ -2600,11 +2600,11 @@ def test_publish_uploads_vex_to_separate_repository(
         "/vex-repo/"
     )
     mock_osv.resolve_repository.assert_called_once_with("osv/java/remediated")
-    mock_vex.resolve_repository.assert_called_once_with("vex/java/remediated")
+    mock_vex.resolve_repository.assert_called_once_with("vex-java-backport")
     mock_osv.create_publication.assert_called_once_with("/osv-repo/")
     mock_vex.create_publication.assert_called_once_with("/vex-repo/")
     assert mock_file_cls.call_args_list[0].args[1] == "osv/java/remediated"
-    assert mock_file_cls.call_args_list[1].args[1] == "vex/java/remediated"
+    assert mock_file_cls.call_args_list[1].args[1] == "vex-java-backport"
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -2654,10 +2654,14 @@ def test_publish_requires_vex_repository_when_vex_exists(
 
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
-def test_publish_vex_repo_routes_like_osv(
+def test_publish_embargoed_build_uploads_all_vex_to_predisclosure_repo(
     mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
 ) -> None:
-    """A novel VEX repository keeps LW- documents and skips CVE documents."""
+    """Every VEX of an LW- build goes to the predisclosure VEX repository.
+
+    The CVE-only VEX is embargoed content too (it belongs to a build with an
+    LW- fix), so it is uploaded rather than skipped as pnc-build.
+    """
     artifact_dir = create_test_artifact_dir(
         tmp_path,
         include_security_metadata=True,
@@ -2666,7 +2670,7 @@ def test_publish_vex_repo_routes_like_osv(
             ("CVE-2025-48924", "pnc-build"),
         ],
     )
-    _add_vex_document(artifact_dir, "LW-2026-0087")
+    lw_vex = _add_vex_document(artifact_dir, "LW-2026-0087")
     cve_vex = _add_vex_document(artifact_dir, "CVE-2025-48924")
 
     mock_maven = _make_ctx_mock()
@@ -2695,60 +2699,74 @@ def test_publish_vex_repo_routes_like_osv(
             "--pulp-password",
             "testpass",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--pulp-vex-repository",
-            "vex-java-novel",
+            "vex-java-novel-predisclosure",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert mock_vex.upload_content.call_count == 1
-    uploaded_name = mock_vex.upload_content.call_args.kwargs["relative_path"]
-    assert uploaded_name.startswith("LW-2026-0087")
-    assert cve_vex.name not in uploaded_name
-    assert f"skipping CycloneDX {cve_vex.name}" in result.output
-    assert "VEX metadata: 1 file(s) uploaded" in result.output
-    osv_name = mock_osv.upload_content.call_args.kwargs["relative_path"]
-    assert osv_name.startswith("x_RHLW-LW-")
+    vex_uploaded = {
+        call.kwargs["relative_path"]
+        for call in mock_vex.upload_content.call_args_list
+    }
+    assert vex_uploaded == {lw_vex.name, cve_vex.name}
+    osv_uploaded = {
+        call.kwargs["relative_path"]
+        for call in mock_osv.upload_content.call_args_list
+    }
+    assert osv_uploaded == {
+        "x_RHLW-LW-2026-0087-1.0.0.json",
+        "x_RHLW-CVE-2025-48924-1.0.0.json",
+    }
+    assert "skipping" not in result.output
+    assert "VEX metadata: 2 file(s) uploaded" in result.output
 
 
+@pytest.mark.parametrize(
+    "sbom",
+    [
+        {"bomFormat": "CycloneDX", "components": [{"name": "artifact"}]},
+        {
+            "bomFormat": "CycloneDX",
+            "components": [{"name": "artifact"}],
+            "vulnerabilities": [],
+        },
+        {
+            "bomFormat": "CycloneDX",
+            "components": [{"name": "artifact"}],
+            "vulnerabilities": [{"id": "CVE-2026-1234"}],
+        },
+    ],
+    ids=["sbom", "sbom-empty-vulnerabilities", "sbom-with-vulnerabilities"],
+)
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
-def test_publish_keeps_sbom_with_empty_vulnerabilities_on_osv_repo(
-    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+def test_publish_rejects_sbom_in_security_metadata(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    sbom: dict[str, object],
+    tmp_path: Path,
 ) -> None:
-    """An SBOM with ``vulnerabilities: []`` is not a VEX document."""
+    """A CycloneDX SBOM in security metadata fails before any upload.
+
+    SBOMs belong next to the artifact in the Maven repository; they are never
+    routed to the OSV (or VEX) File repository.
+    """
     artifact_dir = create_test_artifact_dir(
         tmp_path, include_security_metadata=True
     )
     sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
     sbom_name = "org.example.artifact-1.0.0.bom.json"
-    (sec_dir / sbom_name).write_text(
-        json.dumps(
-            {
-                "bomFormat": "CycloneDX",
-                "components": [{"name": "artifact"}],
-                "vulnerabilities": [],
-            }
-        )
-    )
-    mock_maven = _make_ctx_mock()
-    mock_maven_cls.return_value = mock_maven
-    _setup_client_mock(mock_maven)
-    mock_file = _make_ctx_mock()
-    mock_file_cls.return_value = mock_file
-    _setup_file_client(mock_file)
+    (sec_dir / sbom_name).write_text(json.dumps(sbom))
+    _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
 
     result = _run_publish_with_file_repo(artifact_dir, "test-file-repo")
 
-    assert result.exit_code == 0, result.output
-    uploaded = {
-        call.kwargs["relative_path"]
-        for call in mock_file.upload_content.call_args_list
-    }
-    assert uploaded == {"gav-index.osv.json", sbom_name}
-    mock_file_cls.assert_called_once()
-    assert "VEX metadata" not in result.output
+    assert result.exit_code != 0
+    assert f"CycloneDX document {sbom_name} is not VEX" in result.output
+    mock_maven_cls.assert_not_called()
+    mock_file_cls.assert_not_called()
 
 
 def test_record_is_vex_rejects_sbom_shapes() -> None:
@@ -3043,7 +3061,7 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3062,19 +3080,25 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
     mock_maven.upload_content.assert_not_called()
 
 
-def test_lw_build_without_osv_passes_metadata_check() -> None:
-    """A predisclosure build with no OSV or VEX files does not fail coverage."""
+def test_lw_build_without_osv_fails_metadata_check() -> None:
+    """LW- builds are not exempt from the OSV coverage check.
+
+    They produce OSV (and VEX) records for the novel fix; a build without
+    them must not publish silently.
+    """
     from slan_cuan.java.publish import _validate_security_metadata
 
-    _validate_security_metadata((), ("LW-2026-0001",))
-    _validate_security_metadata((), ("CVE-2024-25710", "LW-2026-0001"))
+    with pytest.raises(ValueError, match="no generated OSV metadata"):
+        _validate_security_metadata((), ("LW-2026-0001",))
+    with pytest.raises(ValueError, match="no generated OSV metadata"):
+        _validate_security_metadata((), ("CVE-2024-25710", "LW-2026-0001"))
 
 
 @patch("slan_cuan.java.publish.PulpMavenClient")
-def test_publish_lw_build_without_osv_to_predisclosure(
+def test_publish_lw_build_without_osv_fails_before_upload(
     mock_maven_cls: Mock, tmp_path: Path
 ) -> None:
-    """Embargoed builds publish to predisclosure when OSV and VEX are absent."""
+    """An LW- build without OSV records fails closed before any upload."""
     artifact_dir = create_test_artifact_dir(
         tmp_path, gav_index_vulns=["LW-2026-0001"]
     )
@@ -3101,8 +3125,9 @@ def test_publish_lw_build_without_osv_to_predisclosure(
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    mock_maven_cls.assert_called()
+    assert result.exit_code != 0
+    assert "no generated OSV metadata" in result.output
+    mock_maven.upload_content.assert_not_called()
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -3134,7 +3159,7 @@ def test_publish_allows_lw_vulns_to_predisclosure_repo(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3178,7 +3203,7 @@ def test_publish_rejects_lw_vulns_when_repository_has_no_distribution(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3228,7 +3253,7 @@ def test_publish_fails_closed_when_distribution_lookup_fails(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3272,7 +3297,7 @@ def test_publish_rejects_predisclosure_distribution_for_foreign_repository(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3314,7 +3339,7 @@ def test_publish_dry_run_validates_embargoed_predisclosure_route(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3360,7 +3385,7 @@ def test_publish_dry_run_rejects_embargoed_non_predisclosure_route(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel",
+            "osv-java-novel-predisclosure",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3547,7 +3572,7 @@ def test_publish_rejects_arbitrary_security_metadata(
     )
 
     assert result.exit_code != 0
-    assert "not OSV, VEX, or SBOM JSON" in result.output
+    assert "not OSV or VEX JSON" in result.output
     mock_maven_cls.assert_not_called()
 
 
@@ -3853,10 +3878,10 @@ def _run_publish_with_file_repo(
 
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
-def test_publish_novel_repo_skips_cve_records(
+def test_publish_embargoed_build_keeps_all_osv_records_in_predisclosure_repo(
     mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
 ) -> None:
-    """Novel repo keeps x_RHLW-LW-* and warns-and-skips x_RHLW-CVE-*."""
+    """All OSV records of an LW- build go to the predisclosure OSV repo."""
     artifact_dir = create_test_artifact_dir(
         tmp_path,
         include_security_metadata=True,
@@ -3865,58 +3890,74 @@ def test_publish_novel_repo_skips_cve_records(
             ("CVE-2025-48924", "pnc-build"),
         ],
     )
-    mock_maven = _make_ctx_mock()
-    mock_maven_cls.return_value = mock_maven
-    _setup_client_mock(mock_maven)
-    mock_file = _make_ctx_mock()
-    mock_file_cls.return_value = mock_file
-    _setup_file_client(mock_file)
-
-    result = _run_publish_with_file_repo(
-        artifact_dir, "osv-java-novel", maven_repo="lightwell-java-predisclosure"
-    )
-
-    assert result.exit_code == 0, result.output
-    # Only the novel record uploaded.
-    assert mock_file.upload_content.call_count == 1
-    uploaded_name = mock_file.upload_content.call_args.kwargs["relative_path"]
-    assert uploaded_name.startswith("x_RHLW-LW-")
-    assert "Warning: skipping OSV record x_RHLW-CVE-2025-48924" in result.output
-    assert "Security metadata: 1 file(s) uploaded" in result.output
-
-
-@patch("slan_cuan.java.publish.PulpFileClient")
-@patch("slan_cuan.java.publish.PulpMavenClient")
-def test_publish_backport_repo_skips_novel_records(
-    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
-) -> None:
-    """Backport repo keeps x_RHLW-CVE-* and warns-and-skips x_RHLW-LW-*."""
-    artifact_dir = create_test_artifact_dir(
-        tmp_path,
-        include_security_metadata=True,
-        osv_records=[
-            ("LW-2026-0087", "novel-pipeline"),
-            ("CVE-2025-48924", "pnc-build"),
-        ],
-    )
-    mock_maven = _make_ctx_mock()
-    mock_maven_cls.return_value = mock_maven
-    _setup_client_mock(mock_maven)
-    mock_file = _make_ctx_mock()
-    mock_file_cls.return_value = mock_file
-    _setup_file_client(mock_file)
+    mock_file = _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
 
     result = _run_publish_with_file_repo(
         artifact_dir,
-        "osv-java-backport",
+        "osv-java-novel-predisclosure",
         maven_repo="lightwell-java-predisclosure",
     )
 
     assert result.exit_code == 0, result.output
-    assert mock_file.upload_content.call_count == 1
-    uploaded_name = mock_file.upload_content.call_args.kwargs["relative_path"]
-    assert uploaded_name.startswith("x_RHLW-CVE-")
-    assert "Warning: skipping OSV record x_RHLW-LW-2026-0087" in result.output
+    assert mock_file.upload_content.call_count == 2
+    assert "Embargoed build: uploading all 2 OSV record(s)" in result.output
+    assert "Warning: skipping" not in result.output
+    assert "Security metadata: 2 file(s) uploaded" in result.output
+
+
+@pytest.mark.parametrize(
+    "file_repo", ["osv-java-backport", "osv-java-novel", "some-other-file-repo"]
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_embargoed_build_rejects_non_predisclosure_osv_repo(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    dry_run: bool,
+    file_repo: str,
+    tmp_path: Path,
+) -> None:
+    """Build-level LW- gate: the OSV repo must be predisclosure.
+
+    Fails before any Pulp client is created, also in dry-run mode.
+    """
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+
+    args = [
+        "publish",
+        "--pulp-url",
+        "https://pulp.example.com",
+        "--pulp-repository",
+        "lightwell-java-predisclosure",
+        "--artifact-dir",
+        str(artifact_dir),
+        "--pulp-domain",
+        "lightwell",
+        "--pulp-username",
+        "testuser",
+        "--pulp-password",
+        "testpass",
+        "--pulp-file-repository",
+        file_repo,
+    ]
+    result = CliRunner().invoke(main, (["--dry-run"] if dry_run else []) + args)
+
+    assert result.exit_code != 0
+    assert (
+        f"--pulp-file-repository '{file_repo}' is not a predisclosure "
+        "repository" in result.output
+    )
+    mock_maven_cls.assert_not_called()
+    mock_file_cls.assert_not_called()
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -3929,7 +3970,7 @@ def test_publish_unrecognized_repo_uploads_all(
         tmp_path,
         include_security_metadata=True,
         osv_records=[
-            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-11111", "novel-pipeline"),
             ("CVE-2025-48924", "pnc-build"),
         ],
     )
@@ -3988,7 +4029,7 @@ def test_publish_writes_security_metadata_skipped_tekton_result(
         tmp_path,
         include_security_metadata=True,
         osv_records=[
-            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-11111", "novel-pipeline"),
             ("CVE-2025-48924", "pnc-build"),
         ],
     )
@@ -4174,7 +4215,7 @@ def test_empty_aliases_and_upstream_rejected(tmp_path: Path) -> None:
     }
     (sec_dir / "empty.json").write_text(json.dumps(rec))
 
-    with pytest.raises(ValueError, match="not OSV, VEX, or SBOM"):
+    with pytest.raises(ValueError, match="not OSV or VEX"):
         _validate_security_metadata(
             (sec_dir / "empty.json",), ("CVE-2024-99999",)
         )
@@ -4195,7 +4236,7 @@ def test_null_aliases_and_upstream_handled(tmp_path: Path) -> None:
     (sec_dir / "null_fields.json").write_text(json.dumps(rec))
 
     files = (sec_dir / "null_fields.json",)
-    with pytest.raises(ValueError, match="not OSV, VEX, or SBOM"):
+    with pytest.raises(ValueError, match="not OSV or VEX"):
         _validate_security_metadata(files, ("CVE-2024-25710",))
 
 
@@ -4252,14 +4293,6 @@ def _setup_pulp_mocks(mock_maven_cls: Mock, mock_file_cls: Mock) -> Mock:
     return mock_file
 
 
-def _add_cyclonedx_sbom(artifact_dir: Path) -> None:
-    """Drop a CycloneDX SBOM next to the OSV records, as generation does."""
-    sec_dir = artifact_dir / "TEST-build-output" / "security_metadata"
-    (sec_dir / "org.example.artifact-1.0.0.bom.json").write_text(
-        json.dumps({"bomFormat": "CycloneDX", "components": []})
-    )
-
-
 @patch("slan_cuan.java.publish.GitHubOsvClient")
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
@@ -4269,13 +4302,12 @@ def test_publish_pushes_only_backport_osv_records_to_github(
     mock_gh_cls: Mock,
     tmp_path: Path,
 ) -> None:
-    """GitHub gets pnc-build OSV records only; CycloneDX stays Pulp-only."""
+    """GitHub gets pnc-build OSV records only."""
     artifact_dir = create_test_artifact_dir(
         tmp_path,
         include_security_metadata=True,
         osv_records=[("CVE-2026-1111", "pnc-build")],
     )
-    _add_cyclonedx_sbom(artifact_dir)
     mock_file = _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
     mock_gh = Mock()
     mock_gh.publish.return_value = "abc123"
@@ -4286,8 +4318,7 @@ def test_publish_pushes_only_backport_osv_records_to_github(
     )
 
     assert result.exit_code == 0, result.output
-    # Pulp still receives both the OSV record and the SBOM.
-    assert mock_file.upload_content.call_count == 2
+    assert mock_file.upload_content.call_count == 1
     assert mock_gh_cls.call_args.args == (_GITHUB_OSV_REPO, "ghp_secret")
     assert mock_gh_cls.call_args.kwargs["path"] == "advisories"
     pushed_files, commit_message = mock_gh.publish.call_args.args
@@ -4313,7 +4344,7 @@ def test_publish_github_excludes_novel_records(
         include_security_metadata=True,
         osv_records=[
             ("CVE-2026-2222", "pnc-build"),
-            ("LW-2026-0001", "novel-pipeline"),
+            ("CVE-2026-3333", "novel-pipeline"),
         ],
     )
     _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
@@ -4325,13 +4356,12 @@ def test_publish_github_excludes_novel_records(
         artifact_dir,
         "osv-java-backport",
         *_GITHUB_ENABLED_ARGS,
-        maven_repo="lightwell-java-predisclosure",
     )
 
     assert result.exit_code == 0, result.output
     pushed_files = mock_gh.publish.call_args.args[0]
     assert [p.name for p in pushed_files] == ["x_RHLW-CVE-2026-2222-1.0.0.json"]
-    assert "GitHub OSV: skipping x_RHLW-LW-2026-0001-1.0.0.json" in result.output
+    assert "GitHub OSV: skipping x_RHLW-CVE-2026-3333-1.0.0.json" in result.output
 
 
 @pytest.mark.parametrize("file_repo", ["test-file-repo", "osv-java-novel"])
@@ -4644,3 +4674,247 @@ def test_enriched_sboms_filtered_from_security_metadata(
     assert len(all_files) == 3  # enriched SBOM + sidecar + OSV
     assert len(filtered) == 1
     assert filtered[0].name == "x_RHLW-CVE-2024-1234-1.0.0.json"
+
+
+@patch("slan_cuan.java.publish.GitHubOsvClient")
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_github_refused_for_embargoed_build(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    mock_gh_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Nothing from an LW- build reaches the public GitHub OSV repository.
+
+    Not even the CVE record, and without relying on per-record
+    classification. Pulp predisclosure publication still happens.
+    """
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("CVE-2026-2222", "pnc-build"),
+            ("LW-2026-0001", "novel-pipeline"),
+        ],
+    )
+    mock_file = _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+    results_dir = tmp_path / "tekton-results"
+    results_dir.mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-predisclosure",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv-java-novel-predisclosure",
+            *_GITHUB_ENABLED_ARGS,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_gh_cls.assert_not_called()
+    assert "not publishing to the public repository" in result.output
+    assert mock_file.upload_content.call_count == 2
+    assert (results_dir / "GITHUB_OSV_UPLOADED").read_text() == "0"
+    assert (results_dir / "GITHUB_OSV_COMMIT").read_text() == ""
+
+
+@pytest.mark.parametrize("vex_repo", ["vex-java-novel", "vex-java-backport"])
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_embargoed_build_rejects_non_predisclosure_vex_repo(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    vex_repo: str,
+    tmp_path: Path,
+) -> None:
+    """Build-level gate applies to VEX even when the VEX has no LW- ID."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[
+            ("LW-2026-0087", "novel-pipeline"),
+            ("CVE-2025-48924", "pnc-build"),
+        ],
+    )
+    # Only a CVE-only VEX: a content-only check would let it through.
+    _add_vex_document(artifact_dir, "CVE-2025-48924")
+    _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "lightwell-java-predisclosure",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv-java-novel-predisclosure",
+            "--pulp-vex-repository",
+            vex_repo,
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert (
+        f"--pulp-vex-repository '{vex_repo}' is not a predisclosure"
+        in result.output
+    )
+    mock_maven_cls.assert_not_called()
+    mock_file_cls.assert_not_called()
+
+
+def test_verify_requires_vex_repository_checks() -> None:
+    """VEX repo: required, distinct, recognized, predisclosure for LW- VEX."""
+    import click
+
+    from slan_cuan.java.publish import _verify_requires_vex_repository
+
+    cve_vex = Path("CVE-2026-1-2026-08-06T16:00:00Z.bom.json")
+    lw_vex = Path("LW-2026-1-2026-08-06T16:00:00Z.bom.json")
+    records = {
+        cve_vex: {
+            "bomFormat": "CycloneDX",
+            "vulnerabilities": [{"id": "CVE-2026-1"}],
+        },
+        lw_vex: {
+            "bomFormat": "CycloneDX",
+            "vulnerabilities": [{"id": "LW-2026-1"}],
+        },
+    }
+
+    assert _verify_requires_vex_repository((), None) is False
+    with pytest.raises(
+        click.UsageError, match="--pulp-vex-repository is required"
+    ):
+        _verify_requires_vex_repository((cve_vex,), None)
+    with pytest.raises(click.UsageError, match="must differ"):
+        _verify_requires_vex_repository(
+            (cve_vex,), "vex-java-backport", "vex-java-backport", records
+        )
+    with pytest.raises(click.UsageError, match="not recognized"):
+        _verify_requires_vex_repository(
+            (cve_vex,), "vex/java/remediated", "osv-java-backport", records
+        )
+    with pytest.raises(click.UsageError, match="contain embargoed"):
+        _verify_requires_vex_repository(
+            (lw_vex,), "vex-java-novel", "osv-java-novel", records
+        )
+    assert _verify_requires_vex_repository(
+        (cve_vex,), "vex-java-backport", "osv-java-backport", records
+    )
+    assert _verify_requires_vex_repository(
+        (lw_vex,),
+        "vex-java-novel-predisclosure",
+        "osv-java-novel-predisclosure",
+        records,
+    )
+
+
+def test_verify_embargo_destinations() -> None:
+    """Only builds with LW- IDs are gated; only repos that receive files."""
+    import click
+
+    from slan_cuan.java.publish import _verify_embargo_destinations
+
+    _verify_embargo_destinations(
+        False, True, "osv-java-backport", True, "vex-java-backport"
+    )
+    _verify_embargo_destinations(
+        True,
+        True,
+        "osv-java-novel-predisclosure",
+        True,
+        "vex-java-novel-predisclosure",
+    )
+    _verify_embargo_destinations(True, False, None, False, None)
+    with pytest.raises(click.UsageError, match="--pulp-file-repository"):
+        _verify_embargo_destinations(True, True, "osv-java-novel", False, None)
+    with pytest.raises(click.UsageError, match="--pulp-vex-repository"):
+        _verify_embargo_destinations(
+            True, True, "osv-java-novel-predisclosure", True, "vex-java-novel"
+        )
+
+
+def test_metadata_has_embargo_detects_lw_content() -> None:
+    """LW- IDs are found in OSV id/aliases/upstream and VEX vulnerabilities."""
+    from slan_cuan.java.publish import _metadata_has_embargo
+
+    def has(record: dict[str, object]) -> bool:
+        return _metadata_has_embargo({Path("f.json"): record})
+
+    assert has({"id": "x_RHLW-LW-2026-0001-1.0.0"})
+    assert has({"id": "RHLW-2026-0123456789abcdef", "upstream": ["LW-2026-1"]})
+    assert has({"id": "x_RHLW-CVE-2026-1-1.0.0", "aliases": ["LW-2026-1"]})
+    assert has(
+        {"bomFormat": "CycloneDX", "vulnerabilities": [{"id": "LW-2026-1"}]}
+    )
+    # The LW inside RHLW is never mistaken for an LW- ID.
+    assert not has(
+        {"id": "RHLW-2026-0123456789abcdef", "upstream": ["CVE-2026-1", "GHSA-x"]}
+    )
+    assert not has({"id": "x_RHLW-CVE-2026-1-1.0.0", "aliases": ["CVE-2026-1"]})
+
+
+@patch("slan_cuan.java.publish.GitHubOsvClient")
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_lw_content_without_lw_in_gav_index_is_embargoed(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    mock_gh_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """LW- content in generated files makes the build embargoed.
+
+    Even when the GAV index lists only CVEs (fail closed on inconsistent input).
+    """
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[("CVE-2025-48924", "pnc-build")],
+    )
+    _add_vex_document(artifact_dir, "LW-2026-0087")
+    _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+
+    result = _run_publish_with_github(
+        artifact_dir,
+        "osv-java-backport",
+        "--pulp-vex-repository",
+        "vex-java-novel-predisclosure",
+        *_GITHUB_ENABLED_ARGS,
+    )
+
+    assert result.exit_code != 0
+    assert "treating the build as embargoed" in result.output
+    assert (
+        "--pulp-file-repository 'osv-java-backport' is not a predisclosure"
+        in result.output
+    )
+    mock_maven_cls.assert_not_called()
+    mock_file_cls.assert_not_called()
+    mock_gh_cls.assert_not_called()
