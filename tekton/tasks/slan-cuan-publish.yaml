@@ -85,7 +85,8 @@ spec:
       description: >-
         Pulp File repository name for VEX upload. Must differ from
         PULP_FILE_REPOSITORY and contain 'backport' or 'novel'; builds with
-        LW- IDs require predisclosure OSV and VEX repositories.
+        LW- IDs require OSV and VEX repositories served by predisclosure
+        distributions.
       type: string
       default: ""
     - name: PULP_TASK_TIMEOUT

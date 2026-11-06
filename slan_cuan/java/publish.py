@@ -41,6 +41,9 @@ _ERROR_RESPONSE_MAX = 500
 DEFAULT_UPLOAD_WORKERS = 4
 GAV_INDEX_FILENAME = "gav-index.json"
 MAVEN_PREDISCLOSURE_BASE_PATH = "java/predisclosure"
+# A File (OSV/VEX) distribution is a predisclosure destination when its
+# base path has this segment (e.g. ``osv/java/predisclosure``).
+FILE_PREDISCLOSURE_PATH_SEGMENT = "predisclosure"
 
 
 def _load_upstream_sbom(
@@ -160,7 +163,7 @@ def _validate_security_metadata(
 
     The OSV coverage check also applies to builds with ``LW-`` IDs: those
     builds produce OSV and VEX for the novel fix, published only to
-    predisclosure repositories (see ``_verify_embargo_destinations``).
+    predisclosure distributions (see ``_verify_embargo_destinations``).
     """
     osv_vulnerability_ids: set[str] = set()
     for path in security_metadata_files:
@@ -238,12 +241,6 @@ def _expected_source_for_repo(repo_name: str) -> str | None:
     silently disabling filtering rather than erroring. This is safe for the
     current inventory (``osv-java-backport``/``osv-java-novel``); revisit if
     the naming scheme changes.
-
-    ``_is_predisclosure_repository_name`` applies the same name-substring
-    convention for the orthogonal "is this a predisclosure repo" question.
-    The two are independent classifiers over the same repo name and must be
-    kept in sync by hand if the naming scheme changes; see the module-level
-    TODO in that function for the tracked follow-up to unify them.
     """
     lowered = repo_name.lower()
     if "backport" in lowered:
@@ -529,30 +526,6 @@ def _partition_security_metadata(
     return tuple(osv_files), tuple(vex_files), records
 
 
-def _is_predisclosure_repository_name(repository_name: str | None) -> bool:
-    """Return True when a File repository name marks a predisclosure repo.
-
-    Pulp File repositories are recognized by name (for example
-    ``osv-java-novel-predisclosure``), the same way backport/novel routing
-    is inferred in ``_expected_source_for_repo``.
-
-    TODO: this is a third independent name-substring classifier over the
-    same repository name (``_expected_source_for_repo`` is the first; OSV-id
-    prefix classification in ``_source_from_osv_id``/``_source_from_vuln_id``
-    is a separate, non-name-based one). All of the embargo helpers below
-    (``_source_from_vuln_id_has_embargo``, ``_metadata_has_embargo``,
-    ``_verify_requires_vex_repository``, ``_verify_embargo_destinations``)
-    depend on this one agreeing with ``_expected_source_for_repo`` on what
-    counts as a safe destination. Consider folding ``predisclosure`` into a
-    single repo-name classifier (e.g. returning a small dataclass of
-    source/predisclosure flags) rather than growing further independent
-    keyword checks.
-    """
-    return (
-        bool(repository_name) and "predisclosure" in str(repository_name).lower()
-    )
-
-
 def _record_vulnerability_ids(record: dict[str, Any] | None) -> list[str]:
     """Return every vulnerability ID a security-metadata record names.
 
@@ -627,9 +600,11 @@ def _verify_requires_vex_repository(
     * missing, or the same as the OSV File repository (VEX never falls back
       to the OSV repository);
     * not recognizable as a backport/novel repository by name (VEX would
-      otherwise upload without source filtering);
-    * not a predisclosure repository while any VEX document carries an
-      ``LW-`` ID. The build-level check is ``_verify_embargo_destinations``.
+      otherwise upload without source filtering).
+
+    VEX naming an ``LW-`` ID makes the whole build embargoed
+    (``_metadata_has_embargo``); its VEX repository is then verified against
+    its Pulp distribution by ``_verify_embargo_destinations``.
     """
     if not vex_files:
         return False
@@ -650,25 +625,41 @@ def _verify_requires_vex_repository(
             f"as a backport or novel VEX repository (its name must contain "
             f"'backport' or 'novel'); refusing to upload VEX unfiltered."
         )
-    records = records or {}
-    embargoed = sorted(
-        path.name
-        for path in vex_files
-        if _source_from_vuln_id_has_embargo(
-            _vex_vulnerability_ids(records.get(path))
-        )
-    )
-    if embargoed and not _is_predisclosure_repository_name(pulp_vex_repository):
-        raise click.UsageError(
-            f"VEX document(s) {', '.join(embargoed)} contain embargoed (LW-) "
-            f"vulnerabilities but --pulp-vex-repository "
-            f"'{pulp_vex_repository}' is not a predisclosure repository. "
-            f"Aborting to prevent disclosure of embargoed content."
-        )
     return True
 
 
+def _validate_file_predisclosure_distribution(
+    config: PulpConfig, repository_name: str, option: str
+) -> None:
+    """Fail closed unless a File repository is served at a predisclosure path.
+
+    The distribution is looked up by the repository name (the same name
+    ``_publish_file_records`` publishes to) and its ``base_path`` must have a
+    ``predisclosure`` segment, e.g. ``osv/java/predisclosure``. This checks
+    where the content is actually served, not how the repository is named.
+    """
+    try:
+        click.echo(f"Resolving {option} distribution: {repository_name}")
+        with PulpFileClient(config, repository_name) as client:
+            base_path = client.get_distribution_base_path(repository_name)
+    except PulpError as e:
+        raise click.ClickException(
+            f"Unable to verify the predisclosure distribution of {option} "
+            f"'{repository_name}' for an embargoed build."
+        ) from e
+    segments = (base_path or "").strip("/").split("/")
+    if FILE_PREDISCLOSURE_PATH_SEGMENT not in segments:
+        served = f"'{base_path}'" if base_path is not None else "no distribution"
+        raise click.ClickException(
+            f"Build contains embargoed (LW-) vulnerabilities but {option} "
+            f"'{repository_name}' is served at {served}, not a predisclosure "
+            f"distribution. Aborting to prevent disclosure of embargoed "
+            f"content."
+        )
+
+
 def _verify_embargo_destinations(
+    config: PulpConfig,
     has_lw: bool,
     requires_file_repository: bool,
     pulp_file_repository: str | None,
@@ -677,33 +668,25 @@ def _verify_embargo_destinations(
 ) -> None:
     """Build-level LW- gate for the OSV and VEX File repositories.
 
-    When the build's vulnerability list contains any ``LW-`` ID, every OSV
-    and VEX file of the build is embargoed content, whatever the IDs or
-    source inside individual files say. Fail closed, before any upload,
-    unless both File repositories that receive files are predisclosure
-    repositories. The Maven repository is checked separately against its
-    ``java/predisclosure`` distribution, and GitHub OSV publication is
-    refused for such builds.
+    When the build has any ``LW-`` ID, every OSV and VEX file of the build
+    is embargoed content, whatever the IDs or source inside individual files
+    say. Before any upload (and in dry-run mode), fail closed unless each
+    File repository that receives files is served by a predisclosure
+    distribution in Pulp, checked the same way as the Maven
+    ``java/predisclosure`` distribution. GitHub OSV publication is refused
+    for such builds separately.
     """
     if not has_lw:
         return
-    if requires_file_repository and not _is_predisclosure_repository_name(
-        pulp_file_repository
-    ):
-        raise click.UsageError(
-            f"Build contains embargoed (LW-) vulnerabilities but "
-            f"--pulp-file-repository '{pulp_file_repository}' is not a "
-            f"predisclosure repository. Aborting to prevent disclosure of "
-            f"embargoed content."
+    if requires_file_repository:
+        assert pulp_file_repository is not None
+        _validate_file_predisclosure_distribution(
+            config, pulp_file_repository, "--pulp-file-repository"
         )
-    if requires_vex_repository and not _is_predisclosure_repository_name(
-        pulp_vex_repository
-    ):
-        raise click.UsageError(
-            f"Build contains embargoed (LW-) vulnerabilities but "
-            f"--pulp-vex-repository '{pulp_vex_repository}' is not a "
-            f"predisclosure repository. Aborting to prevent disclosure of "
-            f"embargoed content."
+    if requires_vex_repository:
+        assert pulp_vex_repository is not None
+        _validate_file_predisclosure_distribution(
+            config, pulp_vex_repository, "--pulp-vex-repository"
         )
 
 
@@ -1295,7 +1278,8 @@ def _print_verbose_artifact_info(
     help=(
         "Pulp File repository name for VEX upload. Required when VEX is "
         "present; must differ from --pulp-file-repository, contain "
-        "'backport' or 'novel', and contain 'predisclosure' for LW- builds."
+        "'backport' or 'novel'. For LW- builds it must be served by a "
+        "predisclosure distribution."
     ),
 )
 @click.option(
@@ -1442,14 +1426,6 @@ def publish(
         requires_vex_repository = _verify_requires_vex_repository(
             vex_files, pulp_vex_repository, pulp_file_repository, metadata_records
         )
-        _verify_embargo_destinations(
-            has_lw,
-            requires_file_repository,
-            pulp_file_repository,
-            requires_vex_repository,
-            pulp_vex_repository,
-        )
-
         if github_osv_repo and not github_osv_token:
             raise click.UsageError(
                 f"GitHub OSV publication to {github_osv_repo} was requested "
@@ -1600,6 +1576,14 @@ def publish(
                 repository_href = _validate_predisclosure_distribution(
                     client, pulp_repository
                 )
+            _verify_embargo_destinations(
+                config,
+                has_lw,
+                requires_file_repository,
+                pulp_file_repository,
+                requires_vex_repository,
+                pulp_vex_repository,
+            )
 
         if ctx.dry_run:
             _print_dry_run(

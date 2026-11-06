@@ -561,6 +561,68 @@ class TestPulpFileClient:
         with pytest.raises(PulpError, match="Domain is required"):
             client.create_publication("/api/v3/repositories/file/file/uuid/")
 
+    @staticmethod
+    def _client_with(handler: object) -> PulpFileClient:
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpFileClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+            base_url="https://pulp.example.com",
+        )
+        return client
+
+    def test_get_distribution_base_path_found(self) -> None:
+        """Lookup by name returns the distribution base_path."""
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "pulp_href": "/d/1/",
+                            "name": "osv-java-novel",
+                            "base_path": "osv/java/predisclosure",
+                        }
+                    ]
+                },
+            )
+
+        client = self._client_with(handler)
+        assert (
+            client.get_distribution_base_path("osv-java-novel")
+            == "osv/java/predisclosure"
+        )
+        assert seen[0].url.path == (
+            "/api/pulp/testdomain/api/v3/distributions/file/file/"
+        )
+        assert seen[0].url.params["name"] == "osv-java-novel"
+
+    def test_get_distribution_base_path_missing(self) -> None:
+        """No distribution with that name returns None."""
+        client = self._client_with(
+            lambda request: httpx.Response(200, json={"results": []})
+        )
+        assert client.get_distribution_base_path("nope") is None
+
+    def test_get_distribution_base_path_malformed(self) -> None:
+        """A result without base_path raises PulpError."""
+        client = self._client_with(
+            lambda request: httpx.Response(
+                200, json={"results": [{"pulp_href": "/d/1/"}]}
+            )
+        )
+        with pytest.raises(PulpError, match="Failed to parse distribution"):
+            client.get_distribution_base_path("osv-java-novel")
+
     def test_resolve_distribution_success(self) -> None:
         """Successful lookup returns pulp_href."""
 
