@@ -90,15 +90,15 @@ class TestHelpers:
         assert matches_any_candidate("my-pkg-1.0.0-beta.tar.gz", pats_hyphen)
         assert matches_any_candidate("my_pkg-1.0.0-beta.tar.gz", pats_hyphen)
 
-        # Local version wheel: '+' and '.' in local versions escaped to '_'
+        # Local version wheels preserve the '+' separator and dots.
         pats_local = get_purl_candidate_patterns("pkg:pypi/my-pkg@1.0.0+rhlw.1")
-        assert "my_pkg-1.0.0_rhlw.1-py3-none-any.whl" in pats_local
-        assert "my_pkg-1.0.0_rhlw.1-*.whl" in pats_local
+        assert "my_pkg-1.0.0+rhlw.1-py3-none-any.whl" in pats_local
+        assert "my_pkg-1.0.0+rhlw.1-*.whl" in pats_local
         assert matches_any_candidate(
-            "my_pkg-1.0.0_rhlw.1-py3-none-any.whl", pats_local
+            "my_pkg-1.0.0+rhlw.1-py3-none-any.whl", pats_local
         )
         assert matches_any_candidate(
-            "my_pkg-1.0.0_rhlw.1-cp39-cp39-linux_x86_64.whl",
+            "my_pkg-1.0.0+rhlw.1-cp39-cp39-linux_x86_64.whl",
             pats_local,
         )
 

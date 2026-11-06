@@ -312,6 +312,31 @@ class TestApplyReleaseScopeFilter:
         assert report["removed_count"] == 2
         assert "consumed_build_index_digest" in report
 
+    def test_remediated_wheel_survives_filtering(self, tmp_path: Path) -> None:
+        """Keep the managed-g2ndt wheel and sdist from an encoded local PURL."""
+        payload = tmp_path / "files"
+        payload.mkdir()
+        wheel = "python_multipart-0.0.27+rhlw.1-1-py3-none-any.whl"
+        sdist = "python-multipart-0.0.27+rhlw.1.tar.gz"
+        other_revision = "python_multipart-0.0.27+rhlw.2-1-py3-none-any.whl"
+        dependency = "hatchling-1.33.0-0-py3-none-any.whl"
+        expected = {wheel, wheel + ".sha256", sdist}
+        excluded = {other_revision, dependency}
+        for name in expected | excluded:
+            (payload / name).write_bytes(b"distribution or checksum")
+
+        kept, removed = apply_release_scope_filter(
+            payload,
+            ["pkg:pypi/python-multipart@0.0.27%2Brhlw.1"],
+            publish_all=False,
+        )
+
+        assert (kept, removed) == (3, 2)
+        assert {p.name for p in payload.iterdir()} == expected
+        assert {p.name for p in (tmp_path / "files-filtered").iterdir()} == (
+            excluded
+        )
+
     def test_unmappable_purl_fails_closed(self, payload_dir: Path) -> None:
         """A purl that yields no filename candidates is a hard error.
 
