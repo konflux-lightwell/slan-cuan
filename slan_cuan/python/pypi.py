@@ -88,8 +88,8 @@ def get_purl_candidate_patterns(purl_str: str) -> set[str]:
 
     Derives candidate artifact filenames from PURL coordinates:
     - Wheel: name with '-' -> '_' (PEP 503-ish), version with runs of
-      non-alphanumeric chars (esp. '+' and '.' in local versions, or '-')
-      escaped to '_' per PEP 427:
+      non-alphanumeric chars escaped to '_', preserving dots and the '+'
+      separator in local versions:
       '{name}-{version}-py3-none-any.whl' plus '{name}-{version}-*.whl' glob.
     - Sdist: '{name}-{version}.tar.gz' (PURL name, hyphen-canonicalized,
       and underscore name variants -- dotted PyPI project names such as
@@ -102,7 +102,7 @@ def get_purl_candidate_patterns(purl_str: str) -> set[str]:
 
     purl_name, canonical_name, version = coord
     wheel_name = canonical_name.replace("-", "_")
-    wheel_version = re.sub(r"[^\w.]+", "_", version)
+    wheel_version = re.sub(r"[^\w.+]+", "_", version)
 
     sdist_name_hyphen = canonical_name
     sdist_name_underscore = wheel_name
