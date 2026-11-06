@@ -2680,7 +2680,10 @@ def test_publish_embargoed_build_uploads_all_vex_to_predisclosure_repo(
     mock_vex = _make_ctx_mock()
     _setup_file_client(mock_osv)
     _setup_file_client(mock_vex)
-    mock_file_cls.side_effect = [mock_osv, mock_vex]
+    mock_file_cls.side_effect = lambda _config, name: {
+        "osv-java-novel": mock_osv,
+        "vex-java-novel": mock_vex,
+    }[name]
 
     result = CliRunner().invoke(
         main,
@@ -2699,9 +2702,9 @@ def test_publish_embargoed_build_uploads_all_vex_to_predisclosure_repo(
             "--pulp-password",
             "testpass",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--pulp-vex-repository",
-            "vex-java-novel-predisclosure",
+            "vex-java-novel",
         ],
     )
 
@@ -2721,6 +2724,8 @@ def test_publish_embargoed_build_uploads_all_vex_to_predisclosure_repo(
     }
     assert "skipping" not in result.output
     assert "VEX metadata: 2 file(s) uploaded" in result.output
+    mock_osv.get_distribution_base_path.assert_called_with("osv-java-novel")
+    mock_vex.get_distribution_base_path.assert_called_with("vex-java-novel")
 
 
 @pytest.mark.parametrize(
@@ -3082,7 +3087,7 @@ def test_publish_rejects_lw_vulns_to_non_predisclosure_repo(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3180,7 +3185,7 @@ def test_publish_allows_lw_vulns_to_predisclosure_repo(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3224,7 +3229,7 @@ def test_publish_rejects_lw_vulns_when_repository_has_no_distribution(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3274,7 +3279,7 @@ def test_publish_fails_closed_when_distribution_lookup_fails(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3318,7 +3323,7 @@ def test_publish_rejects_predisclosure_distribution_for_foreign_repository(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3335,9 +3340,10 @@ def test_publish_rejects_predisclosure_distribution_for_foreign_repository(
     mock_maven.upload_content.assert_not_called()
 
 
+@patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_dry_run_validates_embargoed_predisclosure_route(
-    mock_maven_cls: Mock, tmp_path: Path
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
 ) -> None:
     """Embargoed dry runs validate routing before reporting success."""
     artifact_dir = create_test_artifact_dir(
@@ -3349,6 +3355,9 @@ def test_publish_dry_run_validates_embargoed_predisclosure_route(
     mock_maven = _make_ctx_mock()
     mock_maven_cls.return_value = mock_maven
     _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
 
     result = CliRunner().invoke(
         main,
@@ -3360,7 +3369,7 @@ def test_publish_dry_run_validates_embargoed_predisclosure_route(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3378,6 +3387,8 @@ def test_publish_dry_run_validates_embargoed_predisclosure_route(
     mock_maven.list_distributions.assert_called_once_with(_REPO_HREF)
     mock_maven.upload_content.assert_not_called()
     mock_maven.modify_repository.assert_not_called()
+    mock_file.get_distribution_base_path.assert_called_once_with("osv-java-novel")
+    mock_file.upload_content.assert_not_called()
 
 
 @patch("slan_cuan.java.publish.PulpMavenClient")
@@ -3406,7 +3417,7 @@ def test_publish_dry_run_rejects_embargoed_non_predisclosure_route(
             "--pulp-repository",
             "test-novel-landing",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--artifact-dir",
             str(artifact_dir),
             "--pulp-domain",
@@ -3860,6 +3871,19 @@ def test_classify_cdx_source_filename_fallback() -> None:
     assert _classify_cdx_source(record, Path("clean.bom.json")) is None
 
 
+# File distributions as served in Pulp (distribution name == repository name).
+# osv-java-novel is the existing novel stream, served at a predisclosure path.
+_FILE_DISTRIBUTIONS = {
+    "osv-java-backport": "osv/java/remediated",
+    "osv-java-novel": "osv/java/predisclosure",
+    "osv-java-novel-predisclosure": "osv/java/predisclosure",
+    "vex-java-backport": "vex/java/remediated",
+    "vex-java-novel": "vex/java/predisclosure",
+    "vex-java-novel-predisclosure": "vex/java/predisclosure",
+    "some-other-file-repo": "files/other",
+}
+
+
 def _setup_file_client(mock_file: Mock) -> None:
     """Configure mock file client with upload/publication/distribution."""
     mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
@@ -3868,6 +3892,7 @@ def _setup_file_client(mock_file: Mock) -> None:
     mock_file.create_publication.return_value = _FILE_PUB_HREF
     mock_file.resolve_distribution.return_value = _FILE_DIST_HREF
     mock_file.update_distribution.return_value = None
+    mock_file.get_distribution_base_path.side_effect = _FILE_DISTRIBUTIONS.get
 
 
 def _run_publish_with_file_repo(
@@ -3915,7 +3940,7 @@ def test_publish_embargoed_build_keeps_all_osv_records_in_predisclosure_repo(
 
     result = _run_publish_with_file_repo(
         artifact_dir,
-        "osv-java-novel-predisclosure",
+        "osv-java-novel",
         maven_repo="lightwell-java-predisclosure",
     )
 
@@ -3927,7 +3952,12 @@ def test_publish_embargoed_build_keeps_all_osv_records_in_predisclosure_repo(
 
 
 @pytest.mark.parametrize(
-    "file_repo", ["osv-java-backport", "osv-java-novel", "some-other-file-repo"]
+    ("file_repo", "served"),
+    [
+        ("osv-java-backport", "'osv/java/remediated'"),
+        ("some-other-file-repo", "'files/other'"),
+        ("osv-java-unknown", "no distribution"),
+    ],
 )
 @pytest.mark.parametrize("dry_run", [False, True])
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -3937,11 +3967,13 @@ def test_publish_embargoed_build_rejects_non_predisclosure_osv_repo(
     mock_file_cls: Mock,
     dry_run: bool,
     file_repo: str,
+    served: str,
     tmp_path: Path,
 ) -> None:
-    """Build-level LW- gate: the OSV repo must be predisclosure.
+    """Build-level LW- gate: the OSV repo must be served at a predisclosure path.
 
-    Fails before any Pulp client is created, also in dry-run mode.
+    Checked against the Pulp File distribution, before any upload and also in
+    dry-run mode.
     """
     artifact_dir = create_test_artifact_dir(
         tmp_path,
@@ -3951,7 +3983,12 @@ def test_publish_embargoed_build_rejects_non_predisclosure_osv_repo(
             ("CVE-2025-48924", "pnc-build"),
         ],
     )
-    _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
 
     args = [
         "publish",
@@ -3974,11 +4011,43 @@ def test_publish_embargoed_build_rejects_non_predisclosure_osv_repo(
 
     assert result.exit_code != 0
     assert (
-        f"--pulp-file-repository '{file_repo}' is not a predisclosure "
-        "repository" in result.output
+        f"--pulp-file-repository '{file_repo}' is served at {served}, not a "
+        "predisclosure distribution" in result.output
     )
-    mock_maven_cls.assert_not_called()
-    mock_file_cls.assert_not_called()
+    mock_file.get_distribution_base_path.assert_called_once_with(file_repo)
+    mock_maven.upload_content.assert_not_called()
+    mock_file.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_embargoed_build_fails_closed_on_file_distribution_lookup_error(
+    mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
+) -> None:
+    """An unreadable File distribution lookup fails closed before upload."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[("LW-2026-0087", "novel-pipeline")],
+    )
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+    mock_file.get_distribution_base_path.side_effect = PulpError(
+        "boom", status_code=500, response_body=""
+    )
+
+    result = _run_publish_with_file_repo(
+        artifact_dir, "osv-java-novel", maven_repo="lightwell-java-predisclosure"
+    )
+
+    assert result.exit_code != 0
+    assert "Unable to verify the predisclosure distribution of" in result.output
+    mock_maven.upload_content.assert_not_called()
+    mock_file.upload_content.assert_not_called()
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")
@@ -4742,7 +4811,7 @@ def test_publish_github_refused_for_embargoed_build(
             "--pulp-password",
             "testpass",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             *_GITHUB_ENABLED_ARGS,
         ],
     )
@@ -4755,7 +4824,7 @@ def test_publish_github_refused_for_embargoed_build(
     assert (results_dir / "GITHUB_OSV_COMMIT").read_text() == ""
 
 
-@pytest.mark.parametrize("vex_repo", ["vex-java-novel", "vex-java-backport"])
+@pytest.mark.parametrize("vex_repo", ["vex-java-backport"])
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_embargoed_build_rejects_non_predisclosure_vex_repo(
@@ -4794,7 +4863,7 @@ def test_publish_embargoed_build_rejects_non_predisclosure_vex_repo(
             "--pulp-password",
             "testpass",
             "--pulp-file-repository",
-            "osv-java-novel-predisclosure",
+            "osv-java-novel",
             "--pulp-vex-repository",
             vex_repo,
         ],
@@ -4802,18 +4871,22 @@ def test_publish_embargoed_build_rejects_non_predisclosure_vex_repo(
 
     assert result.exit_code != 0
     assert (
-        f"--pulp-vex-repository '{vex_repo}' is not a predisclosure"
-        in result.output
+        f"--pulp-vex-repository '{vex_repo}' is served at 'vex/java/remediated', "
+        "not a predisclosure distribution" in result.output
     )
-    mock_maven_cls.assert_not_called()
-    mock_file_cls.assert_not_called()
+    mock_file = mock_file_cls.return_value
+    mock_file.upload_content.assert_not_called()
+    mock_maven_cls.return_value.upload_content.assert_not_called()
 
 
 def test_verify_requires_vex_repository_checks() -> None:
-    """VEX repo: required, distinct, recognized, predisclosure for LW- VEX."""
+    """VEX repo: required, distinct from the OSV repo, recognized by name."""
     import click
 
-    from slan_cuan.java.publish import _verify_requires_vex_repository
+    from slan_cuan.java.publish import (
+        _metadata_has_embargo,
+        _verify_requires_vex_repository,
+    )
 
     cve_vex = Path("CVE-2026-1-2026-08-06T16:00:00Z.bom.json")
     lw_vex = Path("LW-2026-1-2026-08-06T16:00:00Z.bom.json")
@@ -4846,48 +4919,18 @@ def test_verify_requires_vex_repository_checks() -> None:
         _verify_requires_vex_repository(
             (cve_vex,), "vex/java/remediated", "osv-java-backport", records
         )
-    with pytest.raises(click.UsageError, match="contain embargoed"):
-        _verify_requires_vex_repository(
-            (lw_vex,), "vex-java-novel", "osv-java-novel", records
-        )
-    with pytest.raises(click.UsageError, match="contain embargoed"):
-        _verify_requires_vex_repository(
-            (lw_openvex,), "vex-java-novel", "osv-java-novel", records
-        )
+    # LW- content (also in OpenVEX) makes the build embargoed; its VEX
+    # repository is then checked against its Pulp distribution.
+    assert _metadata_has_embargo({lw_openvex: records[lw_openvex]})
     assert _verify_requires_vex_repository(
         (cve_vex,), "vex-java-backport", "osv-java-backport", records
     )
     assert _verify_requires_vex_repository(
         (lw_vex,),
-        "vex-java-novel-predisclosure",
-        "osv-java-novel-predisclosure",
+        "vex-java-novel",
+        "osv-java-novel",
         records,
     )
-
-
-def test_verify_embargo_destinations() -> None:
-    """Only builds with LW- IDs are gated; only repos that receive files."""
-    import click
-
-    from slan_cuan.java.publish import _verify_embargo_destinations
-
-    _verify_embargo_destinations(
-        False, True, "osv-java-backport", True, "vex-java-backport"
-    )
-    _verify_embargo_destinations(
-        True,
-        True,
-        "osv-java-novel-predisclosure",
-        True,
-        "vex-java-novel-predisclosure",
-    )
-    _verify_embargo_destinations(True, False, None, False, None)
-    with pytest.raises(click.UsageError, match="--pulp-file-repository"):
-        _verify_embargo_destinations(True, True, "osv-java-novel", False, None)
-    with pytest.raises(click.UsageError, match="--pulp-vex-repository"):
-        _verify_embargo_destinations(
-            True, True, "osv-java-novel-predisclosure", True, "vex-java-novel"
-        )
 
 
 def test_metadata_has_embargo_detects_lw_content() -> None:
@@ -4947,16 +4990,16 @@ def test_publish_lw_content_without_lw_in_gav_index_is_embargoed(
         artifact_dir,
         "osv-java-backport",
         "--pulp-vex-repository",
-        "vex-java-novel-predisclosure",
+        "vex-java-novel",
         *_GITHUB_ENABLED_ARGS,
     )
 
     assert result.exit_code != 0
     assert "treating the build as embargoed" in result.output
     assert (
-        "--pulp-file-repository 'osv-java-backport' is not a predisclosure"
-        in result.output
+        "--pulp-file-repository 'osv-java-backport' is served at "
+        "'osv/java/remediated', not a predisclosure distribution" in result.output
     )
-    mock_maven_cls.assert_not_called()
-    mock_file_cls.assert_not_called()
+    mock_maven_cls.return_value.upload_content.assert_not_called()
+    mock_file_cls.return_value.upload_content.assert_not_called()
     mock_gh_cls.assert_not_called()

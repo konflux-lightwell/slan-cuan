@@ -232,6 +232,46 @@ class PulpFileClient(PulpClientBase):
                 response_body=response.text,
             ) from e
 
+    def get_distribution_base_path(self, name: str) -> str | None:
+        """Return the ``base_path`` of the File distribution named *name*.
+
+        Returns None when no distribution has that name.
+
+        Raises:
+            PulpError: If the lookup fails, returns invalid data, or the
+                domain is not set.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for distribution lookup. Set --pulp-domain.",
+                status_code=0,
+                response_body="",
+            )
+        url = FILE_DISTRIBUTION_API_PATH_TEMPLATE.format(
+            domain=self._config.domain
+        )
+        response = self._request(
+            "GET",
+            url,
+            "Distribution lookup",
+            params={"name": name},
+        )
+        try:
+            response_data = parse_json_dict(response, "Distribution", PulpError)
+            results = response_data.get("results", [])
+            if not isinstance(results, list):
+                raise ValueError("results is not a list")
+            if not results:
+                return None
+            return str(results[0]["base_path"])
+        except (ValueError, KeyError, TypeError) as e:
+            raise PulpError(
+                f"Failed to parse distribution lookup response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
     def update_distribution(
         self, distribution_href: str, publication_href: str
     ) -> None:

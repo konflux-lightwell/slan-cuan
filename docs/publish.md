@@ -44,15 +44,21 @@ the OSV coverage check and the `--pulp-file-repository` requirement apply to
 them as to any vulnerable build. A build with `LW-` IDs and no OSV metadata
 fails.
 
-For a build with any `LW-` ID (build-level, from the GAV index), **all** of
-its security metadata is embargoed content, whatever the IDs or source inside
-individual files. Before any upload, and also in dry-run mode, `publish`
-fails closed unless:
+For a build with any `LW-` ID (from the GAV index, or named in any generated
+OSV/VEX file), **all** of its security metadata is embargoed content, whatever
+the IDs or source inside individual files. Right after the Maven
+`java/predisclosure` check, before any upload and also in dry-run mode,
+`publish` fails closed unless each File repository that receives files is
+served by a predisclosure distribution in Pulp:
 
-- `--pulp-file-repository` is a predisclosure repository (its name contains
-  `predisclosure`, e.g. `osv-java-novel-predisclosure`);
-- `--pulp-vex-repository`, when VEX is present, is a predisclosure repository
-  (e.g. `vex-java-novel-predisclosure`).
+- the File distribution named like `--pulp-file-repository` (and, when VEX is
+  present, like `--pulp-vex-repository`) must exist, and its `base_path` must
+  have a `predisclosure` segment (e.g. `osv/java/predisclosure`);
+- a missing distribution or an unreadable lookup fails closed.
+
+This checks where the content is actually served, not the repository name,
+so an existing novel repository such as `osv-java-novel` qualifies when its
+distribution serves a predisclosure path.
 
 Every OSV record and VEX document of such a build is uploaded to those
 predisclosure repositories without backport/novel source filtering, so a
@@ -144,9 +150,10 @@ Generated OSV/VEX records are published to two destinations:
   - is missing, or equals `--pulp-file-repository` (VEX never goes to the OSV
     repository);
   - is not recognized as backport/novel by name (it must contain `backport`
-    or `novel`, e.g. `vex-java-backport`, `vex-java-novel-predisclosure`);
-  - is not a predisclosure repository while any VEX document carries an
-    `LW-` ID (in addition to the build-level `LW-` gate above).
+    or `novel`, e.g. `vex-java-backport`, `vex-java-novel`).
+
+  VEX naming an `LW-` ID makes the whole build embargoed, so its VEX
+  repository must be served by a predisclosure distribution (gate above).
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under
