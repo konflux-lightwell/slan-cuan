@@ -166,20 +166,34 @@ for TGZ in "${tgz_files[@]}"; do
     DSSE_FILE="$(mktemp)"
 
     echo "Signing attestation with cosign (${SIGN_MODE})"
-    # --output-attestation writes the DSSE envelope. Do not use --output-file:
-    # that is cosign's log-redirect flag and would corrupt the .att with log text
-    # (same class of bug fixed in taisce-cuan with --bundle).
+    # Cosign flag semantics (attest-blob):
+    #   --output-signature     → DSSE envelope {payload, signatures, ...}
+    #   --output-attestation   → bare in-toto Statement (unsigned; not what Quay
+    #                            consumers / cosign verify-blob-attestation want)
+    #   --output-file          → cosign log redirect; corrupts .att with log text
+    # Newer cosign defaults --use-signing-config and then requires --bundle;
+    # disable that when the flag exists so offline/keyfile and KMS+Rekor paths
+    # keep writing classic DSSE via --output-signature.
+    declare -a COSIGN_BUNDLE_ARGS=()
+    if cosign attest-blob --help 2>&1 | grep -q -- '--use-signing-config'; then
+        COSIGN_BUNDLE_ARGS=(--use-signing-config=false)
+    fi
     if cosign attest-blob "${TGZ}" \
         --predicate="${PREDICATE_FILE}" \
         --type="${ATTESTATION_PREDICATE_TYPE}" \
         "${COSIGN_KEY_ARGS[@]}" \
         --yes \
         "${REKOR_ARGS[@]}" \
-        --output-attestation="${DSSE_FILE}"
+        "${COSIGN_BUNDLE_ARGS[@]}" \
+        --output-signature="${DSSE_FILE}"
     then
-        if ! jq -e . "${DSSE_FILE}" >/dev/null 2>&1; then
-            echo "ERROR: cosign wrote non-JSON attestation output for ${TGZ}" \
-                "(expected DSSE via --output-attestation)" >&2
+        if ! jq -e '
+            (.payload | type == "string" and length > 0)
+            and (.signatures | type == "array" and length > 0)
+          ' "${DSSE_FILE}" >/dev/null 2>&1; then
+            echo "ERROR: cosign wrote non-DSSE attestation output for ${TGZ}" \
+                "(expected payload+signatures via --output-signature)" >&2
+            jq -c 'keys' "${DSSE_FILE}" 2>/dev/null >&2 || true
             rm -f "${PREDICATE_FILE}" "${DSSE_FILE}"
             exit 1
         fi

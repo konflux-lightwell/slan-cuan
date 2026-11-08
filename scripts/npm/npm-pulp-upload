@@ -22,6 +22,10 @@
 #                        tl.attestation_oci_digest /
 #                        tl.attestation_predicate_type are set (also on skip).
 #   REQUIRE_ATTESTATIONS If true, fail when prefix is set but .att is missing
+#   ALLOW_CONTENT_REPLACE If true, same name@version with different sha256 is
+#                        replaced (remove from repo → destroy holding versions →
+#                        orphan cleanup with that content href → re-upload).
+#                        Default false (fail on digest mismatch).
 #
 # Credentials: ${SECRET_DIR:-/etc/service-account-secret}/{username,password}
 #
@@ -33,6 +37,7 @@ PULP_API_ROOT="${PULP_API_ROOT:-/api/}"
 PULP_DOMAIN="${PULP_DOMAIN:?PULP_DOMAIN required}"
 PULP_REPOSITORY="${PULP_REPOSITORY:?PULP_REPOSITORY required}"
 PULP_FILE_REPOSITORY="${PULP_FILE_REPOSITORY:-}"
+ALLOW_CONTENT_REPLACE="${ALLOW_CONTENT_REPLACE:-false}"
 SECRET_DIR="${SECRET_DIR:-/etc/service-account-secret}"
 
 # shellcheck source=npm-common.sh
@@ -189,14 +194,12 @@ wait_for_pulp_task() {
   return 1
 }
 
-add_package_to_repository() {
-  local content_href="${1}"
+modify_repository_content() {
+  local body="${1}"
   local repo_href="${PULP_REPOSITORY_HREF}"
-  local modify_json task_href body
+  local modify_json task_href
 
   [[ "${repo_href}" == */ ]] || repo_href="${repo_href}/"
-  body="$(jq -nc --arg href "${content_href}" '{add_content_units: [$href]}')"
-  echo "Adding ${content_href} to ${repo_href}"
   modify_json="$(curl_capture --fail-with-body --silent \
     --retry "${CURL_RETRY}" \
     --max-time "${CURL_MAX_TIME_QUERY_SECONDS}" \
@@ -206,7 +209,7 @@ add_package_to_repository() {
     -d "${body}" \
     "${PULP_BASE_URL}${repo_href}modify/")"
   if pulp_response_has_errors "${modify_json}"; then
-    echo "ERROR: repository modify rejected ${content_href}" >&2
+    echo "ERROR: repository modify rejected payload" >&2
     echo "${modify_json}" >&2
     return 1
   fi
@@ -217,6 +220,127 @@ add_package_to_repository() {
     return 1
   fi
   wait_for_pulp_task "${task_href}"
+}
+
+add_package_to_repository() {
+  local content_href="${1}"
+  local body
+
+  body="$(jq -nc --arg href "${content_href}" '{add_content_units: [$href]}')"
+  echo "Adding ${content_href} to ${PULP_REPOSITORY_HREF}"
+  modify_repository_content "${body}"
+}
+
+remove_package_from_repository() {
+  local content_href="${1}"
+  local body
+
+  body="$(jq -nc --arg href "${content_href}" \
+    '{remove_content_units: [$href]}')"
+  echo "Removing ${content_href} from ${PULP_REPOSITORY_HREF}"
+  modify_repository_content "${body}"
+  refresh_repository_version
+}
+
+# Destroy every repository version in PULP_REPOSITORY that still holds
+# content_href. Required before orphan cleanup: content in any version is
+# not an orphan. Always re-list from offset 0 after deletes.
+destroy_repository_versions_holding() {
+  local content_href="${1}"
+  local repo_href="${PULP_REPOSITORY_HREF}"
+  local versions_json version_href version_number delete_json task_href
+  local page_len guard=0
+
+  [[ "${repo_href}" == */ ]] || repo_href="${repo_href}/"
+  while [[ "${guard}" -lt 100 ]]; do
+    guard=$((guard + 1))
+    versions_json="$(curl_capture --fail-with-body --silent \
+      --retry "${CURL_RETRY}" \
+      --max-time "${CURL_MAX_TIME_QUERY_SECONDS}" \
+      -G \
+      "${AUTH[@]}" \
+      "${PULP_BASE_URL}${repo_href}versions/" \
+      --data-urlencode "content=${content_href}" \
+      --data-urlencode "limit=${LIST_PAGE_SIZE}" \
+      --data-urlencode "offset=0")"
+    if pulp_response_has_errors "${versions_json}"; then
+      echo "ERROR: listing repository versions for ${content_href} failed" >&2
+      echo "${versions_json}" >&2
+      return 1
+    fi
+    page_len="$(jq '(.results // []) | length' <<<"${versions_json}")"
+    if [[ "${page_len}" -eq 0 ]]; then
+      break
+    fi
+    while IFS=$'\t' read -r version_href version_number; do
+      [[ -n "${version_href}" ]] || continue
+      echo "Destroying repository version ${version_number} (${version_href})"
+      delete_json="$(curl_capture --fail-with-body --silent \
+        --retry "${CURL_RETRY}" \
+        --max-time "${CURL_MAX_TIME_QUERY_SECONDS}" \
+        "${AUTH[@]}" \
+        -X DELETE \
+        "${PULP_BASE_URL}${version_href}")"
+      task_href="$(jq -r '.task // empty' <<<"${delete_json}")"
+      if [[ -n "${task_href}" && "${task_href}" != "null" ]]; then
+        wait_for_pulp_task "${task_href}"
+      fi
+    done < <(jq -r '.results[]? | [.pulp_href, (.number|tostring)] | @tsv' \
+      <<<"${versions_json}")
+  done
+  if [[ "${guard}" -ge 100 ]]; then
+    echo "ERROR: too many repository versions still hold ${content_href}" >&2
+    return 1
+  fi
+  refresh_repository_version
+}
+
+# Delete a specific orphan content unit (and its artifact). Always pass
+# content_hrefs so other-language orphans in the same domain are untouched.
+orphan_cleanup_content() {
+  local content_href="${1}"
+  local body cleanup_json task_href
+
+  body="$(jq -nc --arg href "${content_href}" \
+    '{content_hrefs: [$href], orphan_protection_time: 0}')"
+  echo "Orphan-cleaning ${content_href} (protection-time=0)"
+  cleanup_json="$(curl_capture --fail-with-body --silent \
+    --retry "${CURL_RETRY}" \
+    --max-time "${CURL_MAX_TIME_QUERY_SECONDS}" \
+    "${AUTH[@]}" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "${body}" \
+    "${PULP_QUERY_BASE}orphans/cleanup/")"
+  if pulp_response_has_errors "${cleanup_json}"; then
+    echo "ERROR: orphan cleanup rejected ${content_href}" >&2
+    echo "${cleanup_json}" >&2
+    return 1
+  fi
+  task_href="$(jq -r '.task // empty' <<<"${cleanup_json}")"
+  if [[ -z "${task_href}" || "${task_href}" == "null" ]]; then
+    echo "ERROR: orphan cleanup did not return a task href" >&2
+    echo "${cleanup_json}" >&2
+    return 1
+  fi
+  wait_for_pulp_task "${task_href}"
+}
+
+# Remove same-NV content so a new artifact can be uploaded. Relies on
+# EXISTING_CONTENT_HREF from check_package_exists_with_digest.
+replace_existing_package() {
+  local name="${1}"
+  local version="${2}"
+  local content_href="${EXISTING_CONTENT_HREF:-}"
+
+  if [[ -z "${content_href}" ]]; then
+    echo "ERROR: replace requested for ${name}@${version} but no content href" >&2
+    return 1
+  fi
+  echo "ALLOW_CONTENT_REPLACE: replacing ${name}@${version} (${content_href})"
+  remove_package_from_repository "${content_href}"
+  destroy_repository_versions_holding "${content_href}"
+  orphan_cleanup_content "${content_href}"
 }
 
 # Returns:
@@ -323,7 +447,7 @@ check_package_exists_with_digest() {
   if [[ -n "${server_sha}" && "${server_sha}" == "${local_sha}" ]]; then
     return 0
   fi
-  echo "ERROR: ${name}@${version} exists in Pulp with different content" >&2
+  echo "${name}@${version} exists in Pulp with different content" >&2
   echo "  Local sha256:  ${local_sha}" >&2
   echo "  Remote sha256: ${server_sha:-unknown}" >&2
   return 3
@@ -473,7 +597,20 @@ while IFS= read -r -d '' file; do
     skipped_existing+=("${file}")
     upload_compliance_sidecar "${sidecar}" "${name}" "${version}"
     continue
-  elif [[ "${status}" -eq 3 || "${status}" -eq 1 ]]; then
+  elif [[ "${status}" -eq 3 ]]; then
+    if [[ "${ALLOW_CONTENT_REPLACE}" != "true" ]]; then
+      echo "ERROR: ${name}@${version} digest mismatch and" \
+        "ALLOW_CONTENT_REPLACE=${ALLOW_CONTENT_REPLACE}" >&2
+      failed+=("${file}")
+      continue
+    fi
+    if ! replace_existing_package "${name}" "${version}"; then
+      echo "ERROR: failed to replace existing ${name}@${version}" >&2
+      failed+=("${file}")
+      continue
+    fi
+    # Fall through to upload the new bytes.
+  elif [[ "${status}" -eq 1 ]]; then
     failed+=("${file}")
     continue
   elif [[ "${status}" -ne 2 ]]; then
