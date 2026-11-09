@@ -32,9 +32,6 @@ FILE_CONTENT_API_PATH_TEMPLATE: str = (
 FILE_REPO_API_PATH_TEMPLATE: str = (
     "/api/pulp/{domain}/api/v3/repositories/file/file/"
 )
-FILE_PUBLICATION_API_PATH_TEMPLATE: str = (
-    "/api/pulp/{domain}/api/v3/publications/file/file/"
-)
 FILE_DISTRIBUTION_API_PATH_TEMPLATE: str = (
     "/api/pulp/{domain}/api/v3/distributions/file/file/"
 )

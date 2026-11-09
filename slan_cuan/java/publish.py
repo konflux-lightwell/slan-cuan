@@ -844,18 +844,58 @@ def _upload_one(
     return content_unit
 
 
+def _verify_autopublish_distribution(
+    file_client: PulpFileClient,
+    repository_name: str,
+    repository_href: str,
+    purpose: str,
+) -> None:
+    """Fail closed unless the distribution serves this repo with autopublish.
+
+    The metadata file repositories are managed by pulp-config as
+    repository-backed distributions with autopublish enabled: every new
+    repository version is published automatically and the distribution
+    always serves the latest version. A distribution pinned to a
+    publication (its repository link cleared) would stop serving new
+    uploads entirely, so refuse to upload rather than write content that
+    no distribution serves (LWLP-4823).
+    """
+    dist_repository = file_client.get_distribution_repository(repository_name)
+    if dist_repository != repository_href:
+        raise click.ClickException(
+            f"{purpose} distribution '{repository_name}' does not serve "
+            f"repository '{repository_name}'"
+            + (
+                " (it is pinned to a publication)"
+                if dist_repository is None
+                else ""
+            )
+            + ". Re-apply the pulp-config environment to restore the "
+            "repository-backed distribution."
+        )
+    if not file_client.get_repository_autopublish(repository_href):
+        raise click.ClickException(
+            f"{purpose} repository '{repository_name}' does not have "
+            "autopublish enabled. Re-apply the pulp-config environment "
+            "before publishing."
+        )
+
+
 def _resolve_file_repository(
     clients: ExitStack,
     config: PulpConfig,
     repository_name: str,
     purpose: str,
 ) -> tuple[PulpFileClient, str]:
-    """Open a File client and resolve the repository before any upload."""
+    """Open a File client and verify the repository before any upload."""
     try:
         file_client = clients.enter_context(
             PulpFileClient(config, repository_name)
         )
         file_repo_href = file_client.resolve_repository(repository_name)
+        _verify_autopublish_distribution(
+            file_client, repository_name, file_repo_href, purpose
+        )
     except PulpError as e:
         raise click.ClickException(
             f"Unable to verify the required {purpose} publication repository."
@@ -865,12 +905,11 @@ def _resolve_file_repository(
 
 def _publish_file_records(
     file_client: PulpFileClient,
-    repository_name: str,
     repository_href: str,
     files: tuple[Path, ...],
     purpose: str,
 ) -> int:
-    """Upload files and point the File distribution at the new publication."""
+    """Upload files; the repository-backed distribution auto-publishes them."""
     uploaded = 0
     try:
         for file_path in files:
@@ -882,13 +921,9 @@ def _publish_file_records(
                 repository_href=repository_href,
             )
             uploaded += 1
-        if uploaded > 0:
-            pub_href = file_client.create_publication(repository_href)
-            dist_href = file_client.resolve_distribution(repository_name)
-            file_client.update_distribution(dist_href, pub_href)
     except PulpError as e:
         raise click.ClickException(
-            f"Required {purpose} publication did not complete."
+            f"Required {purpose} upload did not complete."
         ) from e
     return uploaded
 
@@ -1075,7 +1110,6 @@ def _upload_to_pulp(
         if file_client and file_repo_href and pulp_file_repository:
             file_uploaded = _publish_file_records(
                 file_client,
-                pulp_file_repository,
                 file_repo_href,
                 uploadable_metadata,
                 "OSV",
@@ -1083,7 +1117,6 @@ def _upload_to_pulp(
         if vex_client and vex_repo_href and pulp_vex_repository:
             vex_uploaded = _publish_file_records(
                 vex_client,
-                pulp_vex_repository,
                 vex_repo_href,
                 uploadable_vex,
                 "VEX",

@@ -11,7 +11,6 @@ from slan_cuan.pulp.clients.base import PulpClientBase
 from slan_cuan.pulp.constants import (
     FILE_CONTENT_API_PATH_TEMPLATE,
     FILE_DISTRIBUTION_API_PATH_TEMPLATE,
-    FILE_PUBLICATION_API_PATH_TEMPLATE,
     FILE_REPO_API_PATH_TEMPLATE,
 )
 from slan_cuan.pulp.exceptions import PulpError
@@ -126,73 +125,15 @@ class PulpFileClient(PulpClientBase):
                 response_body=response.text,
             ) from e
 
-    def create_publication(self, repository_href: str) -> str:
-        """Create a File publication for a repository.
+    def get_distribution_repository(self, name: str) -> str | None:
+        """Return the repository href backing the File distribution named *name*.
 
-        Args:
-            repository_href: The pulp_href of the repository.
-
-        Returns:
-            The pulp_href of the created publication.
+        Returns None when the distribution exists but is pinned to a
+        publication instead of serving a repository.
 
         Raises:
-            PulpError: If the publication fails or domain is not set.
-
-        """
-        if self._config.domain is None:
-            raise PulpError(
-                "Domain is required for publication creation. Set --pulp-domain.",
-                status_code=0,
-                response_body="",
-            )
-
-        url = FILE_PUBLICATION_API_PATH_TEMPLATE.format(
-            domain=self._config.domain
-        )
-        payload = {"repository": repository_href}
-
-        response = self._request(
-            "POST",
-            url,
-            "Publication creation",
-            json=payload,
-        )
-
-        try:
-            response_data = parse_json_dict(response, "Publication", PulpError)
-            task_href = str(response_data["task"])
-            if self._config.verbose:
-                click.echo(f"[{utc_timestamp()}]  Pulp task queued: {task_href}")
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse publication response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-        task_data = self.poll_task(task_href)
-
-        created_resources = task_data.get("created_resources", [])
-        if not isinstance(created_resources, list) or not created_resources:
-            raise PulpError(
-                "Publication task completed but created no resources",
-                status_code=0,
-                response_body="",
-            )
-
-        return str(created_resources[0])
-
-    def resolve_distribution(self, name: str) -> str:
-        """Look up a file distribution by name, return its pulp_href.
-
-        Args:
-            name: The distribution name to look up.
-
-        Returns:
-            The pulp_href of the distribution.
-
-        Raises:
-            PulpError: If the distribution is not found or domain is not set.
+            PulpError: If no distribution has that name, the lookup fails,
+                or the domain is not set.
 
         """
         if self._config.domain is None:
@@ -216,6 +157,8 @@ class PulpFileClient(PulpClientBase):
         try:
             response_data = parse_json_dict(response, "Distribution", PulpError)
             results = response_data.get("results", [])
+            if not isinstance(results, list):
+                raise ValueError("results is not a list")
             if not results:
                 raise PulpError(
                     f"Distribution '{name}' not found. "
@@ -224,10 +167,40 @@ class PulpFileClient(PulpClientBase):
                     response_body=response.text,
                 )
 
-            return str(results[0]["pulp_href"])
-        except (ValueError, KeyError) as e:
+            repository = results[0].get("repository")
+            return str(repository) if repository else None
+        except (ValueError, KeyError, TypeError) as e:
             raise PulpError(
                 f"Failed to parse distribution lookup response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+    def get_repository_autopublish(self, repository_href: str) -> bool:
+        """Return whether the File repository has autopublish enabled.
+
+        Args:
+            repository_href: The pulp_href of the repository.
+
+        Returns:
+            True when autopublish is enabled on the repository.
+
+        Raises:
+            PulpError: If the lookup fails or returns invalid data.
+
+        """
+        response = self._request(
+            "GET",
+            repository_href,
+            "Repository lookup",
+        )
+
+        try:
+            response_data = parse_json_dict(response, "Repository", PulpError)
+            return bool(response_data.get("autopublish", False))
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse repository lookup response: {e}",
                 status_code=response.status_code,
                 response_body=response.text,
             ) from e
@@ -271,41 +244,3 @@ class PulpFileClient(PulpClientBase):
                 status_code=response.status_code,
                 response_body=response.text,
             ) from e
-
-    def update_distribution(
-        self, distribution_href: str, publication_href: str
-    ) -> None:
-        """Update a distribution to serve a new publication.
-
-        Args:
-            distribution_href: The pulp_href of the distribution.
-            publication_href: The pulp_href of the publication to serve.
-
-        Raises:
-            PulpError: If the update fails.
-
-        """
-        payload = {"publication": publication_href, "repository": ""}
-
-        response = self._request(
-            "PATCH",
-            distribution_href,
-            "Distribution update",
-            json=payload,
-        )
-
-        try:
-            response_data = parse_json_dict(
-                response, "Distribution update", PulpError
-            )
-            task_href = str(response_data["task"])
-            if self._config.verbose:
-                click.echo(f"[{utc_timestamp()}]  Pulp task queued: {task_href}")
-        except (ValueError, KeyError) as e:
-            raise PulpError(
-                f"Failed to parse distribution update response: {e}",
-                status_code=response.status_code,
-                response_body=response.text,
-            ) from e
-
-        self.poll_task(task_href)
