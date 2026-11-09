@@ -42,9 +42,6 @@ _FILE_CONTENT_UNIT = FileContentUnit(
     sha256="deadbeef" * 8,
 )
 
-_FILE_PUB_HREF = "/api/v3/publications/file/file/pub-abc/"
-_FILE_DIST_HREF = "/api/v3/distributions/file/file/dist-abc/"
-
 _FILE_REPO_HREF = "/api/v3/repositories/file/file/abc/"
 _PREDISCLOSURE_DISTRIBUTION = MavenDistribution(
     pulp_href="/api/v3/distributions/maven/maven/predisclosure/",
@@ -2378,9 +2375,8 @@ def test_publish_require_supply_chain_metadata_passes_with_sbom(
     mock_file_client.upload_content.return_value = _FILE_CONTENT_UNIT
     mock_file_client.resolve_repository.return_value = _FILE_REPO_HREF
     mock_file_client.modify_repository.return_value = _FILE_MODIFY_RESULT
-    mock_file_client.create_publication.return_value = _FILE_PUB_HREF
-    mock_file_client.resolve_distribution.return_value = _FILE_DIST_HREF
-    mock_file_client.update_distribution.return_value = None
+    mock_file_client.get_distribution_repository.return_value = _FILE_REPO_HREF
+    mock_file_client.get_repository_autopublish.return_value = True
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2479,9 +2475,8 @@ def test_publish_uploads_security_metadata_to_file_repo(
     mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
     mock_file.resolve_repository.return_value = _FILE_REPO_HREF
     mock_file.modify_repository.return_value = _FILE_MODIFY_RESULT
-    mock_file.create_publication.return_value = _FILE_PUB_HREF
-    mock_file.resolve_distribution.return_value = _FILE_DIST_HREF
-    mock_file.update_distribution.return_value = None
+    mock_file.get_distribution_repository.return_value = _FILE_REPO_HREF
+    mock_file.get_repository_autopublish.return_value = True
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2513,11 +2508,213 @@ def test_publish_uploads_security_metadata_to_file_repo(
     assert "gav-index.osv.json" in str(call_kwargs)
     assert call_kwargs.kwargs.get("repository_href") == _FILE_REPO_HREF
     mock_file.modify_repository.assert_not_called()
-    mock_file.create_publication.assert_called_once_with(_FILE_REPO_HREF)
-    mock_file.resolve_distribution.assert_called_once_with("test-file-repo")
-    mock_file.update_distribution.assert_called_once_with(
-        _FILE_DIST_HREF, _FILE_PUB_HREF
+    mock_file.get_distribution_repository.assert_called_once_with(
+        "test-file-repo"
     )
+    mock_file.get_repository_autopublish.assert_called_once_with(_FILE_REPO_HREF)
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_fails_closed_when_file_distribution_is_pinned(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """A publication-pinned distribution fails the publish before any upload."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+    mock_file.get_distribution_repository.return_value = None
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "test-file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "does not serve repository" in result.output
+    assert "pinned to a publication" in result.output
+    assert mock_file.upload_content.call_count == 0
+    mock_maven.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_fails_closed_when_file_distribution_serves_other_repository(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """A distribution backed by a different repository fails the publish."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+    mock_file.get_distribution_repository.return_value = (
+        "/api/v3/repositories/file/file/other/"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "test-file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "does not serve repository" in result.output
+    assert mock_file.upload_content.call_count == 0
+    mock_maven.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_fails_closed_when_file_repository_not_autopublish(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """A repository without autopublish fails the publish before any upload."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+    mock_file.get_repository_autopublish.return_value = False
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "test-file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "does not have autopublish enabled" in result.output
+    assert mock_file.upload_content.call_count == 0
+    mock_maven.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_wraps_distribution_lookup_error(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """A PulpError from the distribution lookup is wrapped, not leaked."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_file = _make_ctx_mock()
+    mock_file_cls.return_value = mock_file
+    _setup_file_client(mock_file)
+    mock_file.get_distribution_repository.side_effect = PulpError(
+        message="Distribution 'test-file-repo' not found",
+        status_code=404,
+        response_body="",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "test-file-repo",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert (
+        "Unable to verify the required OSV publication repository"
+        in result.output
+    )
+    assert "Distribution 'test-file-repo' not found" not in result.output
+    assert mock_file.upload_content.call_count == 0
+    mock_maven.upload_content.assert_not_called()
 
 
 def _add_vex_document(artifact_dir: Path, vuln_id: str = "CVE-2026-1234") -> Path:
@@ -2559,6 +2756,8 @@ def test_publish_uploads_vex_to_separate_repository(
     _setup_file_client(mock_vex)
     mock_osv.resolve_repository.return_value = "/osv-repo/"
     mock_vex.resolve_repository.return_value = "/vex-repo/"
+    mock_osv.get_distribution_repository.return_value = "/osv-repo/"
+    mock_vex.get_distribution_repository.return_value = "/vex-repo/"
     mock_file_cls.side_effect = [mock_osv, mock_vex]
 
     result = CliRunner().invoke(
@@ -2601,8 +2800,14 @@ def test_publish_uploads_vex_to_separate_repository(
     )
     mock_osv.resolve_repository.assert_called_once_with("osv/java/remediated")
     mock_vex.resolve_repository.assert_called_once_with("vex-java-backport")
-    mock_osv.create_publication.assert_called_once_with("/osv-repo/")
-    mock_vex.create_publication.assert_called_once_with("/vex-repo/")
+    mock_osv.get_distribution_repository.assert_called_once_with(
+        "osv/java/remediated"
+    )
+    mock_vex.get_distribution_repository.assert_called_once_with(
+        "vex-java-backport"
+    )
+    mock_osv.get_repository_autopublish.assert_called_once_with("/osv-repo/")
+    mock_vex.get_repository_autopublish.assert_called_once_with("/vex-repo/")
     assert mock_file_cls.call_args_list[0].args[1] == "osv/java/remediated"
     assert mock_file_cls.call_args_list[1].args[1] == "vex-java-backport"
 
@@ -3885,13 +4090,12 @@ _FILE_DISTRIBUTIONS = {
 
 
 def _setup_file_client(mock_file: Mock) -> None:
-    """Configure mock file client with upload/publication/distribution."""
+    """Configure mock file client with upload/autopublish verification."""
     mock_file.upload_content.return_value = _FILE_CONTENT_UNIT
     mock_file.resolve_repository.return_value = _FILE_REPO_HREF
     mock_file.modify_repository.return_value = _FILE_MODIFY_RESULT
-    mock_file.create_publication.return_value = _FILE_PUB_HREF
-    mock_file.resolve_distribution.return_value = _FILE_DIST_HREF
-    mock_file.update_distribution.return_value = None
+    mock_file.get_distribution_repository.return_value = _FILE_REPO_HREF
+    mock_file.get_repository_autopublish.return_value = True
     mock_file.get_distribution_base_path.side_effect = _FILE_DISTRIBUTIONS.get
 
 
@@ -4084,10 +4288,10 @@ def test_publish_unrecognized_repo_uploads_all(
 
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
-def test_publish_all_records_skipped_no_publication(
+def test_publish_all_records_skipped_no_upload(
     mock_maven_cls: Mock, mock_file_cls: Mock, tmp_path: Path
 ) -> None:
-    """When every record is filtered out, no publication/distribution runs."""
+    """When every record is filtered out, nothing is uploaded."""
     artifact_dir = create_test_artifact_dir(
         tmp_path,
         include_security_metadata=True,
@@ -4105,8 +4309,6 @@ def test_publish_all_records_skipped_no_publication(
 
     assert result.exit_code == 0, result.output
     assert mock_file.upload_content.call_count == 0
-    mock_file.create_publication.assert_not_called()
-    mock_file.update_distribution.assert_not_called()
 
 
 @patch("slan_cuan.java.publish.PulpFileClient")

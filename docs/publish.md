@@ -142,8 +142,8 @@ Generated OSV/VEX records are published to two destinations:
   (`osv-java-backport`/`osv-java-novel`); see the routing note in
   `slan_cuan/java/publish.py`.
 - **Pulp VEX repository** (`--pulp-vex-repository`) — required when generated
-  VEX documents are present. VEX uses the same upload, publication, and
-  backport/novel routing as OSV, against the VEX repository name. A
+  VEX documents are present. VEX uses the same upload and backport/novel
+  routing as OSV, against the VEX repository name. A
   CycloneDX file is VEX when `vulnerabilities` is a non-empty list and
   `components` is absent. Before any upload the run fails when the VEX
   repository:
@@ -160,6 +160,15 @@ Generated OSV/VEX records are published to two destinations:
   `--github-osv-path` as a single commit. This runs **in addition to** the
   Pulp upload; leaving `--github-osv-repo` unset disables it and preserves
   Pulp-only behavior.
+
+Pulp File publication is upload-only. Each file lands in the File repository
+as a new repository version, and the repository-backed distributions managed
+by pulp-config auto-publish every version, so the distribution always serves
+the latest content. `publish` does not create a File publication or repoint a
+distribution; before uploading anything it fails closed unless the
+distribution named like the repository serves that repository and the
+repository has autopublish enabled (LWLP-4823). A drifted distribution is
+repaired by re-applying the pulp-config environment, not by this command.
 
 The GitHub repository is a public feed ingested by osv.dev, so its record set
 is selected independently of the Pulp routing and fails closed:
