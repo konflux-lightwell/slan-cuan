@@ -120,95 +120,16 @@ spec:
           value: $(params.orasOptions)
         - name: caCertPath
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
-    - name: inject-enriched-sboms
-      image: quay.io/konflux-ci/konflux-test:latest
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-
-        ENRICHED_DIR="${ENRICHED_DIR:-/var/workdir/security-metadata/enriched-sboms}"
-        ZIP="${ZIP:-/var/workdir/extracted/build-output.zip}"
-        WORK="$(mktemp -d /tmp/inject-sboms.XXXXXX)"
-        trap 'rm -rf "$WORK"' EXIT
-
-        # Only GAV-shaped SBOMs are injected:
-        #   <group path>/<artifactId>/<version>/<artifactId>-<version>.bom.json
-        # CycloneDX VEX documents share the .bom.json suffix but are named
-        # CVE-<id>-<datetime>.bom.json / <datetime>.bom.json and must never
-        # be injected as SBOMs.
-        list_sboms() {
-          [ -d "$ENRICHED_DIR" ] || return 0
-          find "$ENRICHED_DIR" -mindepth 4 -type f -name '*.bom.json' |
-            while IFS= read -r f; do
-              version_dir="$(dirname "$f")"
-              version="$(basename "$version_dir")"
-              artifact="$(basename "$(dirname "$version_dir")")"
-              if [ "$(basename "$f")" = "${artifact}-${version}.bom.json" ]; then
-                printf '%s\n' "$f"
-              else
-                echo "  Skipping non-SBOM $(basename "$f")" >&2
-              fi
-            done
-        }
-
-        sbom_list="$(list_sboms)"
-        if [ -z "$sbom_list" ]; then
-          echo "No enriched SBOMs to inject; passing through original artifact"
-          exit 0
-        fi
-
-        # The zip is never expanded: list its entries, stage only the
-        # replacement SBOMs under their exact entry names, and update those
-        # entries in place. zip copies every other entry unchanged.
-        unzip -Z1 "$ZIP" > "$WORK/entries"
-        mkdir "$WORK/stage"
-        : > "$WORK/replace"
-
-        while IFS= read -r enriched; do
-          rel="${enriched#"$ENRICHED_DIR"/}"
-          if [[ "$rel" == *".."* ]]; then
-            echo "ERROR: path traversal in enriched SBOM path: $rel" >&2
-            exit 1
-          fi
-
-          # The PNC SBOM entry for this GAV, whatever prefix the zip uses
-          # (e.g. build-output/repository/<rel>).
-          awk -v rel="$rel" \
-            '$0 == rel || (length($0) > length(rel) &&
-              substr($0, length($0) - length(rel)) == "/" rel)' \
-            "$WORK/entries" > "$WORK/match"
-          matches=$(wc -l < "$WORK/match")
-          if [ "$matches" -eq 0 ]; then
-            echo "WARNING: no $rel entry in build-output.zip; not injected" >&2
-            continue
-          fi
-          if [ "$matches" -gt 1 ]; then
-            echo "ERROR: $rel matches $matches zip entries:" >&2
-            cat "$WORK/match" >&2
-            exit 1
-          fi
-          entry="$(cat "$WORK/match")"
-          if [[ "$entry" == /* || "$entry" == *".."* ]]; then
-            echo "ERROR: unsafe zip entry name: $entry" >&2
-            exit 1
-          fi
-
-          mkdir -p "$WORK/stage/$(dirname "$entry")"
-          cp "$enriched" "$WORK/stage/$entry"
-          printf '%s\n' "$entry" >> "$WORK/replace"
-          echo "  Replacing $entry"
-        done <<< "$sbom_list"
-
-        count=$(wc -l < "$WORK/replace")
-        if [ "$count" -eq 0 ]; then
-          echo "No matching SBOM entries; passing through original artifact"
-          exit 0
-        fi
-
-        # -nw: names are literal (no wildcards); -X: no extra attributes.
-        (cd "$WORK/stage" && zip -q -nw -X "$ZIP" -@ < "$WORK/replace")
-
-        echo "Injected $count enriched SBOM(s) into build-output.zip"
+    - name: run
+      image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
+      args:
+        - inject-sboms
+      env:
+        - name: SLAN_CUAN_INJECT_SBOMS_ZIP_PATH
+          value: /var/workdir/extracted/build-output.zip
+        - name: SLAN_CUAN_INJECT_SBOMS_ENRICHED_DIR
+          value: /var/workdir/security-metadata/enriched-sboms
     - name: create-trusted-artifact
       ref:
         resolver: git

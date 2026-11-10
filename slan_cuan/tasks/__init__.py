@@ -5,7 +5,7 @@ Ecosystem-specific commands live in their ecosystem packages
 ecosystem-agnostic commands.
 """
 
-from slan_cuan.java import extract, publish, sign
+from slan_cuan.java import extract, inject_sboms, publish, sign
 from slan_cuan.tasks.generate_security_metadata import (
     generate_security_metadata,
     generate_security_metadata_from_snapshot,
@@ -16,6 +16,7 @@ __all__ = [
     "extract",
     "generate_security_metadata",
     "generate_security_metadata_from_snapshot",
+    "inject_sboms",
     "publish",
     "register",
     "sign",
