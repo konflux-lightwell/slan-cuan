@@ -11,6 +11,7 @@ from slan_cuan.models import (
     EXTRACT_ATTACHMENTS_DIRNAME,
     EXTRACT_METADATA_DIRNAME,
     EXTRACT_RESULT_FILENAME,
+    EXTRACT_UPSTREAM_SBOMS_DIRNAME,
 )
 from tests.integrity._yaml_helpers import get_run_step, load_task_yaml
 
@@ -70,6 +71,15 @@ def test_extract_prepare_source_data_paths_match_code_constants() -> None:
         f"prepare-source-data no longer references "
         f"{expected_attachments_path!r} -- if "
         f"slan_cuan.models.EXTRACT_ATTACHMENTS_DIRNAME or extract.py's "
+        f"output directory changed, update this Task's prepare-source-data "
+        f"script to match"
+    )
+
+    expected_sboms_path = f"{output_dir}/{EXTRACT_UPSTREAM_SBOMS_DIRNAME}"
+    assert expected_sboms_path in script, (
+        f"prepare-source-data no longer references "
+        f"{expected_sboms_path!r} -- if "
+        f"slan_cuan.models.EXTRACT_UPSTREAM_SBOMS_DIRNAME or extract.py's "
         f"output directory changed, update this Task's prepare-source-data "
         f"script to match"
     )

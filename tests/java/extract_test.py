@@ -1136,3 +1136,178 @@ def test_extract_zip_slip_prevention(
 
     assert result.exit_code != 0
     assert "Zip-slip path traversal attempt detected" in result.output
+
+
+# --- LWLP-4822: capture PNC per-artifact SBOMs from the deliverable ---------
+
+_ZK_GAV = "org/apache/zookeeper/zookeeper/3.8.3.rhlw-00015"
+_ZK_SBOM_REL = f"{_ZK_GAV}/zookeeper-3.8.3.rhlw-00015.bom.json"
+
+
+def _pnc_sbom(group: str, name: str, version: str) -> bytes:
+    return json.dumps(
+        {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "components": [
+                {
+                    "bom-ref": f"pkg:maven/{group}/{name}@{version}?type=jar",
+                    "group": group,
+                    "name": name,
+                    "version": version,
+                }
+            ],
+        }
+    ).encode()
+
+
+def _zookeeper_zip(path: Path, prefix: str = "build-output/repository/") -> None:
+    """Write a deliverable zip modelled on the zookeeper release file set."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"{prefix}{_ZK_SBOM_REL}",
+            _pnc_sbom("org.apache.zookeeper", "zookeeper", "3.8.3.rhlw-00015"),
+        )
+        zf.writestr(f"{prefix}{_ZK_GAV}/zookeeper-3.8.3.rhlw-00015.jar", "jar")
+        # cyclonedx-maven-plugin classifier SBOMs: not PNC SBOMs, never captured.
+        zf.writestr(
+            f"{prefix}{_ZK_GAV}/zookeeper-3.8.3.rhlw-00015-cyclonedx.json", "{}"
+        )
+        jute = "org/apache/zookeeper/zookeeper-jute/3.8.3.rhlw-00015"
+        zf.writestr(
+            f"{prefix}{jute}/zookeeper-jute-3.8.3.rhlw-00015.bom.json",
+            _pnc_sbom(
+                "org.apache.zookeeper", "zookeeper-jute", "3.8.3.rhlw-00015"
+            ),
+        )
+        # A VEX-like .bom.json that is not GAV-shaped is ignored.
+        zf.writestr(f"{prefix}CVE-2026-0001-2026-11-10T00:00:00Z.bom.json", "{}")
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["", "build-output/repository/", "x-maven-repository/maven-repository/"],
+)
+def test_capture_upstream_sboms_from_zip_any_layout(
+    tmp_path: Path, prefix: str
+) -> None:
+    """PNC SBOMs are found by GAV suffix, whatever the zip prefix."""
+    from slan_cuan.java.extract import capture_upstream_sboms
+
+    deliverable = tmp_path / "build-output.zip"
+    _zookeeper_zip(deliverable, prefix)
+    dest = tmp_path / "upstream-sboms"
+
+    assert capture_upstream_sboms(deliverable, dest) == 2
+    captured = sorted(
+        p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file()
+    )
+    assert captured == sorted(
+        [
+            _ZK_SBOM_REL,
+            "org/apache/zookeeper/zookeeper-jute/3.8.3.rhlw-00015/"
+            "zookeeper-jute-3.8.3.rhlw-00015.bom.json",
+        ]
+    )
+    with zipfile.ZipFile(deliverable) as zf:
+        assert (dest / _ZK_SBOM_REL).read_bytes() == zf.read(
+            f"{prefix}{_ZK_SBOM_REL}"
+        )
+
+
+def test_capture_upstream_sboms_from_directory(tmp_path: Path) -> None:
+    """A directory deliverable is captured the same way."""
+    from slan_cuan.java.extract import capture_upstream_sboms
+
+    deliverable = tmp_path / "deliverable"
+    sbom = deliverable / "repository" / _ZK_SBOM_REL
+    sbom.parent.mkdir(parents=True)
+    sbom.write_bytes(
+        _pnc_sbom("org.apache.zookeeper", "zookeeper", "3.8.3.rhlw-00015")
+    )
+    dest = tmp_path / "upstream-sboms"
+
+    assert capture_upstream_sboms(deliverable, dest) == 1
+    assert (dest / _ZK_SBOM_REL).read_bytes() == sbom.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"not json",
+        json.dumps({"components": []}).encode(),
+        # Subject does not match the path (wrong group/name/version).
+        _pnc_sbom("org.apache.other", "zookeeper", "3.8.3.rhlw-00015"),
+        _pnc_sbom("org.apache.zookeeper", "zookeeper", "3.8.3"),
+        _pnc_sbom("org.apache..zookeeper", "zookeeper", "3.8.3.rhlw-00015"),
+    ],
+)
+def test_capture_upstream_sboms_skips_non_matching(
+    tmp_path: Path, content: bytes
+) -> None:
+    """Broken or mismatched SBOMs are skipped with a warning."""
+    from slan_cuan.java.extract import capture_upstream_sboms
+
+    deliverable = tmp_path / "build-output.zip"
+    with zipfile.ZipFile(deliverable, "w") as zf:
+        zf.writestr(f"repository/{_ZK_SBOM_REL}", content)
+    dest = tmp_path / "upstream-sboms"
+
+    assert capture_upstream_sboms(deliverable, dest) == 0
+    assert not dest.exists()
+
+
+def test_capture_upstream_sboms_refuses_ambiguous_entries(tmp_path: Path) -> None:
+    """Two entries for one GAV fail: inject could not pick one."""
+    import click
+
+    from slan_cuan.java.extract import capture_upstream_sboms
+
+    deliverable = tmp_path / "build-output.zip"
+    content = _pnc_sbom("org.apache.zookeeper", "zookeeper", "3.8.3.rhlw-00015")
+    with zipfile.ZipFile(deliverable, "w") as zf:
+        zf.writestr(f"a/repository/{_ZK_SBOM_REL}", content)
+        zf.writestr(f"b/repository/{_ZK_SBOM_REL}", content)
+
+    with pytest.raises(click.ClickException, match="Ambiguous SBOM"):
+        capture_upstream_sboms(deliverable, tmp_path / "upstream-sboms")
+
+
+@patch("slan_cuan.java.extract.manifest_fetch")
+@patch("slan_cuan.java.extract.pull")
+def test_extract_zip_deliverable_captures_upstream_sboms(
+    mock_pull: Mock,
+    mock_manifest_fetch: Mock,
+    tmp_path: Path,
+) -> None:
+    """Extract writes upstream-sboms/<GAV>/ and still keeps the zip packed."""
+    output_dir = tmp_path / "output"
+    mock_manifest_fetch.return_value = {
+        "layers": [
+            {
+                "digest": "sha256:zipdigest",
+                "mediaType": "application/zip",
+                "size": 5000,
+            }
+        ],
+        "annotations": {"org.opencontainers.image.title": "build-output.zip"},
+    }
+    mock_pull.side_effect = lambda img, out_dir, **kw: _zookeeper_zip(
+        out_dir / "build-output.zip"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "extract",
+            "--image",
+            "quay.io/light-castle/tmp-pnc@sha256:abc123",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (output_dir / "upstream-sboms" / _ZK_SBOM_REL).is_file()
+    assert not (output_dir / "build-output").exists()
+    assert "Captured 2 upstream SBOM(s)" in result.output
