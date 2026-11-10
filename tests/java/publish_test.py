@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -86,6 +87,11 @@ def _setup_client_mock(mock_client: Mock) -> None:
     mock_client.list_distributions.return_value = (_PREDISCLOSURE_DISTRIBUTION,)
 
 
+def _rhlw_id(vuln_id: str) -> str:
+    """Return a stable per-release advisory ID (RHLW-YYYY-<16 hex>) for a test."""
+    return f"RHLW-2026-{hashlib.sha256(vuln_id.encode()).hexdigest()[:16]}"
+
+
 def create_test_artifact_dir(
     base_dir: Path,
     *,
@@ -121,15 +127,17 @@ def create_test_artifact_dir(
         sec_dir = deliverable_dir / "security_metadata"
         sec_dir.mkdir(parents=True, exist_ok=True)
         if osv_records is not None:
-            # (cve_id, source) -> one OSV file per record, matching gav-index.
+            # (cve_id, source) -> one RHLW- advisory record per entry,
+            # matching gav-index. Legacy x_RHLW- records are never published
+            # (LWLP-5093), so fixtures don't use them.
             aliases = []
             for cve_id, source in osv_records:
-                osv_id = f"x_RHLW-{cve_id}-1.0.0"
+                osv_id = _rhlw_id(cve_id)
                 (sec_dir / f"{osv_id}.json").write_text(
                     json.dumps(
                         {
                             "id": osv_id,
-                            "aliases": [cve_id],
+                            "upstream": [cve_id],
                             "affected": [{"package": {"name": "example"}}],
                             "database_specific": {
                                 "lightwell": {"source": source}
@@ -2924,8 +2932,8 @@ def test_publish_embargoed_build_uploads_all_vex_to_predisclosure_repo(
         for call in mock_osv.upload_content.call_args_list
     }
     assert osv_uploaded == {
-        "x_RHLW-LW-2026-0087-1.0.0.json",
-        "x_RHLW-CVE-2025-48924-1.0.0.json",
+        f"{_rhlw_id('LW-2026-0087')}.json",
+        f"{_rhlw_id('CVE-2025-48924')}.json",
     }
     assert "skipping" not in result.output
     assert "VEX metadata: 2 file(s) uploaded" in result.output
@@ -4447,7 +4455,11 @@ def test_classify_source_per_cve_record(tmp_path: Path) -> None:
 
 
 def test_mixed_old_new_records(tmp_path: Path) -> None:
-    """Old and new format records coexist in security metadata dir."""
+    """Validation accepts a legacy record beside the advisory.
+
+    publish then drops the legacy record (LWLP-5093); see
+    test_publish_never_uploads_legacy_x_rhlw_records.
+    """
     from slan_cuan.java.publish import _validate_security_metadata
 
     sec_dir = tmp_path / "sec"
@@ -4480,15 +4492,12 @@ def test_coverage_rejects_substring_match(tmp_path: Path) -> None:
 
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
-    rec = {
-        "id": "x_RHLW-CVE-2024-25710-1.0.0",
-        "aliases": ["CVE-2024-25710"],
-        "affected": [{"package": {"name": "example"}}],
-        "database_specific": {"lightwell": {"source": "pnc-build"}},
-    }
-    (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json").write_text(json.dumps(rec))
+    rec = _new_format_record(
+        advisory_id="RHLW-2026-aaaaaaaaaaaaaaaa", upstream=["CVE-2024-25710"]
+    )
+    (sec_dir / "RHLW-2026-aaaaaaaaaaaaaaaa.json").write_text(json.dumps(rec))
 
-    files = (sec_dir / "x_RHLW-CVE-2024-25710-1.0.0.json",)
+    files = (sec_dir / "RHLW-2026-aaaaaaaaaaaaaaaa.json",)
     with pytest.raises(ValueError, match="does not cover all"):
         _validate_security_metadata(files, ("CVE-2024-2571",))
 
@@ -4500,7 +4509,7 @@ def test_empty_aliases_and_upstream_rejected(tmp_path: Path) -> None:
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
     rec = {
-        "id": "x_RHLW-CVE-2024-99999-1.0.0",
+        "id": "RHLW-2026-cccccccccccccccc",
         "aliases": [],
         "upstream": [],
         "affected": [{"package": {"name": "example"}}],
@@ -4520,7 +4529,7 @@ def test_null_aliases_and_upstream_handled(tmp_path: Path) -> None:
     sec_dir = tmp_path / "sec"
     sec_dir.mkdir()
     rec = {
-        "id": "x_RHLW-CVE-2024-25710-1.0.0",
+        "id": "RHLW-2026-dddddddddddddddd",
         "aliases": None,
         "upstream": None,
         "affected": [{"package": {"name": "example"}}],
@@ -4614,7 +4623,7 @@ def test_publish_pushes_only_backport_osv_records_to_github(
     assert mock_gh_cls.call_args.args == (_GITHUB_OSV_REPO, "ghp_secret")
     assert mock_gh_cls.call_args.kwargs["path"] == "advisories"
     pushed_files, commit_message = mock_gh.publish.call_args.args
-    assert [p.name for p in pushed_files] == ["x_RHLW-CVE-2026-1111-1.0.0.json"]
+    assert [p.name for p in pushed_files] == [f"{_rhlw_id('CVE-2026-1111')}.json"]
     assert commit_message == (
         "Publish 1 OSV record(s) from quay.io/test/image@sha256:abc123"
     )
@@ -4652,8 +4661,10 @@ def test_publish_github_excludes_novel_records(
 
     assert result.exit_code == 0, result.output
     pushed_files = mock_gh.publish.call_args.args[0]
-    assert [p.name for p in pushed_files] == ["x_RHLW-CVE-2026-2222-1.0.0.json"]
-    assert "GitHub OSV: skipping x_RHLW-CVE-2026-3333-1.0.0.json" in result.output
+    assert [p.name for p in pushed_files] == [f"{_rhlw_id('CVE-2026-2222')}.json"]
+    assert (
+        f"GitHub OSV: skipping {_rhlw_id('CVE-2026-3333')}.json" in result.output
+    )
 
 
 @pytest.mark.parametrize("file_repo", ["test-file-repo", "osv-java-novel"])
@@ -4946,12 +4957,10 @@ def test_enriched_sboms_filtered_from_security_metadata(
 
     # Write a pedigree sidecar and a regular OSV record
     _create_pedigree_sidecar(sec_dir)
-    osv = {
-        "id": "x_RHLW-CVE-2024-1234-1.0.0",
-        "affected": [{"package": {"name": "lib"}}],
-        "aliases": ["CVE-2024-1234"],
-    }
-    (sec_dir / "x_RHLW-CVE-2024-1234-1.0.0.json").write_text(json.dumps(osv))
+    osv = _new_format_record(
+        advisory_id="RHLW-2026-eeeeeeeeeeeeeeee", upstream=["CVE-2024-1234"]
+    )
+    (sec_dir / "RHLW-2026-eeeeeeeeeeeeeeee.json").write_text(json.dumps(osv))
 
     # Simulate the filtering logic from publish
     all_files = tuple(f for f in sec_dir.rglob("*") if f.is_file())
@@ -4965,7 +4974,7 @@ def test_enriched_sboms_filtered_from_security_metadata(
 
     assert len(all_files) == 3  # enriched SBOM + sidecar + OSV
     assert len(filtered) == 1
-    assert filtered[0].name == "x_RHLW-CVE-2024-1234-1.0.0.json"
+    assert filtered[0].name == "RHLW-2026-eeeeeeeeeeeeeeee.json"
 
 
 @patch("slan_cuan.java.publish.GitHubOsvClient")
@@ -5204,4 +5213,135 @@ def test_publish_lw_content_without_lw_in_gav_index_is_embargoed(
     )
     mock_maven_cls.return_value.upload_content.assert_not_called()
     mock_file_cls.return_value.upload_content.assert_not_called()
+    mock_gh_cls.assert_not_called()
+
+
+# --- LWLP-5093: legacy per-CVE x_RHLW- records are never published ---------
+
+
+def _add_legacy_osv_record(artifact_dir: Path, vuln_id: str) -> Path:
+    """Add a legacy per-CVE x_RHLW- record next to the advisory."""
+    osv_id = f"x_RHLW-{vuln_id}-1.0.0"
+    path = (
+        artifact_dir
+        / "TEST-build-output"
+        / "security_metadata"
+        / f"{osv_id}.json"
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "id": osv_id,
+                "aliases": [vuln_id],
+                "affected": [
+                    {
+                        "package": {"name": "example"},
+                        "database_specific": {
+                            "lightwell": {"source": "pnc-build"}
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    return path
+
+
+def test_is_legacy_osv_record_uses_id_then_file_name(tmp_path: Path) -> None:
+    """The record id decides; the file name is only a fallback."""
+    from slan_cuan.java.publish import _is_legacy_osv_record
+
+    legacy = tmp_path / "x_RHLW-CVE-2026-1-1.0.0.json"
+    advisory = tmp_path / "RHLW-2026-aaaaaaaaaaaaaaaa.json"
+    assert _is_legacy_osv_record(legacy, {"id": "x_RHLW-CVE-2026-1-1.0.0"})
+    assert _is_legacy_osv_record(legacy, None)
+    assert not _is_legacy_osv_record(
+        advisory, {"id": "RHLW-2026-aaaaaaaaaaaaaaaa"}
+    )
+    assert _is_legacy_osv_record(advisory, {"id": "x_RHLW-CVE-2026-1-1.0.0"})
+
+
+@patch("slan_cuan.java.publish.GitHubOsvClient")
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_never_uploads_legacy_x_rhlw_records(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    mock_gh_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Only the RHLW- advisory reaches Pulp and GitHub; x_RHLW- is skipped."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[("CVE-2026-1111", "pnc-build")],
+    )
+    legacy = _add_legacy_osv_record(artifact_dir, "CVE-2026-1111")
+    mock_file = _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+    mock_gh = Mock()
+    mock_gh.publish.return_value = "abc123"
+    mock_gh_cls.return_value = mock_gh
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--tekton-results-dir",
+            str(results_dir),
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv-java-backport",
+            *_GITHUB_ENABLED_ARGS,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    advisory = f"{_rhlw_id('CVE-2026-1111')}.json"
+    uploaded = [
+        call.kwargs["relative_path"]
+        for call in mock_file.upload_content.call_args_list
+    ]
+    assert uploaded == [advisory]
+    pushed_files = mock_gh.publish.call_args.args[0]
+    assert [p.name for p in pushed_files] == [advisory]
+    assert f"Skipping legacy per-CVE OSV record {legacy.name}" in result.output
+    assert (results_dir / "SECURITY_METADATA_SKIPPED").read_text().strip() == "1"
+
+
+@patch("slan_cuan.java.publish.GitHubOsvClient")
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_lw_id_in_legacy_record_still_embargoes_the_build(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    mock_gh_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """Dropped legacy records still count for the LW- gate (fail closed)."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path,
+        include_security_metadata=True,
+        osv_records=[("CVE-2026-1111", "pnc-build")],
+    )
+    _add_legacy_osv_record(artifact_dir, "LW-2026-0001")
+    _setup_pulp_mocks(mock_maven_cls, mock_file_cls)
+
+    result = _run_publish_with_github(
+        artifact_dir, "osv-java-backport", *_GITHUB_ENABLED_ARGS
+    )
+
+    assert "treating the build as embargoed" in result.output
     mock_gh_cls.assert_not_called()
