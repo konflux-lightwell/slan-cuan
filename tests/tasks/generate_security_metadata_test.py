@@ -1816,3 +1816,268 @@ def test_vex_receives_same_timestamp_as_filename(
     index_arg, _, _, _, ts_arg = mock_vex.call_args.args
     assert ts_arg == "2026-10-30T20:34:12Z"
     assert index_arg["created"] == ts_arg
+
+
+# ---------------------------------------------------------------------------
+# Legacy gav-index -> VEX (primary module only, metadata.component from SBOM)
+# ---------------------------------------------------------------------------
+
+# A real production PNC gav-index (legacy format: primaryGav/gavs, no
+# purls/ecosystem). Only the primary module carries the fix; the published
+# OSV advisory has a single affected entry for it.
+_ZOOKEEPER_GAV_INDEX = {
+    "buildConfig": {
+        "buildType": "MVN",
+        "id": "37361",
+        "name": (
+            "org.apache.zookeeper-parent-3.8.3-rhlw-secure-patch-81706a4dedd6"
+        ),
+    },
+    "buildId": "BSL5OB2UQPQAA",
+    "created": "2026-11-09T00:50:22+00:00",
+    "gavCount": 5,
+    "gavIndexTag": "idx-BSL5OB2UQPQAA",
+    "gavs": [
+        "org.apache.zookeeper:zookeeper:3.8.3.rhlw-00015",
+        "org.apache.zookeeper:parent:3.8.3.rhlw-00015",
+        "org.apache.zookeeper:zookeeper-jute:3.8.3.rhlw-00015",
+        "org.apache.zookeeper:zookeeper-metrics-providers:3.8.3.rhlw-00015",
+        "org.apache.zookeeper:zookeeper-prometheus-metrics:3.8.3.rhlw-00015",
+    ],
+    "primaryArtifact": {
+        "artifactId": "zookeeper",
+        "groupId": "org.apache.zookeeper",
+        "version": "3.8.3.rhlw-00015",
+    },
+    "primaryGav": "org.apache.zookeeper:zookeeper:3.8.3.rhlw-00015",
+    "vulns": [
+        "CVE-2024-23944",
+        "CVE-2026-24308",
+        "CVE-2026-59739",
+        "CVE-2026-59969",
+        "CVE-2026-79993",
+        "CVE-2026-84439",
+        "CVE-2026-84501",
+    ],
+}
+_NO_ENRICHMENT = {
+    "osidb_meta": None,
+    "upstream": None,
+    "upstream_aliases": [],
+    "nvd": None,
+}
+_ZK_PRIMARY = "org/apache/zookeeper/zookeeper/3.8.3.rhlw-00015"
+
+
+def _run_generate_real_vex(
+    ctx: GlobalContext, tmp_path: Path, index: dict, upstream: dict | None = None
+):
+    """Run generate with fath-cuan's real VEX converter (enrichment stubbed)."""
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (index_dir / "gav-index.json").write_text(json.dumps(index))
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    for rel, sbom in (upstream or {}).items():
+        path = workdir / "upstream-sboms" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sbom))
+    output_dir = workdir / "security_metadata"
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "fath_cuan.converters.vex._prefetch_enrichment",
+            return_value=_NO_ENRICHMENT,
+        ),
+    ):
+        result = _invoke(
+            CliRunner(),
+            index_dir,
+            output_dir,
+            ctx,
+            index_filename="gav-index.json",
+            workdir=workdir,
+        )
+    vex = {
+        p.name: json.loads(p.read_text())
+        for p in sorted(output_dir.glob("*.bom.json"))
+    }
+    return result, output_dir, vex
+
+
+def _bom_link(serial: str, bom_ref: str) -> str:
+    from urllib.parse import quote
+
+    return (
+        f"urn:cdx:{serial.removeprefix('urn:uuid:')}/1#{quote(bom_ref, safe='')}"
+    )
+
+
+def test_legacy_gav_index_produces_vex_for_primary_module_only(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A legacy gav-index is converted; VEX covers only the primary module.
+
+    Mirrors the OSV advisory (one affected entry): one document set, each
+    statement affecting only the primary SBOM, and metadata.component equal
+    to that SBOM's components[0] identity (purl with repository_url+type).
+    """
+    result, output_dir, vex = _run_generate_real_vex(
+        ctx, tmp_path, _ZOOKEEPER_GAV_INDEX
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Legacy gav-index converted to a build-index" in result.output
+    ts = "2026-11-09T00:50:22Z"
+    expected = {f"{c}-{ts}.bom.json" for c in _ZOOKEEPER_GAV_INDEX["vulns"]}
+    expected.add(f"{ts}.bom.json")
+    assert set(vex) == expected
+
+    sbom = json.loads(
+        (
+            output_dir
+            / "enriched-sboms"
+            / _ZK_PRIMARY
+            / "zookeeper-3.8.3.rhlw-00015.bom.json"
+        ).read_text()
+    )
+    subject = sbom["components"][0]
+    assert subject["purl"] == (
+        "pkg:maven/org.apache.zookeeper/zookeeper@3.8.3.rhlw-00015"
+        "?repository_url=https://packages.redhat.com/lightwell/java/remediated/"
+        "&type=jar"
+    )
+    link = _bom_link(sbom["serialNumber"], subject["bom-ref"])
+    for name, doc in vex.items():
+        component = doc["metadata"]["component"]
+        for key in ("type", "bom-ref", "group", "name", "version", "purl"):
+            assert component[key] == subject[key], (name, key)
+        for statement in doc["vulnerabilities"]:
+            assert [a["ref"] for a in statement["affects"]] == [link], name
+        assert "parent" not in json.dumps(doc), name
+        assert "zookeeper-jute" not in json.dumps(doc), name
+
+
+def test_vex_bom_link_uses_upstream_sbom_bom_ref(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """With a PNC SBOM (bom-ref ?type=jar), VEX references that exact bom-ref."""
+    pnc_sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.7",
+        "version": 1,
+        "serialNumber": "urn:uuid:c1573583-6884-55df-b85f-b2691dcd2ec4",
+        "components": [
+            {
+                "type": "library",
+                "bom-ref": (
+                    "pkg:maven/org.apache.zookeeper/zookeeper@3.8.3.rhlw-00015"
+                    "?type=jar"
+                ),
+                "group": "org.apache.zookeeper",
+                "name": "zookeeper",
+                "version": "3.8.3.rhlw-00015",
+                "purl": (
+                    "pkg:maven/org.apache.zookeeper/zookeeper@3.8.3.rhlw-00015"
+                    "?type=jar"
+                ),
+                "hashes": [{"alg": "SHA-256", "content": "abc"}],
+                "licenses": [{"license": {"id": "Apache-2.0"}}],
+            }
+        ],
+    }
+    result, output_dir, vex = _run_generate_real_vex(
+        ctx,
+        tmp_path,
+        _ZOOKEEPER_GAV_INDEX,
+        upstream={f"{_ZK_PRIMARY}/zookeeper-3.8.3.rhlw-00015.bom.json": pnc_sbom},
+    )
+
+    assert result.exit_code == 0, result.output
+    sbom = json.loads(
+        (
+            output_dir
+            / "enriched-sboms"
+            / _ZK_PRIMARY
+            / "zookeeper-3.8.3.rhlw-00015.bom.json"
+        ).read_text()
+    )
+    subject = sbom["components"][0]
+    assert subject["bom-ref"].endswith("?type=jar")
+    assert "repository_url=" in subject["purl"]
+    link = _bom_link(sbom["serialNumber"], subject["bom-ref"])
+    for name, doc in vex.items():
+        assert doc["metadata"]["component"]["bom-ref"] == subject["bom-ref"]
+        assert doc["metadata"]["component"]["purl"] == subject["purl"]
+        for statement in doc["vulnerabilities"]:
+            assert [a["ref"] for a in statement["affects"]] == [link], name
+
+
+def test_build_index_with_several_modules_vex_primary_only(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A build-index with several purls also yields VEX for the primary only."""
+    index = {
+        "buildId": "multi",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.0.0",
+            "full": "1.0.0.rhlw-00001",
+            "b": 1,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.example/core@1.0.0.rhlw-00001",
+        "purls": [
+            "pkg:maven/org.example/core@1.0.0.rhlw-00001",
+            "pkg:maven/org.example/parent@1.0.0.rhlw-00001",
+        ],
+        "vulns": ["CVE-2024-1234"],
+        "created": "2026-11-09T00:00:00Z",
+    }
+    result, _, vex = _run_generate_real_vex(ctx, tmp_path, index)
+
+    assert result.exit_code == 0, result.output
+    assert set(vex) == {"CVE-2024-1234-2026-11-09T00:00:00Z.bom.json"}
+    doc = vex["CVE-2024-1234-2026-11-09T00:00:00Z.bom.json"]
+    assert doc["metadata"]["component"]["name"] == "core"
+    affects = doc["vulnerabilities"][0]["affects"]
+    assert len(affects) == 1
+    assert "parent" not in affects[0]["ref"]
+
+
+def test_index_without_known_format_warns_and_skips_vex(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """An index that is neither format warns instead of silently skipping.
+
+    (With vulnerabilities such an index already fails earlier, when the
+    advisory ID cannot be derived.)
+    """
+    result, _, vex = _run_generate_real_vex(
+        ctx, tmp_path, {"buildId": "x", "vulns": []}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "neither a build-index" in result.output
+    assert vex == {}
+
+
+def test_unconvertible_legacy_index_warns_and_skips_vex(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A legacy index that cannot be converted warns; OSV still runs."""
+    index = {
+        "buildId": "x",
+        "created": "2026-11-09T00:00:00Z",
+        "primaryGav": "org.example:core:1.0.0",
+        "gavs": ["org.example:core:1.0.0"],
+        "vulns": ["CVE-2024-1234"],
+    }
+    result, _, vex = _run_generate_real_vex(ctx, tmp_path, index)
+
+    assert result.exit_code == 0, result.output
+    assert "could not be converted to a build-index" in result.output
+    assert vex == {}
