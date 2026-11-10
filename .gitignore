@@ -29,3 +29,6 @@ htmlcov/
 Thumbs.db
 tmp/
 venv/
+
+# uv lock files: not committed (dependencies come from pyproject.toml)
+uv.lock
