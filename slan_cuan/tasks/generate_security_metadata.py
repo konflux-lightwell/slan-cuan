@@ -19,6 +19,7 @@ from uuid import UUID, uuid4, uuid5
 import click
 import mmh3
 from fath_cuan.ecosystems import _OSV_ECOSYSTEM, coordinate_from_purl
+from fath_cuan.index_builder import migrate_document
 from fath_cuan.workflow import process_osv, process_vex
 
 from slan_cuan import oci
@@ -42,6 +43,55 @@ _ADVISORY_ID_RE = re.compile(r"^RHLW-\d{4}-[0-9a-f]{16}$")
 def _is_build_index(index_data: dict) -> bool:
     """Check whether the index is a unified build-index."""
     return "purls" in index_data or "ecosystem" in index_data
+
+
+def _index_for_sbom_and_vex(index_data: dict) -> dict | None:
+    """Return a build-index for SBOM/VEX generation, or None if impossible.
+
+    SBOM and VEX generation work on the unified build-index (``purls`` /
+    ``ecosystem``). Production PNC builds still attach the legacy gav-index
+    (``primaryGav`` / ``gavs``); it is converted with fath-cuan's
+    ``migrate_document`` (canonical ``pkg:maven`` purls, decomposed version,
+    same ``vulns`` and ``created``) instead of silently skipping VEX. OSV
+    generation keeps using the original index.
+    """
+    if _is_build_index(index_data):
+        return index_data
+    if "primaryGav" not in index_data:
+        click.echo(
+            "WARNING: index is neither a build-index (purls/ecosystem) nor a "
+            "legacy gav-index (primaryGav); no SBOM or VEX generated.",
+            err=True,
+        )
+        return None
+    try:
+        migrated = migrate_document(index_data)
+    except (ValueError, TypeError) as e:
+        click.echo(
+            f"WARNING: legacy gav-index could not be converted to a "
+            f"build-index ({e}); no SBOM or VEX generated.",
+            err=True,
+        )
+        return None
+    click.echo(
+        f"Legacy gav-index converted to a build-index for SBOM/VEX "
+        f"generation ({len(migrated.get('purls', []))} module(s))."
+    )
+    return migrated
+
+
+def _primary_module_index(build_index: dict) -> dict:
+    """Restrict a build-index to its primary (fixed) module for VEX.
+
+    A build-index lists every module the build produced, but only the
+    primary one carries the security fix: the OSV advisory has a single
+    ``affected`` entry for it. Other modules (parent POMs, build companions)
+    must not get VEX statements, so VEX uses ``primaryPurl`` only.
+    """
+    primary = build_index.get("primaryPurl")
+    if not primary:
+        return build_index
+    return {**build_index, "purls": [primary], "extraPurls": []}
 
 
 def _derive_advisory_id(index_data: dict) -> str | None:
@@ -418,6 +468,7 @@ def _generate_sboms_from_index(
     timestamp: str,
     upstream_sboms_dir: Path | None = None,
     explicit_repo_url: str | None = None,
+    sbom_components: dict[str, dict] | None = None,
 ) -> dict[str, str]:
     """Generate per-artifact enriched CycloneDX SBOMs from build-index data.
 
@@ -428,8 +479,12 @@ def _generate_sboms_from_index(
     When no upstream SBOM exists for an artifact, generates a minimal
     SBOM from scratch.
 
-    Returns a dict mapping PURL -> SBOM serialNumber for VEX
-    cross-referencing.
+    Returns a dict mapping each SBOM's exact ``bom-ref`` (e.g. PNC's
+    ``pkg:maven/...@v?type=jar``) -> SBOM serialNumber for VEX
+    cross-referencing, so the VEX BOM-Link fragment matches the SBOM. When
+    *sbom_components* is given, it is filled with the same keys -> the SBOM
+    subject (``components[0]``), whose identity (purl with
+    ``repository_url`` and ``type``) becomes the VEX ``metadata.component``.
     """
     sbom_serial_numbers: dict[str, str] = {}
     vulns = index_data.get("vulns", [])
@@ -515,9 +570,14 @@ def _generate_sboms_from_index(
         enriched["serialNumber"] = serial_number
 
         purl_bare = f"pkg:maven/{group_id}/{artifact_id}@{version}"
-        sbom_serial_numbers[purl] = serial_number
-        if purl_bare != purl:
-            sbom_serial_numbers[purl_bare] = serial_number
+        # Key by the SBOM's exact bom-ref so the VEX BOM-Link fragment
+        # resolves inside the SBOM (PNC uses the ?type=jar form). An upstream
+        # SBOM without a bom-ref gets the bare purl as its bom-ref.
+        subject = enriched["components"][0]
+        bom_ref = subject.setdefault("bom-ref", purl_bare)
+        sbom_serial_numbers[bom_ref] = serial_number
+        if sbom_components is not None:
+            sbom_components[bom_ref] = subject
 
         # Write enriched SBOM at GAV-relative path.
         gav_rel = (
@@ -550,12 +610,19 @@ def _generate_vex_from_index(
     osidb_client: "OsidbClient | None",
     sbom_serial_numbers: dict[str, str],
     timestamp: str,
+    sbom_components: dict[str, dict] | None = None,
 ) -> None:
-    """Generate per-CVE and multi-CVE CycloneDX VEX documents."""
+    """Generate per-CVE and multi-CVE CycloneDX VEX documents.
+
+    *sbom_components* (SBOM subjects keyed like *sbom_serial_numbers*) makes
+    each VEX ``metadata.component`` byte-identical to its SBOM's
+    ``components[0]`` identity, purl with ``repository_url`` and ``type``.
+    """
     vex_result = process_vex(
         index_data,
         osidb_client=osidb_client,
         sbom_serial_numbers=sbom_serial_numbers,
+        sbom_components=sbom_components,
     )
 
     # Write per-CVE VEX files
@@ -855,34 +922,39 @@ def generate_security_metadata(
         with open(osv_output_path, "w") as f:
             json.dump(record, f, indent=2)
 
-    # Generate enriched SBOMs (build-index only, all builds)
-    # and VEX (gated on vulns — clean builds have no vulnerabilities to declare).
+    # Generate enriched SBOMs (all builds) and VEX (gated on vulns — clean
+    # builds have no vulnerabilities to declare) from a build-index; a legacy
+    # gav-index is converted first.
     sbom_serial_numbers: dict[str, str] = {}
-    if _is_build_index(index_data):
+    sbom_components: dict[str, dict] = {}
+    build_index = _index_for_sbom_and_vex(index_data)
+    if build_index is not None:
         # Pin to build provenance timestamp when available; fall back to now.
         # Normalize once and feed the same value to fath-cuan so the VEX
         # filename and its published/updated fields cannot diverge.
-        ts_now = _normalize_build_timestamp(index_data.get("created"))
+        ts_now = _normalize_build_timestamp(build_index.get("created"))
 
         # Upstream SBOMs are copied by the extract task into
         # workdir/upstream-sboms/. This directory may not exist
         # (first-time builds, non-maven).
         upstream_sboms_dir = workdir / "upstream-sboms"
         sbom_serial_numbers = _generate_sboms_from_index(
-            index_data,
+            build_index,
             output_dir,
             ts_now,
             upstream_sboms_dir=upstream_sboms_dir,
             explicit_repo_url=repository_url or None,
+            sbom_components=sbom_components,
         )
 
-        if index_data.get("vulns"):
+        if build_index.get("vulns"):
             _generate_vex_from_index(
-                {**index_data, "created": ts_now},
+                {**_primary_module_index(build_index), "created": ts_now},
                 output_dir,
                 osidb_client,
                 sbom_serial_numbers,
                 ts_now,
+                sbom_components=sbom_components,
             )
 
     # Save the updated extract result
