@@ -66,7 +66,7 @@ def _index_for_sbom_and_vex(index_data: dict) -> dict | None:
         return None
     try:
         migrated = migrate_document(index_data)
-    except (ValueError, TypeError) as e:
+    except (ValueError, TypeError, KeyError) as e:
         click.echo(
             f"WARNING: legacy gav-index could not be converted to a "
             f"build-index ({e}); no SBOM or VEX generated.",
