@@ -1702,8 +1702,12 @@ def test_single_cve_build_writes_no_multi_cve_vex(tmp_path: Path) -> None:
     ]
 
 
-def test_two_cve_build_writes_multi_cve_vex(tmp_path: Path) -> None:
-    """Two or more CVEs produce per-CVE files plus one multi-CVE file."""
+def test_multi_cve_build_writes_one_combined_vex(tmp_path: Path) -> None:
+    """Two or more CVEs produce ONE combined VEX file, no per-CVE files.
+
+    Agreed Sonatype format: one VEX per module; <datetime>.bom.json holds
+    all statements (per-CVE files beside it would publish them twice).
+    """
     out = _run_vex(
         tmp_path,
         [
@@ -1714,29 +1718,44 @@ def test_two_cve_build_writes_multi_cve_vex(tmp_path: Path) -> None:
     )
 
     assert sorted(p.name for p in out.iterdir()) == [
-        "2026-10-30T20:34:00Z.bom.json",
-        "CVE-2024-1-2026-10-30T20:34:00Z.bom.json",
-        "CVE-2024-2-2026-10-30T20:34:00Z.bom.json",
+        "2026-10-30T20:34:00Z.bom.json"
+    ]
+    doc = json.loads((out / "2026-10-30T20:34:00Z.bom.json").read_text())
+    assert [v["id"] for v in doc["vulnerabilities"]] == [
+        "CVE-2024-1",
+        "CVE-2024-2",
     ]
 
 
-def test_multi_cve_zero_statements_logs_accurate_count(
+def test_malformed_multi_cve_falls_back_to_single_per_cve(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The skip message reports the real statement count, not 'only one'.
-
-    A truthy ``multi_cve`` lacking a usable ``vulnerabilities`` key has zero
-    statements, not one, so the log must not claim otherwise.
-    """
-    _run_vex(
+    """A multi_cve without usable statements and one per-CVE doc -> that doc."""
+    out = _run_vex(
         tmp_path,
         [("CVE-2024-1", _vex_doc("CVE-2024-1"))],
         {"bomFormat": "CycloneDX"},
     )
 
-    captured = capsys.readouterr()
-    assert "Skipping multi-CVE VEX: 0 statements" in captured.out
-    assert "only one statement" not in captured.out
+    assert sorted(p.name for p in out.iterdir()) == [
+        "CVE-2024-1-2026-10-30T20:34:00Z.bom.json"
+    ]
+    assert "1 statement(s)" in capsys.readouterr().out
+
+
+def test_several_per_cve_without_combined_vex_is_refused(tmp_path: Path) -> None:
+    """Never publish several per-CVE files for one module."""
+    import click
+
+    with pytest.raises(click.ClickException, match="refusing to publish"):
+        _run_vex(
+            tmp_path,
+            [
+                ("CVE-2024-1", _vex_doc("CVE-2024-1")),
+                ("CVE-2024-2", _vex_doc("CVE-2024-2")),
+            ],
+            None,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1931,10 +1950,12 @@ def test_legacy_gav_index_produces_vex_for_primary_module_only(
 
     assert result.exit_code == 0, result.output
     assert "Legacy gav-index converted to a build-index" in result.output
+    # ONE VEX for the module, holding all 7 CVEs (agreed Sonatype format).
     ts = "2026-11-09T00:50:22Z"
-    expected = {f"{c}-{ts}.bom.json" for c in _ZOOKEEPER_GAV_INDEX["vulns"]}
-    expected.add(f"{ts}.bom.json")
-    assert set(vex) == expected
+    assert set(vex) == {f"{ts}.bom.json"}
+    assert [v["id"] for v in vex[f"{ts}.bom.json"]["vulnerabilities"]] == (
+        _ZOOKEEPER_GAV_INDEX["vulns"]
+    )
 
     sbom = json.loads(
         (

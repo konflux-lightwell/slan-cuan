@@ -612,7 +612,7 @@ def _generate_vex_from_index(
     timestamp: str,
     sbom_components: dict[str, dict] | None = None,
 ) -> None:
-    """Generate per-CVE and multi-CVE CycloneDX VEX documents.
+    """Generate the CycloneDX VEX document for the build's primary module.
 
     *sbom_components* (SBOM subjects keyed like *sbom_serial_numbers*) makes
     each VEX ``metadata.component`` byte-identical to its SBOM's
@@ -625,40 +625,33 @@ def _generate_vex_from_index(
         sbom_components=sbom_components,
     )
 
-    # Write per-CVE VEX files
-    for cve_id, doc in vex_result.per_cve:
-        filename = f"{cve_id}-{timestamp}.bom.json"
-        path = output_dir / filename
-        click.echo(f"Writing per-CVE VEX to {path}")
-        with open(path, "w") as f:
-            json.dump(doc, f, indent=2)
-
-    # Write the multi-CVE VEX file only when it aggregates two or more
-    # statements; for a single CVE it would duplicate the per-CVE document.
+    # Exactly one VEX document per module (agreed Sonatype format): a single
+    # CVE -> <CVE-ID>-<datetime>.bom.json; several CVEs -> one
+    # <datetime>.bom.json holding all of them, never per-CVE files beside it
+    # (that would publish every statement twice). For an LW- build the
+    # LW- statement therefore always travels with its CVEs.
     multi_vulns = (vex_result.multi_cve or {}).get("vulnerabilities") or []
-    write_multi = len(multi_vulns) >= 2
-    if write_multi:
+    if len(multi_vulns) >= 2:
         filename = f"{timestamp}.bom.json"
-        path = output_dir / filename
-        click.echo(f"Writing multi-CVE VEX to {path}")
-        with open(path, "w") as f:
-            json.dump(vex_result.multi_cve, f, indent=2)
-    elif vex_result.multi_cve:
-        if len(multi_vulns) == 1:
-            click.echo(
-                "Skipping multi-CVE VEX: only one statement "
-                "(already covered by the per-CVE document)"
-            )
-        else:
-            click.echo(
-                f"Skipping multi-CVE VEX: {len(multi_vulns)} statements "
-                "(multi_cve present but has no usable vulnerabilities)"
-            )
-
-    click.echo(
-        f"VEX generation complete: {len(vex_result.per_cve)} per-CVE, "
-        f"{'1' if write_multi else '0'} multi-CVE"
-    )
+        document = vex_result.multi_cve
+    elif len(vex_result.per_cve) == 1:
+        cve_id, document = vex_result.per_cve[0]
+        filename = f"{cve_id}-{timestamp}.bom.json"
+    elif not vex_result.per_cve:
+        click.echo("No VEX statements generated (nothing to publish).")
+        return
+    else:
+        raise click.ClickException(
+            f"Unexpected VEX result: {len(vex_result.per_cve)} per-CVE "
+            f"documents without a multi-CVE document; refusing to publish "
+            f"them as separate files."
+        )
+    statements = len(document.get("vulnerabilities") or [])
+    path = output_dir / filename
+    click.echo(f"Writing VEX ({statements} statement(s)) to {path}")
+    with open(path, "w") as f:
+        json.dump(document, f, indent=2)
+    click.echo(f"VEX generation complete: 1 document, {statements} statement(s)")
 
 
 def _normalize_build_timestamp(created: object) -> str:
