@@ -2102,3 +2102,25 @@ def test_unconvertible_legacy_index_warns_and_skips_vex(
     assert result.exit_code == 0, result.output
     assert "could not be converted to a build-index" in result.output
     assert vex == {}
+
+
+def test_legacy_index_conversion_keyerror_warns_and_skips_vex(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A KeyError from migrate_document falls through to the warning path.
+
+    fath-cuan 0.9.0 validates the whole index with pydantic first (missing
+    fields raise ValidationError, a ValueError), so KeyError is forced here
+    to guard against a future migrate_document change crashing the CLI.
+    """
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.migrate_document",
+        side_effect=KeyError("gavs"),
+    ):
+        result, _, vex = _run_generate_real_vex(
+            ctx, tmp_path, json.loads(json.dumps(_ZOOKEEPER_GAV_INDEX))
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "could not be converted to a build-index ('gavs')" in result.output
+    assert vex == {}
