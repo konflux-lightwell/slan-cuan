@@ -25,6 +25,7 @@ from fath_cuan.workflow import process_osv, process_vex
 from slan_cuan import oci
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
+    EXTRACT_UPSTREAM_SBOMS_DIRNAME,
     ExtractResult,
     GlobalContext,
     ImageReference,
@@ -81,12 +82,13 @@ def _index_for_sbom_and_vex(index_data: dict) -> dict | None:
 
 
 def _primary_module_index(build_index: dict) -> dict:
-    """Restrict a build-index to its primary (fixed) module for VEX.
+    """Restrict a build-index to its primary (fixed) module.
 
     A build-index lists every module the build produced, but only the
     primary one carries the security fix: the OSV advisory has a single
     ``affected`` entry for it. Other modules (parent POMs, build companions)
-    must not get VEX statements, so VEX uses ``primaryPurl`` only.
+    must not get VEX statements or an enriched SBOM claiming the fix, so
+    both use ``primaryPurl`` only.
     """
     primary = build_index.get("primaryPurl")
     if not primary:
@@ -351,6 +353,39 @@ def _build_pedigree(
     }
 
 
+def _merge_pedigree(existing: object, ours: dict) -> dict:
+    """Merge the Lightwell pedigree into the upstream (PNC) pedigree.
+
+    PNC already records ``ancestors`` (with the exact ``?type=jar`` purl);
+    those are kept. Lightwell adds the CVE ``patches`` it resolves (skipping
+    any already listed) and its ``notes``. All other upstream pedigree
+    fields are preserved.
+    """
+    if not isinstance(existing, dict) or not existing:
+        return ours
+    merged = dict(existing)
+    if not merged.get("ancestors"):
+        merged["ancestors"] = ours["ancestors"]
+    patches = [p for p in merged.get("patches") or [] if isinstance(p, dict)]
+    resolved = {
+        r.get("id")
+        for p in patches
+        for r in p.get("resolves") or []
+        if isinstance(r, dict)
+    }
+    patches += [
+        p for p in ours["patches"] if p["resolves"][0]["id"] not in resolved
+    ]
+    merged["patches"] = patches
+    upstream_notes = merged.get("notes")
+    if isinstance(upstream_notes, str) and upstream_notes.strip():
+        if ours["notes"] not in upstream_notes:
+            merged["notes"] = f"{upstream_notes}\n\n{ours['notes']}"
+    else:
+        merged["notes"] = ours["notes"]
+    return merged
+
+
 def _load_upstream_sbom(
     upstream_sboms_dir: Path,
     group_id: str,
@@ -391,9 +426,10 @@ def _enrich_sbom(
 ) -> dict:
     """Enrich an upstream SBOM or generate a minimal one from scratch.
 
-    When *upstream_sbom* has components, mutates it in place: sets
-    ``pedigree``, updates the PURL with ``repository_url``, and sets
-    ``serialNumber``. All other upstream fields are preserved.
+    When *upstream_sbom* has components, mutates it in place: merges the
+    Lightwell ``pedigree`` into the upstream one (see ``_merge_pedigree``),
+    updates the PURL with ``repository_url``, and sets ``serialNumber``.
+    All other upstream fields are preserved.
 
     When no upstream SBOM is available (or its components list is
     empty/malformed), generates a minimal CycloneDX 1.7 SBOM.
@@ -423,7 +459,7 @@ def _enrich_sbom(
             enriched_purl = purl_qualified
 
         comp["purl"] = enriched_purl
-        comp["pedigree"] = pedigree
+        comp["pedigree"] = _merge_pedigree(comp.get("pedigree"), pedigree)
 
         upstream_sbom["serialNumber"] = serial_number
         if "metadata" not in upstream_sbom:
@@ -915,9 +951,11 @@ def generate_security_metadata(
         with open(osv_output_path, "w") as f:
             json.dump(record, f, indent=2)
 
-    # Generate enriched SBOMs (all builds) and VEX (gated on vulns — clean
+    # Generate the enriched SBOM (all builds) and VEX (gated on vulns — clean
     # builds have no vulnerabilities to declare) from a build-index; a legacy
-    # gav-index is converted first.
+    # gav-index is converted first. Both cover only the primary module: the
+    # fix is in the primary module, and the other modules of a multi-module
+    # build are dependents that must not claim it (they keep the PNC SBOM).
     sbom_serial_numbers: dict[str, str] = {}
     sbom_components: dict[str, dict] = {}
     build_index = _index_for_sbom_and_vex(index_data)
@@ -926,13 +964,14 @@ def generate_security_metadata(
         # Normalize once and feed the same value to fath-cuan so the VEX
         # filename and its published/updated fields cannot diverge.
         ts_now = _normalize_build_timestamp(build_index.get("created"))
+        primary_index = _primary_module_index(build_index)
 
-        # Upstream SBOMs are copied by the extract task into
+        # Upstream SBOMs are captured by the extract task into
         # workdir/upstream-sboms/. This directory may not exist
-        # (first-time builds, non-maven).
-        upstream_sboms_dir = workdir / "upstream-sboms"
+        # (non-maven, or a deliverable without PNC SBOMs).
+        upstream_sboms_dir = workdir / EXTRACT_UPSTREAM_SBOMS_DIRNAME
         sbom_serial_numbers = _generate_sboms_from_index(
-            build_index,
+            primary_index,
             output_dir,
             ts_now,
             upstream_sboms_dir=upstream_sboms_dir,
@@ -942,7 +981,7 @@ def generate_security_metadata(
 
         if build_index.get("vulns"):
             _generate_vex_from_index(
-                {**_primary_module_index(build_index), "created": ts_now},
+                {**primary_index, "created": ts_now},
                 output_dir,
                 osidb_client,
                 sbom_serial_numbers,

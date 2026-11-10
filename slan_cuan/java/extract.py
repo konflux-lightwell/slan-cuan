@@ -7,7 +7,7 @@ import json
 import shutil
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 
@@ -15,6 +15,7 @@ from slan_cuan.models import (
     EXTRACT_ATTACHMENTS_DIRNAME,
     EXTRACT_METADATA_DIRNAME,
     EXTRACT_RESULT_FILENAME,
+    EXTRACT_UPSTREAM_SBOMS_DIRNAME,
     ExtractResult,
     GlobalContext,
     ImageReference,
@@ -28,6 +29,113 @@ from slan_cuan.oci import (
     pull,
 )
 from slan_cuan.utils import write_tekton_result
+
+# Per-artifact SBOMs are small JSON documents; anything larger is not one.
+_MAX_SBOM_BYTES = 64 * 1024 * 1024
+
+
+def _gav_sbom_rel(member: str, content: bytes) -> str | None:
+    """Return the GAV-relative path of a PNC per-artifact SBOM, else None.
+
+    *member* is the SBOM's path inside the deliverable (any prefix, e.g.
+    ``build-output/repository/``). It must end with
+    ``<group path>/<artifactId>/<version>/<artifactId>-<version>.bom.json``,
+    where the group comes from the SBOM subject (``components[0]``); the
+    deliverable layout is never assumed. Returns e.g.
+    ``org/apache/zookeeper/zookeeper/3.8.3.rhlw-00015/zookeeper-3.8.3.rhlw-00015.bom.json``.
+    """
+    parts = PurePosixPath(member).parts
+    if len(parts) < 4:
+        return None
+    filename, version, artifact = parts[-1], parts[-2], parts[-3]
+    if filename != f"{artifact}-{version}.bom.json":
+        return None
+    try:
+        sbom = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        click.echo(f"WARNING: skipping unparseable SBOM {member}")
+        return None
+    components = sbom.get("components") if isinstance(sbom, dict) else None
+    subject = (
+        components[0] if isinstance(components, list) and components else None
+    )
+    if not isinstance(subject, dict):
+        click.echo(
+            f"WARNING: skipping SBOM without a subject component: {member}"
+        )
+        return None
+    group = subject.get("group")
+    if (
+        subject.get("name") != artifact
+        or subject.get("version") != version
+        or not isinstance(group, str)
+    ):
+        click.echo(
+            "WARNING: skipping SBOM whose subject does not match its path: "
+            f"{member}"
+        )
+        return None
+    group_parts = group.split(".")
+    if any(not g or g == ".." or "/" in g or "\\" in g for g in group_parts):
+        click.echo(
+            f"WARNING: skipping SBOM with unsafe group {group!r}: {member}"
+        )
+        return None
+    rel = (*group_parts, artifact, version, filename)
+    if parts[-len(rel) :] != rel:
+        click.echo(f"WARNING: skipping SBOM outside its GAV path: {member}")
+        return None
+    return "/".join(rel)
+
+
+def capture_upstream_sboms(deliverable: Path, dest_dir: Path) -> int:
+    """Copy PNC per-artifact SBOMs out of the deliverable to *dest_dir*.
+
+    Reads only the ``<artifactId>-<version>.bom.json`` entries (the ZIP is
+    not expanded) and writes each at its GAV-relative path under
+    *dest_dir*, the layout generate-security-metadata expects. inject-sboms
+    later writes the enriched SBOM back to the same entry. Returns the
+    number of SBOMs captured.
+    """
+    captured: dict[str, str] = {}
+
+    def _store(member: str, content: bytes) -> None:
+        rel = _gav_sbom_rel(member, content)
+        if rel is None:
+            return
+        if rel in captured:
+            raise click.ClickException(
+                f"Ambiguous SBOM {rel}: found as both {captured[rel]} "
+                f"and {member}"
+            )
+        captured[rel] = member
+        target = dest_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
+    if deliverable.is_file() and zipfile.is_zipfile(deliverable):
+        with zipfile.ZipFile(deliverable) as archive:
+            for member in archive.infolist():
+                if member.is_dir() or not member.filename.endswith(".bom.json"):
+                    continue
+                if member.file_size > _MAX_SBOM_BYTES:
+                    click.echo(
+                        f"WARNING: skipping oversized SBOM {member.filename}"
+                    )
+                    continue
+                _store(member.filename, archive.read(member))
+    elif deliverable.is_dir():
+        for path in sorted(deliverable.rglob("*.bom.json")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            if path.stat().st_size > _MAX_SBOM_BYTES:
+                click.echo(f"WARNING: skipping oversized SBOM {path}")
+                continue
+            _store(path.relative_to(deliverable).as_posix(), path.read_bytes())
+
+    if captured:
+        click.echo(f"Captured {len(captured)} upstream SBOM(s) to {dest_dir}")
+    return len(captured)
 
 
 def _deduplicate_referrers(
@@ -244,6 +352,15 @@ def extract(
                 if item.is_file()
             }
             files = sorted(file_sizes.keys())
+
+        # Capture PNC per-artifact SBOMs for generate-security-metadata to
+        # enrich; inject-sboms writes them back to the same entries.
+        capture_upstream_sboms(
+            deliverable_file
+            if deliverable_file.is_file()
+            else output_dir / deliverable_name,
+            output_dir / EXTRACT_UPSTREAM_SBOMS_DIRNAME,
+        )
 
         # Discover and pull attachments
         attachment_files: list[str] = []

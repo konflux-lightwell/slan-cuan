@@ -22,6 +22,10 @@ BUILD_INDEX_MEDIA_TYPE = "application/vnd.lightwell.build-index.v1+json"
 # output_contract_test.py can assert the Task stays in sync.
 EXTRACT_METADATA_DIRNAME = "metadata"
 EXTRACT_ATTACHMENTS_DIRNAME = "attachments"
+# PNC per-artifact SBOMs (<artifactId>-<version>.bom.json) captured from the
+# deliverable at their GAV-relative path, read by generate-security-metadata
+# (workdir/upstream-sboms) and enriched there (LWLP-4822).
+EXTRACT_UPSTREAM_SBOMS_DIRNAME = "upstream-sboms"
 
 # Conventional directory name, relative to the artifact directory, that
 # generate-security-metadata writes OSV/VEX records into and that the publish

@@ -1420,11 +1420,7 @@ def test_mixed_cve_lw_build_uses_predisclosure(
     assert "embargoed" in pedigree["notes"].lower()
 
 
-def test_multi_purl_generates_multiple_sidecars(
-    ctx: GlobalContext, tmp_path: Path
-) -> None:
-    """A build index with multiple purls produces one sidecar per artifact."""
-    index_dir = tmp_path / "index"
+def _write_multi_module_index(index_dir: Path, vulns: list[str]) -> None:
     index_dir.mkdir()
     data = {
         "buildId": "multi-purl-build",
@@ -1440,9 +1436,30 @@ def test_multi_purl_generates_multiple_sidecars(
             "pkg:maven/org.example/lib-core@1.0.0.rhlw-00001",
             "pkg:maven/org.example/lib-util@1.0.0.rhlw-00001",
         ],
-        "vulns": [],
+        "vulns": vulns,
     }
     (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+
+_MULTI_CORE_SBOM = Path(
+    "enriched-sboms/org/example/lib-core/1.0.0.rhlw-00001"
+    "/lib-core-1.0.0.rhlw-00001.bom.json"
+)
+_MULTI_UTIL_SBOM = Path(
+    "enriched-sboms/org/example/lib-util/1.0.0.rhlw-00001"
+    "/lib-util-1.0.0.rhlw-00001.bom.json"
+)
+
+
+def test_multi_purl_enriches_only_the_primary_module(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A multi-module build gets one enriched SBOM: the primary module's.
+
+    The other modules are dependents; they keep the PNC SBOM (LWLP-4822).
+    """
+    index_dir = tmp_path / "index"
+    _write_multi_module_index(index_dir, vulns=[])
 
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir, create_repo=False)
@@ -1456,27 +1473,153 @@ def test_multi_purl_generates_multiple_sidecars(
         result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
-
-    core_sbom_path = (
-        output_dir
-        / "enriched-sboms"
-        / "org/example/lib-core/1.0.0.rhlw-00001"
-        / "lib-core-1.0.0.rhlw-00001.bom.json"
-    )
-    util_sbom_path = (
-        output_dir
-        / "enriched-sboms"
-        / "org/example/lib-util/1.0.0.rhlw-00001"
-        / "lib-util-1.0.0.rhlw-00001.bom.json"
-    )
+    core_sbom_path = output_dir / _MULTI_CORE_SBOM
     assert core_sbom_path.exists(), f"Expected SBOM at {core_sbom_path}"
-    assert util_sbom_path.exists(), f"Expected SBOM at {util_sbom_path}"
-
+    assert not (output_dir / _MULTI_UTIL_SBOM).exists()
+    sboms = list((output_dir / "enriched-sboms").rglob("*.bom.json"))
+    assert sboms == [core_sbom_path]
     core = json.loads(core_sbom_path.read_text())
-    util = json.loads(util_sbom_path.read_text())
     assert core["components"][0]["name"] == "lib-core"
-    assert util["components"][0]["name"] == "lib-util"
-    assert core["serialNumber"] != util["serialNumber"]
+
+
+def test_multi_purl_dependent_module_never_claims_the_fix(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """With CVEs, only the primary module's SBOM lists the patches."""
+    index_dir = tmp_path / "index"
+    _write_multi_module_index(index_dir, vulns=["CVE-2026-0001"])
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index"
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    assert not (output_dir / _MULTI_UTIL_SBOM).exists()
+    core = json.loads((output_dir / _MULTI_CORE_SBOM).read_text())
+    patches = core["components"][0]["pedigree"]["patches"]
+    assert [p["resolves"][0]["id"] for p in patches] == ["CVE-2026-0001"]
+
+
+def test_pnc_sbom_pedigree_is_merged_not_replaced(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """PNC pedigree.ancestors (exact ?type=jar purl) and fields survive.
+
+    Shape taken from a real PNC SBOM (jsoup-1.22.1.rhlw-00002.bom.json).
+    """
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    data = {
+        "buildId": "pnc-merge",
+        "ecosystem": "maven",
+        "version": {
+            "upstream": "1.22.1",
+            "full": "1.22.1.rhlw-00002",
+            "b": 2,
+            "n": 0,
+        },
+        "primaryPurl": "pkg:maven/org.jsoup/jsoup@1.22.1.rhlw-00002",
+        "purls": ["pkg:maven/org.jsoup/jsoup@1.22.1.rhlw-00002"],
+        "vulns": ["CVE-2026-0001", "CVE-2026-0002"],
+    }
+    (index_dir / "gav-index.json").write_text(json.dumps(data))
+
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir, create_repo=False)
+    output_dir = workdir / "security_metadata"
+    ancestor = {
+        "group": "org.jsoup",
+        "name": "jsoup",
+        "purl": "pkg:maven/org.jsoup/jsoup@1.22.1?type=jar",
+        "type": "library",
+        "version": "1.22.1",
+    }
+    supplier = {"name": "Red Hat Lightwell", "url": ["https://www.redhat.com"]}
+    pnc_sbom = {
+        "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "serialNumber": "urn:uuid:00000000-0000-0000-0000-000000000001",
+        "version": 1,
+        "metadata": {
+            "timestamp": "2026-11-04T00:12:23+00:00",
+            "supplier": supplier,
+            "properties": [{"name": "lightwell:aiAssisted", "value": "true"}],
+            "tools": {"components": [{"name": "lightwell-sbom-generator"}]},
+        },
+        "components": [
+            {
+                "bom-ref": "pkg:maven/org.jsoup/jsoup@1.22.1.rhlw-00002?type=jar",
+                "group": "org.jsoup",
+                "name": "jsoup",
+                "version": "1.22.1.rhlw-00002",
+                "type": "library",
+                "purl": (
+                    "pkg:maven/org.jsoup/jsoup@1.22.1.rhlw-00002"
+                    "?repository_url=https://packages.redhat.com/lightwell/"
+                    "java/remediated/&type=jar"
+                ),
+                "supplier": supplier,
+                "hashes": [{"alg": "SHA-256", "content": "abc"}],
+                "licenses": [{"license": {"id": "MIT"}}],
+                "pedigree": {"ancestors": [ancestor]},
+            }
+        ],
+    }
+    upstream_dir = (
+        workdir / "upstream-sboms" / "org/jsoup/jsoup/1.22.1.rhlw-00002"
+    )
+    upstream_dir.mkdir(parents=True)
+    (upstream_dir / "jsoup-1.22.1.rhlw-00002.bom.json").write_text(
+        json.dumps(pnc_sbom)
+    )
+
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_osv",
+            return_value=[],
+        ),
+        patch(
+            "slan_cuan.tasks.generate_security_metadata._generate_vex_from_index"
+        ),
+    ):
+        runner = CliRunner()
+        result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
+
+    assert result.exit_code == 0, result.output
+    sbom = json.loads(
+        (
+            output_dir
+            / "enriched-sboms/org/jsoup/jsoup/1.22.1.rhlw-00002"
+            / "jsoup-1.22.1.rhlw-00002.bom.json"
+        ).read_text()
+    )
+    comp = sbom["components"][0]
+    assert comp["pedigree"]["ancestors"] == [ancestor]
+    assert [p["resolves"][0]["id"] for p in comp["pedigree"]["patches"]] == [
+        "CVE-2026-0001",
+        "CVE-2026-0002",
+    ]
+    assert "remediation" in comp["pedigree"]["notes"].lower()
+    # PNC identity and metadata are kept; only the serial is re-derived.
+    assert comp["bom-ref"] == pnc_sbom["components"][0]["bom-ref"]
+    assert comp["purl"] == pnc_sbom["components"][0]["purl"]
+    assert comp["supplier"] == supplier
+    assert sbom["metadata"] == pnc_sbom["metadata"]
+    assert sbom["$schema"] == pnc_sbom["$schema"]
+    assert sbom["serialNumber"] != pnc_sbom["serialNumber"]
 
 
 def test_upstream_sbom_enriched(ctx: GlobalContext, tmp_path: Path) -> None:

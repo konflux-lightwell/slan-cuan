@@ -14,8 +14,11 @@ metadata:
 spec:
   description: >-
     Inject enriched CycloneDX SBOMs from generate-security-metadata
-    into build-output.zip before signing. When no enriched SBOMs are
-    present, passes through the original signing artifact unchanged.
+    into build-output.zip before signing. Each enriched SBOM replaces
+    the PNC SBOM entry at the same GAV path inside the zip, wherever the
+    zip roots its repository; every other entry is kept as it is. No new
+    entries are added. When no enriched SBOMs are present, passes
+    through the original signing artifact unchanged.
   params:
     - name: signingDataArtifact
       description: >-
@@ -29,7 +32,9 @@ spec:
       type: string
       default: ""
     - name: ZIP_ROOT_PATH
-      description: Root directory inside build-output.zip.
+      description: >-
+        Unused; kept for pipeline compatibility. The target entry is found
+        by its GAV path suffix, independent of the zip's root directory.
       type: string
       default: "repository"
     - name: ociStorage
@@ -117,16 +122,14 @@ spec:
           value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
     - name: inject-enriched-sboms
       image: quay.io/konflux-ci/konflux-test:latest
-      env:
-        - name: ZIP_ROOT_PATH
-          value: $(params.ZIP_ROOT_PATH)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
 
-        ENRICHED_DIR="/var/workdir/security-metadata/enriched-sboms"
-        ZIP="/var/workdir/extracted/build-output.zip"
-        WORK="/tmp/inject-sboms"
+        ENRICHED_DIR="${ENRICHED_DIR:-/var/workdir/security-metadata/enriched-sboms}"
+        ZIP="${ZIP:-/var/workdir/extracted/build-output.zip}"
+        WORK="$(mktemp -d /tmp/inject-sboms.XXXXXX)"
+        trap 'rm -rf "$WORK"' EXIT
 
         # Only GAV-shaped SBOMs are injected:
         #   <group path>/<artifactId>/<version>/<artifactId>-<version>.bom.json
@@ -148,56 +151,64 @@ spec:
             done
         }
 
-        # Captured once: list_sboms() re-walks and re-classifies every
-        # candidate file, duplicating the find/classify cost (and its
-        # "Skipping non-SBOM ..." log lines) if called a second time below.
         sbom_list="$(list_sboms)"
-
         if [ -z "$sbom_list" ]; then
           echo "No enriched SBOMs to inject; passing through original artifact"
           exit 0
         fi
 
-        echo "Injecting enriched SBOMs into build-output.zip"
-        mkdir -p "$WORK"
-        unzip -q "$ZIP" -d "$WORK"
+        # The zip is never expanded: list its entries, stage only the
+        # replacement SBOMs under their exact entry names, and update those
+        # entries in place. zip copies every other entry unchanged.
+        unzip -Z1 "$ZIP" > "$WORK/entries"
+        mkdir "$WORK/stage"
+        : > "$WORK/replace"
 
-        # Zip-slip guard: reject entries that escaped the work tree.
-        if find "$WORK" -path '*/..*' -print -quit | grep -q .; then
-          echo "ERROR: zip-slip detected in build-output.zip" >&2
-          exit 1
-        fi
-
-        count=0
         while IFS= read -r enriched; do
-          rel="${enriched#$ENRICHED_DIR/}"
-
-          # Path-traversal guard: reject .. segments in relative path.
+          rel="${enriched#"$ENRICHED_DIR"/}"
           if [[ "$rel" == *".."* ]]; then
             echo "ERROR: path traversal in enriched SBOM path: $rel" >&2
             exit 1
           fi
 
-          target="$WORK/${ZIP_ROOT_PATH}/$rel"
-          mkdir -p "$(dirname "$target")"
-          cp "$enriched" "$target"
-
-          # Remove legacy .cyclonedx.json at the same GAV path.
-          legacy="${target%.bom.json}.cyclonedx.json"
-          if [ -f "$legacy" ]; then
-            echo "  Removing legacy $(basename "$legacy")"
-            rm "$legacy"
+          # The PNC SBOM entry for this GAV, whatever prefix the zip uses
+          # (e.g. build-output/repository/<rel>).
+          awk -v rel="$rel" \
+            '$0 == rel || (length($0) > length(rel) &&
+              substr($0, length($0) - length(rel)) == "/" rel)' \
+            "$WORK/entries" > "$WORK/match"
+          matches=$(wc -l < "$WORK/match")
+          if [ "$matches" -eq 0 ]; then
+            echo "WARNING: no $rel entry in build-output.zip; not injected" >&2
+            continue
+          fi
+          if [ "$matches" -gt 1 ]; then
+            echo "ERROR: $rel matches $matches zip entries:" >&2
+            cat "$WORK/match" >&2
+            exit 1
+          fi
+          entry="$(cat "$WORK/match")"
+          if [[ "$entry" == /* || "$entry" == *".."* ]]; then
+            echo "ERROR: unsafe zip entry name: $entry" >&2
+            exit 1
           fi
 
-          count=$((count + 1))
+          mkdir -p "$WORK/stage/$(dirname "$entry")"
+          cp "$enriched" "$WORK/stage/$entry"
+          printf '%s\n' "$entry" >> "$WORK/replace"
+          echo "  Replacing $entry"
         done <<< "$sbom_list"
 
-        # Re-zip in place.
-        rm "$ZIP"
-        (cd "$WORK" && zip -qr "$ZIP" .)
-        rm -rf "$WORK"
+        count=$(wc -l < "$WORK/replace")
+        if [ "$count" -eq 0 ]; then
+          echo "No matching SBOM entries; passing through original artifact"
+          exit 0
+        fi
 
-        echo "Injected $count enriched SBOMs into build-output.zip"
+        # -nw: names are literal (no wildcards); -X: no extra attributes.
+        (cd "$WORK/stage" && zip -q -nw -X "$ZIP" -@ < "$WORK/replace")
+
+        echo "Injected $count enriched SBOM(s) into build-output.zip"
     - name: create-trusted-artifact
       ref:
         resolver: git
