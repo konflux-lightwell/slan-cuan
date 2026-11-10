@@ -10,6 +10,7 @@ from slan_cuan.tasks import (
     extract,
     generate_security_metadata,
     generate_security_metadata_from_snapshot,
+    inject_sboms,
     publish,
     register,
     sign,
@@ -61,6 +62,7 @@ def main(
 main.add_command(generate_security_metadata)
 main.add_command(generate_security_metadata_from_snapshot)
 main.add_command(extract)
+main.add_command(inject_sboms)
 main.add_command(python_cli)
 main.add_command(publish)
 main.add_command(sign)
