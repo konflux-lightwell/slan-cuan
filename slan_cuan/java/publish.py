@@ -499,6 +499,39 @@ def _record_is_vex(record: dict[str, Any]) -> bool:
     )
 
 
+def _is_legacy_osv_record(path: Path, record: dict[str, Any] | None) -> bool:
+    """Return True for a legacy per-CVE ``x_RHLW-<vuln>-<base>`` OSV record."""
+    osv_id = record.get("id") if isinstance(record, dict) else None
+    if isinstance(osv_id, str) and osv_id:
+        return osv_id.startswith(_OSV_ID_PREFIX)
+    return path.stem.startswith(_OSV_ID_PREFIX)
+
+
+def _drop_legacy_osv_records(
+    osv_files: tuple[Path, ...],
+    records: dict[Path, dict[str, Any]],
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Split off legacy per-CVE ``x_RHLW-`` records; they are never published.
+
+    Only the per-release ``RHLW-`` advisory is published (LWLP-5093). The
+    legacy records were removed from the Pulp OSV repositories and must not
+    reach them, or the public GitHub OSV repository, again. Returns
+    ``(kept, dropped)``.
+    """
+    kept: list[Path] = []
+    dropped: list[Path] = []
+    for path in osv_files:
+        if _is_legacy_osv_record(path, records.get(path)):
+            click.echo(
+                f"Skipping legacy per-CVE OSV record {path.name}: only "
+                f"per-release RHLW- advisories are published."
+            )
+            dropped.append(path)
+        else:
+            kept.append(path)
+    return tuple(kept), tuple(dropped)
+
+
 def _partition_security_metadata(
     security_metadata_files: tuple[Path, ...],
 ) -> tuple[tuple[Path, ...], tuple[Path, ...], dict[Path, dict[str, Any]]]:
@@ -1453,6 +1486,11 @@ def publish(
                 "the GAV index; treating the build as embargoed."
             )
             has_lw = True
+        # After the embargo check, so an LW- ID in a legacy record still
+        # marks the build as embargoed (fail closed).
+        osv_files, legacy_osv_files = _drop_legacy_osv_records(
+            osv_files, metadata_records
+        )
         requires_file_repository = _verify_requires_file_repository(
             vulns, osv_files, pulp_file_repository
         )
@@ -1499,7 +1537,9 @@ def publish(
             record_kind="VEX",
             embargoed_build=has_lw,
         )
-        file_skipped = len(skipped_metadata) + len(skipped_vex)
+        file_skipped = (
+            len(skipped_metadata) + len(skipped_vex) + len(legacy_osv_files)
+        )
 
         # Validate GitHub OSV publication up front so a misconfiguration fails
         # before anything is written to Pulp.
