@@ -1299,3 +1299,187 @@ class TestListContent:
 
         assert result == []
         assert len(captured_requests) == 1
+
+
+class TestOrphanCleanup:
+    """Tests for orphan_cleanup() method."""
+
+    @patch("slan_cuan.pulp.tasks.time.sleep")
+    def test_orphan_cleanup_posts_content_hrefs_and_polls_task(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Mock POST cleanup and task poll; verify payload and poll."""
+        captured_payload = None
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            # First call is the cleanup POST
+            if "orphans/cleanup/" in str(request.url):
+                nonlocal captured_payload
+                captured_payload = json.loads(request.content)
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/cleanup-uuid/"},
+                )
+            # Second call is the task poll
+            return httpx.Response(
+                200,
+                json={"state": "completed"},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        content_hrefs = [
+            "/api/v3/content/maven/artifact/abc/",
+            "/api/v3/content/maven/artifact/def/",
+        ]
+        client.orphan_cleanup(content_hrefs)
+
+        # Verify POST payload
+        assert captured_payload is not None
+        assert captured_payload["content_hrefs"] == content_hrefs
+        assert captured_payload["orphan_protection_time"] == 0
+
+        # Verify task polling happened
+        assert len(captured_requests) >= 2
+        assert "orphans/cleanup/" in str(captured_requests[0].url)
+        assert captured_requests[0].method == "POST"
+        assert "cleanup-uuid" in str(captured_requests[1].url)
+        assert captured_requests[1].method == "GET"
+
+    @patch("slan_cuan.pulp.tasks.time.sleep")
+    def test_orphan_cleanup_uses_default_protection_time(
+        self, mock_sleep: Mock
+    ) -> None:
+        """POST body includes orphan_protection_time=0 by default."""
+        captured_payload = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_payload
+
+            # Capture cleanup request
+            if "orphans/cleanup/" in str(request.url):
+                captured_payload = json.loads(request.content)
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/cleanup-uuid/"},
+                )
+            # Task poll
+            return httpx.Response(
+                200,
+                json={"state": "completed"},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.orphan_cleanup(["/api/v3/content/maven/artifact/abc/"])
+
+        assert captured_payload is not None
+        assert "content_hrefs" in captured_payload
+        assert "orphan_protection_time" in captured_payload
+        assert captured_payload["orphan_protection_time"] == 0
+
+    @patch("slan_cuan.pulp.tasks.time.sleep")
+    def test_orphan_cleanup_accepts_custom_protection_time(
+        self, mock_sleep: Mock
+    ) -> None:
+        """orphan_cleanup accepts protection_time parameter."""
+        captured_payload = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_payload
+
+            # Capture cleanup request
+            if "orphans/cleanup/" in str(request.url):
+                captured_payload = json.loads(request.content)
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/cleanup-uuid/"},
+                )
+            # Task poll
+            return httpx.Response(
+                200,
+                json={"state": "completed"},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.orphan_cleanup(
+            ["/api/v3/content/maven/artifact/abc/"],
+            protection_time=3600,
+        )
+
+        assert captured_payload is not None
+        assert captured_payload["orphan_protection_time"] == 3600
+
+    @patch("slan_cuan.pulp.tasks.time.sleep")
+    def test_orphan_cleanup_raises_on_task_failure(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Task polls to failed state; assert PulpError propagates."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # First call is the cleanup POST
+            if "orphans/cleanup/" in str(request.url):
+                return httpx.Response(
+                    202,
+                    json={"task": "/api/v3/tasks/cleanup-uuid/"},
+                )
+            # Second call is the task poll - return failed state
+            return httpx.Response(
+                200,
+                json={
+                    "state": "failed",
+                    "error": {"description": "Cleanup failed"},
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            domain="testdomain",
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError):
+            client.orphan_cleanup(["/api/v3/content/maven/artifact/abc/"])

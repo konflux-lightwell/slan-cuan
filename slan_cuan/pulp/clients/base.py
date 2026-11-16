@@ -475,6 +475,64 @@ class PulpClientBase:
         )
         return poller.poll()
 
+    def orphan_cleanup(
+        self,
+        content_hrefs: list[str],
+        *,
+        protection_time: int = 0,
+    ) -> None:
+        """Clean up orphaned content units from the domain.
+
+        Mirrors npm-pulp-upload::orphan_cleanup_content, generalized to
+        always require explicit content_hrefs (never a bare "clean
+        everything" call) so other ecosystems' orphans in the same domain
+        are never swept.
+
+        Args:
+            content_hrefs: List of content unit pulp_href values to clean
+                up.
+            protection_time: Orphan protection time in seconds (default 0).
+
+        Raises:
+            PulpError: If the cleanup request fails or task polling fails.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for orphan cleanup. "
+                "Set --pulp-domain or use legacy deploy endpoint.",
+                status_code=0,
+                response_body="",
+            )
+
+        url = f"/api/pulp/{self._config.domain}/api/v3/orphans/cleanup/"
+        payload = {
+            "content_hrefs": content_hrefs,
+            "orphan_protection_time": protection_time,
+        }
+
+        response = self._request(
+            "POST",
+            url,
+            "Orphan cleanup",
+            json=payload,
+            headers=self._config.custom_headers or None,
+        )
+
+        try:
+            response_data = parse_json_dict(response, "Cleanup", PulpError)
+            task_href = str(response_data["task"])
+            if self._config.verbose:
+                click.echo(f"[{utc_timestamp()}]  Pulp task queued: {task_href}")
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse cleanup response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+        self.poll_task(task_href)
+
     def modify_repository(
         self,
         repository_href: str,
