@@ -578,6 +578,83 @@ class PulpClientBase:
                 response_body=response.text,
             ) from e
 
+    def get_labels(self, href: str) -> dict[str, str]:
+        """Get labels attached to a Pulp resource.
+
+        Args:
+            href: The pulp_href of the resource.
+
+        Returns:
+            A dict mapping label keys to values. Empty dict if no labels.
+
+        Raises:
+            PulpError: If the GET request fails.
+
+        """
+        response = self._request(
+            "GET",
+            href,
+            "Get labels",
+        )
+
+        response_data = parse_json_dict(response, "Get labels", PulpError)
+        labels = response_data.get("pulp_labels", {})
+        if not isinstance(labels, dict):
+            return {}
+        return labels
+
+    def set_label(
+        self,
+        href: str,
+        key: str,
+        value: str,
+        *,
+        cas_digest: str | None = None,
+        cas_label_key: str = "",
+    ) -> None:
+        """Set a label on a Pulp resource with optional compare-and-swap.
+
+        When cas_digest is provided, first checks that the current value of
+        cas_label_key either does not exist or matches cas_digest. If the
+        current value is non-empty and does not match, raises PulpError without
+        making the write.
+
+        Args:
+            href: The pulp_href of the resource.
+            key: The label key to set.
+            value: The label value to set.
+            cas_digest: Optional expected current value for CAS check. If the
+                cas_label_key's current value is non-empty and does not equal
+                this, PulpError is raised.
+            cas_label_key: The label key to check for CAS (if cas_digest given).
+
+        Raises:
+            PulpError: If the request fails or CAS check fails.
+
+        """
+        # CAS check: if cas_digest is provided, validate current value first
+        if cas_digest is not None:
+            current_labels = self.get_labels(href)
+            current_value = current_labels.get(cas_label_key, "")
+            if current_value and current_value != cas_digest:
+                raise PulpError(
+                    f"CAS check failed for label '{cas_label_key}': "
+                    f"expected '{cas_digest}', found '{current_value}'",
+                    status_code=0,
+                    response_body="",
+                )
+
+        # Write the label
+        url = f"{href}set_label/"
+        payload = {"key": key, "value": value}
+
+        self._request(
+            "POST",
+            url,
+            "Set label",
+            json=payload,
+        )
+
     def close(self) -> None:
         """Close the HTTP client."""
         self._client.close()

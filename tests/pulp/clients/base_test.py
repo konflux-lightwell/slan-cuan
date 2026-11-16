@@ -908,3 +908,237 @@ class TestRequestLogging:
         assert "Authorization': '***'" in captured.out
         assert "secret123" not in captured.out
         assert "X-Custom': 'public'" in captured.out
+
+
+class TestLabels:
+    """Tests for get_labels() and set_label() methods."""
+
+    def test_get_labels_returns_pulp_labels_dict(self) -> None:
+        """get_labels extracts pulp_labels dict from response."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"pulp_labels": {"a": "1"}},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.get_labels("/api/v3/repositories/maven/maven/uuid/")
+        assert result == {"a": "1"}
+
+    def test_get_labels_missing_pulp_labels_returns_empty_dict(self) -> None:
+        """get_labels returns empty dict when pulp_labels key missing."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"other_field": "value"})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.get_labels("/api/v3/repositories/maven/maven/uuid/")
+        assert result == {}
+
+    def test_set_label_without_cas_posts_unconditionally(self) -> None:
+        """set_label without CAS posts immediately without prior GET."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append((request.method, str(request.url)))
+            if "set_label/" in str(request.url):
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.set_label(
+            "/api/v3/repositories/maven/maven/uuid/",
+            "k",
+            "v",
+        )
+
+        # Should only have POST to set_label, no prior GET
+        assert len(captured_requests) == 1
+        assert captured_requests[0][0] == "POST"
+        assert "set_label/" in captured_requests[0][1]
+
+    def test_set_label_posts_with_correct_json_payload(self) -> None:
+        """set_label sends correct JSON payload with key and value."""
+        captured_payload = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_payload
+            if "set_label/" in str(request.url):
+                captured_payload = json.loads(request.content)
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.set_label(
+            "/api/v3/repositories/maven/maven/uuid/",
+            "mykey",
+            "myvalue",
+        )
+
+        assert captured_payload is not None
+        assert captured_payload == {"key": "mykey", "value": "myvalue"}
+
+    def test_set_label_with_cas_matching_current_proceeds(self) -> None:
+        """set_label with matching CAS digest still posts (idempotent write)."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request.method)
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={"pulp_labels": {"cas_key": "digest123"}},
+                )
+            if "set_label/" in str(request.url):
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.set_label(
+            "/api/v3/repositories/maven/maven/uuid/",
+            "k",
+            "v",
+            cas_digest="digest123",
+            cas_label_key="cas_key",
+        )
+
+        # Should have GET then POST
+        assert captured_requests == ["GET", "POST"]
+
+    def test_set_label_with_cas_mismatch_raises_pulp_error(self) -> None:
+        """set_label raises PulpError when CAS mismatch, no POST made."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request.method)
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={"pulp_labels": {"cas_key": "different_value"}},
+                )
+            if "set_label/" in str(request.url):
+                # If we get here, the test should fail
+                msg = "POST should not have been called on CAS mismatch"
+                raise AssertionError(msg)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        with pytest.raises(PulpError) as exc_info:
+            client.set_label(
+                "/api/v3/repositories/maven/maven/uuid/",
+                "k",
+                "v",
+                cas_digest="digest123",
+                cas_label_key="cas_key",
+            )
+
+        # Only GET should have been called
+        assert captured_requests == ["GET"]
+        assert "cas_key" in exc_info.value.message
+        msg = exc_info.value.message
+        assert "different_value" in msg or "digest123" in msg
+
+    def test_set_label_with_cas_empty_current_proceeds(self) -> None:
+        """set_label with empty current CAS value proceeds (first claim)."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request.method)
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={"pulp_labels": {}},  # cas_key not present
+                )
+            if "set_label/" in str(request.url):
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.set_label(
+            "/api/v3/repositories/maven/maven/uuid/",
+            "k",
+            "v",
+            cas_digest="digest123",
+            cas_label_key="cas_key",
+        )
+
+        # Should have GET then POST
+        assert captured_requests == ["GET", "POST"]
