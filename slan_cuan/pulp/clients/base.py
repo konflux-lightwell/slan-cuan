@@ -655,6 +655,56 @@ class PulpClientBase:
             json=payload,
         )
 
+    def list_content(
+        self, list_url: str, **filters: str
+    ) -> list[dict[str, object]]:
+        """List Pulp content with full pagination support.
+
+        Fetches all pages of results from a Pulp list endpoint, appending
+        results until a page returns fewer than page_size items. Filters
+        are passed as query parameters alongside limit and offset.
+
+        Args:
+            list_url: The full endpoint URL (e.g.
+                "/api/v3/content/npm/packages/").
+            **filters: Optional keyword filters to pass as query params
+                (e.g., name="my-package", version="1.0.0").
+
+        Returns:
+            Concatenated list of all result items from all pages.
+
+        Raises:
+            PulpError: If any request fails.
+
+        """
+        page_size = 100
+        offset = 0
+        all_results: list[dict[str, object]] = []
+
+        while True:
+            params = {**filters, "limit": page_size, "offset": offset}
+            response = self._request(
+                "GET",
+                list_url,
+                "Content list",
+                params=params,
+            )
+
+            response_data = parse_json_dict(response, "Content list", PulpError)
+            page_results = response_data.get("results", [])
+            if not isinstance(page_results, list):
+                page_results = []
+
+            all_results.extend(page_results)
+
+            # Stop pagination if this page has fewer than page_size items
+            if len(page_results) < page_size:
+                break
+
+            offset += page_size
+
+        return all_results
+
     def close(self) -> None:
         """Close the HTTP client."""
         self._client.close()

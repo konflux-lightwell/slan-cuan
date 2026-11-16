@@ -1142,3 +1142,160 @@ class TestLabels:
 
         # Should have GET then POST
         assert captured_requests == ["GET", "POST"]
+
+
+class TestListContent:
+    """Tests for list_content() paginated list method."""
+
+    def test_list_content_single_page(self) -> None:
+        """list_content returns results when fewer than page_size items."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"name": "item1", "id": 1},
+                        {"name": "item2", "id": 2},
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.list_content("/api/v3/content/npm/packages/")
+
+        assert result == [
+            {"name": "item1", "id": 1},
+            {"name": "item2", "id": 2},
+        ]
+        assert len(captured_requests) == 1
+        assert "limit=100" in str(captured_requests[0].url)
+        assert "offset=0" in str(captured_requests[0].url)
+
+    def test_list_content_paginates_on_full_page(self) -> None:
+        """list_content paginates when first page has exactly page_size."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            url_str = str(request.url)
+            # First request: offset=0, return page_size items
+            if "offset=0" in url_str:
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {"name": f"item{i}", "id": i} for i in range(1, 101)
+                        ]
+                    },
+                )
+            # Second request: offset=100, return fewer items (3)
+            elif "offset=100" in url_str:
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {"name": "item101", "id": 101},
+                            {"name": "item102", "id": 102},
+                            {"name": "item103", "id": 103},
+                        ]
+                    },
+                )
+            return httpx.Response(200, json={"results": []})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.list_content("/api/v3/content/npm/packages/")
+
+        assert len(result) == 103
+        assert result[0] == {"name": "item1", "id": 1}
+        assert result[99] == {"name": "item100", "id": 100}
+        assert result[100] == {"name": "item101", "id": 101}
+        assert result[102] == {"name": "item103", "id": 103}
+        assert len(captured_requests) == 2
+        assert "offset=100" in str(captured_requests[1].url)
+
+    def test_list_content_passes_filters_as_query_params(self) -> None:
+        """list_content includes filters in query params."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            return httpx.Response(
+                200,
+                json={"results": [{"name": "filtered_item"}]},
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.list_content(
+            "/api/v3/content/npm/packages/",
+            name="my-package",
+            version="1.0.0",
+        )
+
+        assert result == [{"name": "filtered_item"}]
+        assert len(captured_requests) == 1
+        url_str = str(captured_requests[0].url)
+        assert "name=my-package" in url_str
+        assert "version=1.0.0" in url_str
+        assert "limit=100" in url_str
+        assert "offset=0" in url_str
+
+    def test_list_content_empty_results(self) -> None:
+        """list_content returns empty list when no results."""
+        captured_requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            return httpx.Response(200, json={"results": []})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.list_content("/api/v3/content/npm/packages/")
+
+        assert result == []
+        assert len(captured_requests) == 1
