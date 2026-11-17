@@ -70,7 +70,7 @@ def assert_not_python_wheels_repository(repository: str) -> None:
         click.ClickException: ``repository`` is the python-wheels repo.
 
     """
-    if repository == PYTHON_WHEELS_REPOSITORY:
+    if repository.strip().lower() == PYTHON_WHEELS_REPOSITORY:
         raise click.ClickException(
             "Refusing to operate against the python-wheels Pulp repository "
             f"(PULP_REPOSITORY={PYTHON_WHEELS_REPOSITORY}) - this is almost "

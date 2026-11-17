@@ -659,6 +659,33 @@ class TestPythonWheelsRepositoryGuard:
         mocks.read_metadata.assert_not_called()
         assert mocks.client.method_calls == []
 
+    def test_upload_refuses_case_variant_of_python_wheels_repository(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        mocks: SimpleNamespace,
+    ) -> None:
+        """A case/whitespace variant like 'Main' is refused too."""
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        args = list(_BASE_ARGS)
+        args[args.index("--pulp-repository") + 1] = "Main"
+
+        result = runner.invoke(
+            main,
+            [
+                *args,
+                "--files-dir",
+                str(files_dir),
+                "--attestation-image-prefix",
+                "quay.io/org/att",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "python-wheels Pulp repository" in result.output
+        assert mocks.client.method_calls == []
+
 
 class TestUploadDryRun:
     """--dry-run previews `npm upload` without signing or any I/O."""

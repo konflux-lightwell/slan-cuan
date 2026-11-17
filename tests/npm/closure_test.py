@@ -748,6 +748,26 @@ class TestPythonWheelsRepositoryGuard:
         assert "Would " not in result.output
         _assert_no_io(mocks)
 
+    def test_refuses_case_variant_of_python_wheels_repository(
+        self, runner, mocks, tmp_path
+    ):
+        """A case/whitespace variant like 'Main' is refused too."""
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(_write_sidecar(tmp_path)),
+                *_pulp_args_for_repo("Main"),
+                *_OCI_ARGS,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "python-wheels Pulp repository" in result.output
+        _assert_no_io(mocks)
+
 
 class TestShowCommand:
     """CLI-level tests for `slan-cuan npm closure show`."""

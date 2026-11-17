@@ -9,10 +9,12 @@ import pytest
 
 from slan_cuan.npm.attestation import attestation_oci_tag
 from slan_cuan.npm.closure_model import (
+    PYTHON_WHEELS_REPOSITORY,
     SCHEMA_VERSION,
     UNVERIFIABLE_ALIAS_VERSION,
     alias_gap_key,
     apply_index_release,
+    assert_not_python_wheels_repository,
     compliance_filename,
     compliance_oci_tag,
     compute_level,
@@ -836,3 +838,25 @@ class TestComplianceNamingHelpers:
             compliance_filename("lodash", "4.17.21")
             == "lodash-4.17.21.tl-compliance.json"
         )
+
+
+class TestAssertNotPythonWheelsRepository:
+    """assert_not_python_wheels_repository() guard normalization."""
+
+    def test_exact_match_raises(self):
+        """The exact configured repo name ('main') is refused."""
+        with pytest.raises(click.ClickException, match="python-wheels"):
+            assert_not_python_wheels_repository(PYTHON_WHEELS_REPOSITORY)
+
+    @pytest.mark.parametrize(
+        "repository",
+        ["Main", "MAIN", " main", "main ", " Main "],
+    )
+    def test_case_and_whitespace_variants_raise(self, repository):
+        """Case/whitespace variants of 'main' are also refused."""
+        with pytest.raises(click.ClickException, match="python-wheels"):
+            assert_not_python_wheels_repository(repository)
+
+    def test_distinct_repository_does_not_raise(self):
+        """A genuinely different repository name is allowed through."""
+        assert_not_python_wheels_repository("npm-release")
