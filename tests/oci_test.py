@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,7 @@ import pytest
 from slan_cuan.models import ImageReference
 from slan_cuan.oci import (
     OrasError,
+    blob_fetch,
     deduplicate_referrers,
     discover,
     manifest_fetch,
@@ -873,3 +875,167 @@ class TestPush:
                 "registry/repo:tag",
                 annotations={},
             )
+
+
+#: Image used by the cross-function classification tests below.
+_CLASSIFY_IMAGE = ImageReference(
+    registry="quay.io",
+    repository="org/repo",
+    tag="v1",
+    digest=None,
+)
+_CLASSIFY_BLOB_REF = "quay.io/org/repo@sha256:" + "a" * 64
+
+
+def _call_pull(tmp_path: Path) -> None:
+    pull(_CLASSIFY_IMAGE, tmp_path / "out")
+
+
+def _call_blob_fetch(tmp_path: Path) -> None:
+    blob_fetch(_CLASSIFY_BLOB_REF, tmp_path / "blob")
+
+
+def _call_manifest_fetch(tmp_path: Path) -> None:
+    manifest_fetch(_CLASSIFY_IMAGE)
+
+
+def _call_discover(tmp_path: Path) -> None:
+    discover(_CLASSIFY_IMAGE, "application/vnd.example.sbom")
+
+
+def _call_push(tmp_path: Path) -> None:
+    artifact = tmp_path / "test.json"
+    artifact.write_text("{}")
+    push(artifact, str(_CLASSIFY_IMAGE), annotations={})
+
+
+#: (callable, expected not-found message, expected generic prefix)
+_ORAS_FUNCS = [
+    pytest.param(
+        _call_pull,
+        f"Image not found: {_CLASSIFY_IMAGE}",
+        "oras pull failed: ",
+        id="pull",
+    ),
+    pytest.param(
+        _call_blob_fetch,
+        f"Blob not found: {_CLASSIFY_BLOB_REF}",
+        "oras blob fetch failed: ",
+        id="blob_fetch",
+    ),
+    pytest.param(
+        _call_manifest_fetch,
+        f"Image not found: {_CLASSIFY_IMAGE}",
+        "oras manifest fetch failed: ",
+        id="manifest_fetch",
+    ),
+    pytest.param(
+        _call_discover,
+        f"Image not found: {_CLASSIFY_IMAGE}",
+        "oras discover failed: ",
+        id="discover",
+    ),
+    pytest.param(
+        _call_push,
+        f"Image not found: {_CLASSIFY_IMAGE}",
+        "oras push failed: ",
+        id="push",
+    ),
+]
+
+
+class TestOrasErrorClassification:
+    """Shared stderr classification across every oras wrapper."""
+
+    #: Verbatim stderr from real ``oras pull`` (oras 1.3.0) against Quay
+    #: for a tag that does not exist -- no "404"/"manifest unknown".
+    REAL_ORAS_NOT_FOUND = (
+        "Error response from registry: "
+        "quay.io/prometheus/busybox:lwlp4134-nonexistent-tag: not found"
+    )
+
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_real_oras_trailing_not_found_is_not_found(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        tmp_path: Path,
+    ) -> None:
+        """Real oras ``...: not found`` stderr is classified as not-found."""
+        mock_run.return_value = Mock(
+            returncode=1, stderr=self.REAL_ORAS_NOT_FOUND + "\n", stdout=""
+        )
+        with pytest.raises(OrasError) as excinfo:
+            call(tmp_path)
+        assert excinfo.value.message == not_found_msg
+        assert excinfo.value.stderr == self.REAL_ORAS_NOT_FOUND
+        assert excinfo.value.returncode == 1
+
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_trailing_not_found_beats_network_keyword_in_ref(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        tmp_path: Path,
+    ) -> None:
+        """A ref echoing "timeout"/"connection" is still not-found."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr=(
+                "Error response from registry: "
+                "quay.io/org/repo:timeout-signal-2.0.0: not found"
+            ),
+            stdout="",
+        )
+        with pytest.raises(OrasError) as excinfo:
+            call(tmp_path)
+        assert excinfo.value.message == not_found_msg
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "Error: credential helper not found in PATH",
+            "Error: resource not found: access denied",
+        ],
+    )
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_unanchored_not_found_stays_generic(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        stderr: str,
+        tmp_path: Path,
+    ) -> None:
+        """A "not found" that isn't the trailing ``: not found`` is generic."""
+        mock_run.return_value = Mock(returncode=1, stderr=stderr, stdout="")
+        with pytest.raises(OrasError) as excinfo:
+            call(tmp_path)
+        assert excinfo.value.message == generic + stderr
+
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_auth_beats_trailing_not_found(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        tmp_path: Path,
+    ) -> None:
+        """Auth failure keeps precedence over a trailing ``: not found``."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: 401 Unauthorized: token not found",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="^Authentication failed for "):
+            call(tmp_path)

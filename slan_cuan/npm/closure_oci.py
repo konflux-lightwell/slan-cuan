@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import subprocess
 import tempfile
 import time
@@ -139,48 +138,29 @@ def _resolve_oras_digest(image_ref: str) -> str:
     return normalize_digest(resolved)
 
 
-#: Markers (in ``OrasError.stderr``) of a registry "does not exist" reply:
-#: a missing tag/manifest, or (registry ``NAME_UNKNOWN``) a missing repo.
-_ORAS_NOT_FOUND_MARKERS = (
-    "404 Not Found",
-    "manifest unknown",
-    "name unknown",
-    "NAME_UNKNOWN",
-    "MANIFEST_UNKNOWN",
-)
-
-#: What real oras (1.3.0, against Quay) actually prints for a missing tag:
-#: ``Error response from registry: <ref>: not found``. Anchored to the end
-#: of stderr so an unrelated "not found" mid-message can't match.
-_ORAS_TRAILING_NOT_FOUND = re.compile(r":\s*not found\s*$")
+#: Registry ``NAME_UNKNOWN`` (a missing *repository*, not tag), which
+#: ``oci.pull`` deliberately leaves in its generic "oras pull failed"
+#: bucket. For the closure index/sidecars a never-created repo is the same
+#: "not seeded yet" state as a missing tag.
+_ORAS_REPO_UNKNOWN_MARKERS = ("name unknown", "NAME_UNKNOWN")
 
 
 def _is_oras_not_found(exc: oci.OrasError) -> bool:
     """Return True only when an ``oras pull`` failure means "not found".
 
-    ``oci.pull`` classifies a 404/manifest-unknown reply as an
-    ``"Image not found: ..."`` message; auth (401) is classified first, so
-    an auth failure never counts as not-found here. A missing repository
-    (``NAME_UNKNOWN``), which ``oci.pull`` lumps into its generic message,
-    is also treated as not-found.
-
-    Real oras output for a missing tag (``"...: <ref>: not found"``)
-    matches none of those, so it is also recognized by its trailing
-    ``: not found``. That check runs before the network-error short-circuit
-    because ``oci.pull`` labels any stderr containing "network"/
-    "connection"/"timeout" a network error -- and the echoed ref embeds the
-    npm package name (e.g. ``timeout-signal``).
+    Relies on ``oci.pull``'s own classification (``exc.message``): it
+    labels a 404/manifest-unknown reply, or real oras's trailing
+    ``"<ref>: not found"``, as ``"Image not found: ..."`` -- after auth,
+    and before network, so an auth failure never counts as not-found and
+    a ref embedding "timeout"/"connection" can't be mislabelled. The one
+    local extension is a missing repository (``NAME_UNKNOWN``), which only
+    ever appears in ``oci.pull``'s generic ``"oras pull failed"`` message.
     """
-    stderr = exc.stderr or ""
-    if exc.message.startswith("Authentication failed"):
-        return False
-    if _ORAS_TRAILING_NOT_FOUND.search(stderr):
-        return True
-    if exc.message.startswith("Network error"):
-        return False
     if exc.message.startswith("Image not found"):
         return True
-    return any(marker in stderr for marker in _ORAS_NOT_FOUND_MARKERS)
+    if not exc.message.startswith("oras pull failed"):
+        return False
+    return any(m in (exc.stderr or "") for m in _ORAS_REPO_UNKNOWN_MARKERS)
 
 
 def pull_json_artifact(

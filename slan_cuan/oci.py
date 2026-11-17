@@ -31,6 +31,58 @@ class OrasError(Exception):
         self.returncode = returncode
 
 
+#: What real oras (1.3.0, against Quay) prints for a missing tag/manifest:
+#: ``Error response from registry: <ref>: not found``. Anchored to the end
+#: of stderr so an unrelated "not found" mid-message (e.g. "credential
+#: helper not found in PATH") can't match.
+_ORAS_TRAILING_NOT_FOUND = re.compile(r":\s*not found\s*$")
+
+
+def _classify_oras_error(
+    stderr: str,
+    returncode: int,
+    *,
+    ref: object,
+    command: str,
+    not_found_message: str,
+    network_message: str,
+) -> OrasError:
+    """Build the ``OrasError`` for a failed oras command from its stderr.
+
+    Classification order: auth failure, then not-found, then network
+    error, then a generic failure. Not-found is checked before network
+    because oras echoes the ref in its not-found message, and a ref can
+    itself contain "timeout"/"connection" (e.g. an npm package name).
+
+    Args:
+        stderr: Stripped stderr of the failed oras command
+        returncode: Exit code of the failed oras command
+        ref: Image/blob reference, used in the auth-failure message
+        command: oras subcommand (e.g. ``"pull"``), used in the
+                 generic-failure message
+        not_found_message: Full message to use for the not-found case
+        network_message: Full message to use for the network-error case
+
+    Returns:
+        The classified ``OrasError``, for the caller to raise
+
+    """
+    lowered = stderr.lower()
+    if "401 Unauthorized" in stderr or "authentication required" in stderr:
+        message = f"Authentication failed for {ref}"
+    elif (
+        "404 Not Found" in stderr
+        or "manifest unknown" in stderr
+        or _ORAS_TRAILING_NOT_FOUND.search(stderr)
+    ):
+        message = not_found_message
+    elif "network" in lowered or "connection" in lowered or "timeout" in lowered:
+        message = network_message
+    else:
+        message = f"oras {command} failed: {stderr}"
+    return OrasError(message, stderr, returncode)
+
+
 def pull(
     image: ImageReference,
     output_dir: Path,
@@ -65,36 +117,14 @@ def pull(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-
-        # Parse stderr for specific error conditions
-        if "401 Unauthorized" in stderr or "authentication required" in stderr:
-            raise OrasError(
-                f"Authentication failed for {image}",
-                stderr,
-                result.returncode,
-            )
-        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
-            raise OrasError(
-                f"Image not found: {image}",
-                stderr,
-                result.returncode,
-            )
-        elif (
-            "network" in stderr.lower()
-            or "connection" in stderr.lower()
-            or "timeout" in stderr.lower()
-        ):
-            raise OrasError(
-                f"Network error pulling {image}",
-                stderr,
-                result.returncode,
-            )
-        else:
-            raise OrasError(
-                f"oras pull failed: {stderr}",
-                stderr,
-                result.returncode,
-            )
+        raise _classify_oras_error(
+            stderr,
+            result.returncode,
+            ref=image,
+            command="pull",
+            not_found_message=f"Image not found: {image}",
+            network_message=f"Network error pulling {image}",
+        )
 
 
 def blob_fetch(
@@ -134,35 +164,14 @@ def blob_fetch(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-
-        if "401 Unauthorized" in stderr or "authentication required" in stderr:
-            raise OrasError(
-                f"Authentication failed for {reference}",
-                stderr,
-                result.returncode,
-            )
-        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
-            raise OrasError(
-                f"Blob not found: {reference}",
-                stderr,
-                result.returncode,
-            )
-        elif (
-            "network" in stderr.lower()
-            or "connection" in stderr.lower()
-            or "timeout" in stderr.lower()
-        ):
-            raise OrasError(
-                f"Network error fetching blob {reference}",
-                stderr,
-                result.returncode,
-            )
-        else:
-            raise OrasError(
-                f"oras blob fetch failed: {stderr}",
-                stderr,
-                result.returncode,
-            )
+        raise _classify_oras_error(
+            stderr,
+            result.returncode,
+            ref=reference,
+            command="blob fetch",
+            not_found_message=f"Blob not found: {reference}",
+            network_message=f"Network error fetching blob {reference}",
+        )
 
 
 def manifest_fetch(
@@ -200,36 +209,14 @@ def manifest_fetch(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-
-        # Parse stderr for specific error conditions
-        if "401 Unauthorized" in stderr or "authentication required" in stderr:
-            raise OrasError(
-                f"Authentication failed for {image}",
-                stderr,
-                result.returncode,
-            )
-        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
-            raise OrasError(
-                f"Image not found: {image}",
-                stderr,
-                result.returncode,
-            )
-        elif (
-            "network" in stderr.lower()
-            or "connection" in stderr.lower()
-            or "timeout" in stderr.lower()
-        ):
-            raise OrasError(
-                f"Network error fetching manifest for {image}",
-                stderr,
-                result.returncode,
-            )
-        else:
-            raise OrasError(
-                f"oras manifest fetch failed: {stderr}",
-                stderr,
-                result.returncode,
-            )
+        raise _classify_oras_error(
+            stderr,
+            result.returncode,
+            ref=image,
+            command="manifest fetch",
+            not_found_message=f"Image not found: {image}",
+            network_message=f"Network error fetching manifest for {image}",
+        )
 
     return safe_json_load(
         result.stdout,
@@ -285,35 +272,14 @@ def discover(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-
-        if "401 Unauthorized" in stderr or "authentication required" in stderr:
-            raise OrasError(
-                f"Authentication failed for {image}",
-                stderr,
-                result.returncode,
-            )
-        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
-            raise OrasError(
-                f"Image not found: {image}",
-                stderr,
-                result.returncode,
-            )
-        elif (
-            "network" in stderr.lower()
-            or "connection" in stderr.lower()
-            or "timeout" in stderr.lower()
-        ):
-            raise OrasError(
-                f"Network error discovering referrers for {image}",
-                stderr,
-                result.returncode,
-            )
-        else:
-            raise OrasError(
-                f"oras discover failed: {stderr}",
-                stderr,
-                result.returncode,
-            )
+        raise _classify_oras_error(
+            stderr,
+            result.returncode,
+            ref=image,
+            command="discover",
+            not_found_message=f"Image not found: {image}",
+            network_message=f"Network error discovering referrers for {image}",
+        )
 
     data = safe_json_load(
         result.stdout,
@@ -388,36 +354,14 @@ def push(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-
-        # Parse stderr for specific error conditions
-        if "401 Unauthorized" in stderr or "authentication required" in stderr:
-            raise OrasError(
-                f"Authentication failed for {target_ref}",
-                stderr,
-                result.returncode,
-            )
-        elif "404 Not Found" in stderr or "manifest unknown" in stderr:
-            raise OrasError(
-                f"Image not found: {target_ref}",
-                stderr,
-                result.returncode,
-            )
-        elif (
-            "network" in stderr.lower()
-            or "connection" in stderr.lower()
-            or "timeout" in stderr.lower()
-        ):
-            raise OrasError(
-                f"Network error pushing {target_ref}",
-                stderr,
-                result.returncode,
-            )
-        else:
-            raise OrasError(
-                f"oras push failed: {stderr}",
-                stderr,
-                result.returncode,
-            )
+        raise _classify_oras_error(
+            stderr,
+            result.returncode,
+            ref=target_ref,
+            command="push",
+            not_found_message=f"Image not found: {target_ref}",
+            network_message=f"Network error pushing {target_ref}",
+        )
 
     # Extract digest from stdout+stderr via regex
     # Looking for "Digest: sha256:..." pattern
