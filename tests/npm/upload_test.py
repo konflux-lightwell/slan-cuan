@@ -15,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 
 from slan_cuan.cli import main
+from slan_cuan.npm.closure_model import PYTHON_WHEELS_REPOSITORY
 from slan_cuan.npm.metadata import (
     read_package_metadata as _real_read_package_metadata,
 )
@@ -615,6 +616,48 @@ class TestArtifactDetailFallback:
         mocks.client.upload_content.assert_called_once_with(
             tgz_b, "b", "1.0.0", labels=None
         )
+
+
+class TestPythonWheelsRepositoryGuard:
+    """--pulp-repository main (the python-wheels repo) is refused early."""
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_upload_refuses_python_wheels_repository_before_any_io(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        mocks: SimpleNamespace,
+        dry_run: bool,
+    ) -> None:
+        """Clear ClickException; no signing, Pulp client, or metadata read."""
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        args = list(_BASE_ARGS)
+        args[args.index("--pulp-repository") + 1] = PYTHON_WHEELS_REPOSITORY
+
+        result = runner.invoke(
+            main,
+            [
+                *(["--dry-run"] if dry_run else []),
+                *args,
+                "--files-dir",
+                str(files_dir),
+                "--attestation-image-prefix",
+                "quay.io/org/att",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "python-wheels Pulp repository" in result.output
+        assert "PULP_REPOSITORY=main" in result.output
+        assert "Would upload" not in result.output
+        mocks.client_cls.assert_not_called()
+        mocks.resolve_repo.assert_not_called()
+        mocks.resolve_file_repo.assert_not_called()
+        mocks.sign.assert_not_called()
+        mocks.publish_attestation.assert_not_called()
+        mocks.read_metadata.assert_not_called()
+        assert mocks.client.method_calls == []
 
 
 class TestUploadDryRun:

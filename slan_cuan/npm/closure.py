@@ -494,6 +494,7 @@ def update(
     """Apply a release sidecar: update compliance doc, index, and waiters."""
     del oras_options  # unused: see --oras-options help text above
 
+    closure_model.assert_not_python_wheels_repository(pulp_repository)
     if pulp_href:
         _assert_npm_content_href(pulp_href, "update --pulp-href")
 
@@ -643,6 +644,7 @@ def seed(
     init_index: bool,
 ) -> None:
     """Bootstrap compliance OCI documents for catalog packages missing one."""
+    closure_model.assert_not_python_wheels_repository(pulp_repository)
     if ctx.dry_run:
         # Side-effect-free preview: exit before any Pulp or OCI call.
         click.echo(
@@ -769,6 +771,7 @@ def rebalance(
     index_only: bool,
 ) -> None:
     """Rebuild the closure index, and optionally re-derive gap lists."""
+    closure_model.assert_not_python_wheels_repository(pulp_repository)
     if ctx.dry_run:
         # Side-effect-free preview: exit before any Pulp or OCI call.
         index_ref = closure_oci.closure_index_image_ref(

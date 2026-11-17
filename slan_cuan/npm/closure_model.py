@@ -52,6 +52,32 @@ _OCI_TAG_VALID_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
 _OCI_TAG_INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
 _OCI_TAG_FIRST_CHAR_RE = re.compile(r"^[A-Za-z0-9_]")
 
+#: Name of the python-wheels Pulp repository. npm commands refuse to
+#: operate against it (port of the original script's
+#: ``npm_repository_name`` guard against a misconfigured PULP_REPOSITORY).
+PYTHON_WHEELS_REPOSITORY = "main"
+
+
+def assert_not_python_wheels_repository(repository: str) -> None:
+    """Fail closed if an npm command targets the python-wheels repository.
+
+    Port of ``scripts/npm/update-npm-closure``'s ``npm_repository_name``
+    guard, shared by ``npm upload`` and the ``npm closure`` write
+    commands. Callers run it before any Pulp/OCI I/O (and before the
+    ``--dry-run`` early exit).
+
+    Raises:
+        click.ClickException: ``repository`` is the python-wheels repo.
+
+    """
+    if repository == PYTHON_WHEELS_REPOSITORY:
+        raise click.ClickException(
+            "Refusing to operate against the python-wheels Pulp repository "
+            f"(PULP_REPOSITORY={PYTHON_WHEELS_REPOSITORY}) - this is almost "
+            "certainly a misconfiguration for an npm release. Check "
+            "--pulp-repository."
+        )
+
 
 def is_npm_alias_spec(spec: str) -> bool:
     """Return True if ``spec`` is an npm alias spec (``npm:name@range``).

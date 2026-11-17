@@ -631,6 +631,46 @@ class TestDryRun:
         _assert_no_io(mocks)
 
 
+def _pulp_args_for_repo(repo_name: str) -> list[str]:
+    """Return _PULP_ARGS with --pulp-repository swapped for repo_name."""
+    args = list(_PULP_ARGS)
+    args[args.index("--pulp-repository") + 1] = repo_name
+    return args
+
+
+class TestPythonWheelsRepositoryGuard:
+    """--pulp-repository main (the python-wheels repo) is refused early."""
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    @pytest.mark.parametrize("command", ["update", "seed", "rebalance"])
+    def test_refuses_python_wheels_repository_before_any_io(
+        self, runner, mocks, tmp_path, command, dry_run
+    ):
+        """Each write command fails with a clear error and makes no I/O."""
+        extra = (
+            ["--sidecar", str(_write_sidecar(tmp_path))]
+            if command == "update"
+            else []
+        )
+        result = runner.invoke(
+            main,
+            [
+                *(["--dry-run"] if dry_run else []),
+                "npm",
+                "closure",
+                command,
+                *extra,
+                *_pulp_args_for_repo(closure_model.PYTHON_WHEELS_REPOSITORY),
+                *_OCI_ARGS,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "python-wheels Pulp repository" in result.output
+        assert "PULP_REPOSITORY=main" in result.output
+        assert "Would " not in result.output
+        _assert_no_io(mocks)
+
+
 class TestShowCommand:
     """CLI-level tests for `slan-cuan npm closure show`."""
 

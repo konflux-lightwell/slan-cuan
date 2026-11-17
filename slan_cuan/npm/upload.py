@@ -18,6 +18,7 @@ import click
 from slan_cuan.http import parse_custom_headers
 from slan_cuan.models import GlobalContext
 from slan_cuan.npm.attestation import publish_attestation, sign_package
+from slan_cuan.npm.closure_model import assert_not_python_wheels_repository
 from slan_cuan.npm.metadata import read_package_metadata
 from slan_cuan.oci import OrasError
 from slan_cuan.pulp import FILE_REPO_API_PATH_TEMPLATE, PulpConfig, PulpError
@@ -650,6 +651,7 @@ def upload(
     oras_options: str | None,
 ) -> None:
     """Upload npm package tarballs to a Pulp npm repository."""
+    assert_not_python_wheels_repository(pulp_repository)
     pulp_file_repository = (
         pulp_file_repository.strip() or None if pulp_file_repository else None
     )
