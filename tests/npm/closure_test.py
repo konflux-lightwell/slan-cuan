@@ -511,6 +511,91 @@ class TestRebalanceCommand:
         assert payload["compliance_updated"] == []
 
 
+def _assert_no_io(mocks: SimpleNamespace) -> None:
+    """Assert no Pulp client, Pulp helper, or OCI I/O was touched."""
+    for name in (
+        "client_cls",
+        "resolve_repo",
+        "pull_index",
+        "cas_publish_compliance",
+        "cas_push_index",
+        "publish_compliance_doc",
+        "publish_index",
+        "pull_compliance_doc",
+        "list_repo_packages",
+        "find_content_in_repo",
+        "drain",
+        "find_resolved_version_for_dep",
+        "tl_level_for_key",
+    ):
+        getattr(mocks, name).assert_not_called()
+    assert mocks.client.method_calls == []
+
+
+class TestDryRun:
+    """--dry-run previews closure write commands without any I/O."""
+
+    def test_update_dry_run_makes_no_calls(self, runner, mocks, tmp_path):
+        """Update --dry-run names the sidecar and makes zero I/O calls."""
+        sidecar = _write_sidecar(tmp_path, name="pkg", version="1.0.0")
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Would publish L3 compliance document for pkg@1.0.0" in (
+            result.output
+        )
+        assert str(sidecar) in result.output
+        _assert_no_io(mocks)
+
+    def test_seed_dry_run_makes_no_calls(self, runner, mocks):
+        """Seed --dry-run --init-index previews both steps, no I/O."""
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "npm",
+                "closure",
+                "seed",
+                "--init-index",
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Would push a seed compliance document" in result.output
+        assert "Would rebuild the closure index" in result.output
+        _assert_no_io(mocks)
+
+    def test_rebalance_dry_run_makes_no_calls(self, runner, mocks):
+        """Rebalance --dry-run previews gap re-derive + index push, no I/O."""
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                "npm",
+                "closure",
+                "rebalance",
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Would re-derive gap lists" in result.output
+        assert "Would rebuild the closure index" in result.output
+        _assert_no_io(mocks)
+
+
 class TestShowCommand:
     """CLI-level tests for `slan-cuan npm closure show`."""
 

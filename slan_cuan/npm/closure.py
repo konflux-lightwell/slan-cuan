@@ -507,6 +507,28 @@ def update(
 
     click.echo(f"Closure update for {package_key} (index + gap lists)", err=True)
 
+    if ctx.dry_run:
+        # Side-effect-free preview: exit before any Pulp or OCI call.
+        index_ref = closure_oci.closure_index_image_ref(
+            compliance_image_prefix, closure_index_image
+        )
+        doc_ref = closure_oci.compliance_image_ref(
+            release_doc["name"], release_doc["version"], compliance_image_prefix
+        )
+        click.echo(
+            f"Would publish {release_level} compliance document for "
+            f"{package_key} from {sidecar} to {doc_ref}"
+        )
+        click.echo(
+            f"Would set Pulp compliance labels on "
+            f"{pulp_href or f'{package_key} in repository {pulp_repository}'}"
+        )
+        click.echo(
+            f"Would refresh waiting parent compliance documents and push "
+            f"the closure index to {index_ref}"
+        )
+        return
+
     config = _pulp_config(
         ctx,
         pulp_url=pulp_url,
@@ -621,6 +643,24 @@ def seed(
     init_index: bool,
 ) -> None:
     """Bootstrap compliance OCI documents for catalog packages missing one."""
+    if ctx.dry_run:
+        # Side-effect-free preview: exit before any Pulp or OCI call.
+        click.echo(
+            f"Would push a seed compliance document under "
+            f"{compliance_image_prefix} (and set Pulp compliance labels) for "
+            f"every package in Pulp npm repository {pulp_repository} at "
+            f"{pulp_url} that has none yet"
+        )
+        if init_index:
+            index_ref = closure_oci.closure_index_image_ref(
+                compliance_image_prefix, closure_index_image
+            )
+            click.echo(
+                f"Would rebuild the closure index from all compliance "
+                f"documents and push it to {index_ref}"
+            )
+        return
+
     registry_url = npm_registry_url.rstrip("/")
     config = _pulp_config(
         ctx,
@@ -729,6 +769,23 @@ def rebalance(
     index_only: bool,
 ) -> None:
     """Rebuild the closure index, and optionally re-derive gap lists."""
+    if ctx.dry_run:
+        # Side-effect-free preview: exit before any Pulp or OCI call.
+        index_ref = closure_oci.closure_index_image_ref(
+            compliance_image_prefix, closure_index_image
+        )
+        if not index_only:
+            click.echo(
+                f"Would re-derive gap lists for every package in Pulp npm "
+                f"repository {pulp_repository} at {pulp_url} and republish "
+                f"changed compliance documents under {compliance_image_prefix}"
+            )
+        click.echo(
+            f"Would rebuild the closure index from current compliance "
+            f"documents and push it to {index_ref}"
+        )
+        return
+
     registry_url = npm_registry_url.rstrip("/")
     config = _pulp_config(
         ctx,

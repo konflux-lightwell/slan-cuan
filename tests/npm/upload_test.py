@@ -488,3 +488,42 @@ class TestUploadCommand:
         mocks.client.upload_content.assert_called_once_with(
             good_tgz, "good", "1.0.0", labels=None
         )
+
+
+class TestUploadDryRun:
+    """--dry-run previews `npm upload` without signing or any I/O."""
+
+    def test_upload_dry_run_makes_no_calls(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """--dry-run names each tgz/sidecar and touches no Pulp/OCI/cosign."""
+        files_dir = tmp_path / "files"
+        tgz = _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        sidecar = files_dir / "pkg-1.0.0.tl-compliance.json"
+        sidecar.write_text(json.dumps({"compliance_level": "L2"}))
+
+        result = runner.invoke(
+            main,
+            [
+                "--dry-run",
+                *_BASE_ARGS,
+                "--files-dir",
+                str(files_dir),
+                "--allow-content-replace",
+                "--attestation-image-prefix",
+                "quay.io/org/att",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert f"Would upload {tgz}" in result.output
+        assert str(sidecar) in result.output
+        assert "quay.io/org/att" in result.output
+        assert "--allow-content-replace" in result.output
+        mocks.client_cls.assert_not_called()
+        mocks.resolve_repo.assert_not_called()
+        mocks.resolve_file_repo.assert_not_called()
+        mocks.sign.assert_not_called()
+        mocks.publish_attestation.assert_not_called()
+        mocks.read_metadata.assert_not_called()
+        assert mocks.client.method_calls == []

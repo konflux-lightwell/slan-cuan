@@ -398,6 +398,41 @@ def _process_one_inner(
     return "uploaded"
 
 
+def _print_dry_run(
+    tgz_files: list[Path],
+    *,
+    pulp_url: str,
+    pulp_repository: str,
+    pulp_file_repository: str | None,
+    attestation_prefix: str | None,
+    allow_content_replace: bool,
+) -> None:
+    """Describe what ``upload`` would do, without signing or any I/O."""
+    for tgz_path in tgz_files:
+        click.echo(
+            f"Would upload {tgz_path} to Pulp npm repository "
+            f"{pulp_repository} at {pulp_url}"
+        )
+        sidecar = _sidecar_path(tgz_path)
+        if sidecar.exists():
+            target = (
+                f"and upload it to Pulp file repository {pulp_file_repository}"
+                if pulp_file_repository
+                else "(no --pulp-file-repository; sidecar upload skipped)"
+            )
+            click.echo(f"Would apply compliance label from {sidecar} {target}")
+        if attestation_prefix:
+            click.echo(
+                f"Would sign {tgz_path} and publish its attestation under "
+                f"{attestation_prefix}"
+            )
+    if allow_content_replace:
+        click.echo(
+            "Would replace existing same name@version content on digest "
+            "mismatch (--allow-content-replace)"
+        )
+
+
 def _print_summary(
     uploaded: list[Path], skipped: list[Path], failed: list[Path]
 ) -> None:
@@ -633,6 +668,19 @@ def upload(
     tgz_files = sorted(files_dir.rglob("*.tgz"))
     if not tgz_files:
         raise click.ClickException(f"No .tgz packages under {files_dir}")
+
+    if ctx.dry_run:
+        # Side-effect-free preview, matching extract's dry-run convention:
+        # exit before any signing, Pulp, or OCI call.
+        _print_dry_run(
+            tgz_files,
+            pulp_url=pulp_url,
+            pulp_repository=pulp_repository,
+            pulp_file_repository=pulp_file_repository,
+            attestation_prefix=attestation_prefix,
+            allow_content_replace=allow_content_replace,
+        )
+        return
 
     if attestation_prefix:
         click.echo(
