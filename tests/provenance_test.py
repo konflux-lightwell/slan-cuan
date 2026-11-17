@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 
 from slan_cuan.provenance import fetch_chains_provenance
@@ -253,3 +254,106 @@ class TestFetchChainsProvenanceExtension:
                 "k8s://ns/key",
                 predicate_types=("slsaprovenance", "slsaprovenance1"),
             )
+
+
+class TestFetchChainsProvenanceCosignFailureVsPolicyRejection:
+    """Cosign infra failures must stay distinguishable from policy rejection."""
+
+    _TYPES = ("slsaprovenance", "slsaprovenance1")
+
+    @staticmethod
+    def _rejecting_select(candidates: list[dict]) -> dict:
+        raise click.ClickException(
+            f"No trusted Chains SLSA provenance found ({len(candidates)})"
+        )
+
+    @patch(_RUN)
+    def test_all_types_fail_with_select_surfaces_real_cosign_stderr(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Every cosign call failing reports cosign's stderr, not select's."""
+        mock_run.side_effect = [
+            MagicMock(
+                returncode=1, stdout="", stderr="error: reading key: no such file"
+            ),
+            MagicMock(returncode=1, stdout="", stderr="dial tcp: refused"),
+        ]
+        select = MagicMock(side_effect=self._rejecting_select)
+
+        with pytest.raises(click.ClickException) as excinfo:
+            fetch_chains_provenance(
+                IMAGE,
+                tmp_path / "prov",
+                "k8s://ns/key",
+                predicate_types=self._TYPES,
+                select=select,
+            )
+
+        message = excinfo.value.message
+        assert "cosign verify-attestation failed" in message
+        assert "error: reading key: no such file" in message
+        assert "dial tcp: refused" in message
+        assert "No trusted" not in message
+        select.assert_not_called()
+
+    @patch(_RUN)
+    def test_select_rejecting_real_candidates_raises_select_message(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """A genuine trust-policy rejection still surfaces select's error."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout="", stderr="no matching attestations"),
+            MagicMock(
+                returncode=0,
+                stdout=_envelope_stdout({"untrusted": True}),
+                stderr="",
+            ),
+        ]
+        select = MagicMock(side_effect=self._rejecting_select)
+
+        with pytest.raises(click.ClickException, match="No trusted") as excinfo:
+            fetch_chains_provenance(
+                IMAGE,
+                tmp_path / "prov",
+                "k8s://ns/key",
+                predicate_types=self._TYPES,
+                select=select,
+            )
+
+        assert "cosign verify-attestation failed" not in excinfo.value.message
+        select.assert_called_once_with([{"untrusted": True}])
+
+    @patch(_RUN)
+    def test_single_type_failure_message_unchanged(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Default single-type failure keeps its exact original message."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="  verification failed \n"
+        )
+
+        with pytest.raises(click.ClickException) as excinfo:
+            fetch_chains_provenance(IMAGE, tmp_path / "prov", "k8s://ns/key")
+
+        assert excinfo.value.message == (
+            f"cosign verify-attestation failed for {IMAGE}: verification failed"
+        )
+
+    @patch(_RUN)
+    def test_select_not_called_when_cosign_succeeds_with_no_envelopes(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Cosign succeeding with zero envelopes reports no attestations."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        select = MagicMock(side_effect=self._rejecting_select)
+
+        with pytest.raises(click.ClickException, match="no attestations"):
+            fetch_chains_provenance(
+                IMAGE,
+                tmp_path / "prov",
+                "k8s://ns/key",
+                predicate_types=self._TYPES,
+                select=select,
+            )
+
+        select.assert_not_called()

@@ -24,6 +24,21 @@ from slan_cuan.models import parse_image_ref
 DEFAULT_PROVENANCE_KEY = "k8s://openshift-pipelines/public-key"
 
 
+def _format_failures(failures: list[tuple[str, str]]) -> str:
+    """Render per-predicate-type cosign stderr for an error message.
+
+    A single attempted type renders as its bare stderr (the original
+    single-call message format); multiple types render each type's
+    stderr labelled by type, so no failure reason is hidden.
+    """
+    if len(failures) == 1:
+        return failures[0][1]
+    return "; ".join(
+        f"[--type={ptype}] {stderr or '(no stderr)'}"
+        for ptype, stderr in failures
+    )
+
+
 def fetch_chains_provenance(
     image_ref_str: str,
     provenance_dir: Path,
@@ -45,12 +60,18 @@ def fetch_chains_provenance(
     ``payload``, bad base64) is likewise non-fatal — it simply
     contributes no candidate.
 
-    When ``select`` is ``None`` (the default, single-type usage), the
-    first candidate is written, raising ``click.ClickException`` if
-    there are none — unchanged from the original single-call behavior.
-    When ``select`` is given, ``select(candidates)`` is called and its
-    return value is written instead; ``select`` itself is responsible
-    for raising if no candidate qualifies.
+    Two failure tiers are checked before any candidate selection, so
+    they stay distinguishable from a trust-policy rejection: if every
+    type's cosign invocation failed, ``click.ClickException`` is raised
+    carrying cosign's real stderr (per type when several were tried);
+    if cosign succeeded but no envelope decoded, a "returned no
+    attestations" ``click.ClickException`` is raised.
+
+    Otherwise, when ``select`` is ``None`` (the default, single-type
+    usage), the first candidate is written. When ``select`` is given,
+    ``select(candidates)`` is called on the non-empty candidate list and
+    its return value is written instead; ``select`` itself is
+    responsible for raising if no candidate qualifies.
 
     Saves the chosen payload as ``<digest>.json`` so downstream
     consumers can match provenance to the image that produced it.
@@ -78,7 +99,7 @@ def fetch_chains_provenance(
             click.echo(f"Fetching Chains provenance for {image_ref_str}")
         candidates: list[dict] = []
         any_type_succeeded = False
-        last_failure_stderr = ""
+        failures: list[tuple[str, str]] = []
         for predicate_type in predicate_types:
             cmd = [
                 "cosign",
@@ -97,7 +118,7 @@ def fetch_chains_provenance(
                 # A single predicate type failing isn't fatal on its
                 # own — it just contributes no candidates. Only
                 # raised if every type fails (below).
-                last_failure_stderr = result.stderr.strip()
+                failures.append((predicate_type, result.stderr.strip()))
                 continue
             any_type_succeeded = True
             stdout = result.stdout.strip()
@@ -115,20 +136,22 @@ def fetch_chains_provenance(
                     continue
                 candidates.append(payload)
 
-        if select is not None:
-            payload = select(candidates)
-        elif candidates:
-            payload = candidates[0]
-        elif not any_type_succeeded:
+        # Order matters: a cosign infrastructure failure (bad key,
+        # unreachable registry/tlog, ...) on every type must surface
+        # cosign's own stderr, never be masked by select()'s generic
+        # trust-policy rejection message — mirroring the bash
+        # original's `verified -ne 1` check before its jq filter.
+        if not any_type_succeeded:
             raise click.ClickException(
                 "cosign verify-attestation failed for "
-                f"{image_ref_str}: {last_failure_stderr}"
+                f"{image_ref_str}: {_format_failures(failures)}"
             )
-        else:
+        if not candidates:
             raise click.ClickException(
                 "cosign verify-attestation returned no attestations for "
                 f"{image_ref_str}"
             )
+        payload = select(candidates) if select is not None else candidates[0]
 
         out_file.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
