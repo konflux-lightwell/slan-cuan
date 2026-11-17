@@ -80,14 +80,72 @@ class TestClosureIndexImageRef:
 class TestPullJsonArtifact:
     """pull_json_artifact -- pull, find-by-suffix, parse, resolve digest."""
 
-    def test_pull_json_artifact_returns_none_when_pull_fails(self):
-        """A failed oci.pull (image not seeded yet) yields (None, None)."""
+    @pytest.mark.parametrize(
+        ("message", "stderr"),
+        [
+            (f"Image not found: {PREFIX}", "Error: 404 Not Found"),
+            (
+                f"Image not found: {PREFIX}",
+                "Error: GET ...: MANIFEST_UNKNOWN: manifest unknown",
+            ),
+            (
+                "oras pull failed: NAME_UNKNOWN",
+                "Error: NAME_UNKNOWN: repository name not known to registry",
+            ),
+        ],
+    )
+    def test_pull_json_artifact_returns_none_when_image_not_found(
+        self, message, stderr
+    ):
+        """A not-found oci.pull (image not seeded yet) yields (None, None)."""
         with patch(
             "slan_cuan.npm.closure_oci.oci.pull",
-            side_effect=oci.OrasError("not found", "stderr", 1),
+            side_effect=oci.OrasError(message, stderr, 1),
         ):
             result = pull_json_artifact(PREFIX, ".tl-compliance.json")
         assert result == (None, None)
+
+    @pytest.mark.parametrize(
+        ("message", "stderr"),
+        [
+            (
+                f"Authentication failed for {PREFIX}",
+                "Error: 401 Unauthorized",
+            ),
+            (
+                f"Network error pulling {PREFIX}",
+                "Error: dial tcp: connection refused",
+            ),
+            ("oras pull failed: boom", "boom"),
+        ],
+    )
+    def test_pull_json_artifact_raises_on_non_not_found_errors(
+        self, message, stderr
+    ):
+        """Auth/network/unclassified failures raise, never "not seeded"."""
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.oci.pull",
+                side_effect=oci.OrasError(message, stderr, 1),
+            ),
+            pytest.raises(click.ClickException, match="Failed to pull"),
+        ):
+            pull_json_artifact(PREFIX, ".tl-compliance.json")
+
+    def test_cas_push_index_does_not_push_after_transient_pull_error(self):
+        """A network blip pulling the index must not push an empty index."""
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.oci.pull",
+                side_effect=oci.OrasError(
+                    f"Network error pulling {PREFIX}", "timeout", 1
+                ),
+            ),
+            patch("slan_cuan.npm.closure_oci.oci.push") as mock_push,
+            pytest.raises(click.ClickException),
+        ):
+            cas_push_index(lambda idx: idx, compliance_image_prefix=PREFIX)
+        mock_push.assert_not_called()
 
     def test_pull_json_artifact_finds_matching_suffix_file_and_parses_json(
         self,

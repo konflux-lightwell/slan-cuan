@@ -142,6 +142,33 @@ def _resolve_oras_digest(image_ref: str) -> str:
     return normalize_digest(resolved)
 
 
+#: Markers (in ``OrasError.stderr``) of a registry "does not exist" reply:
+#: a missing tag/manifest, or (registry ``NAME_UNKNOWN``) a missing repo.
+_ORAS_NOT_FOUND_MARKERS = (
+    "404 Not Found",
+    "manifest unknown",
+    "name unknown",
+    "NAME_UNKNOWN",
+    "MANIFEST_UNKNOWN",
+)
+
+
+def _is_oras_not_found(exc: oci.OrasError) -> bool:
+    """Return True only when an ``oras pull`` failure means "not found".
+
+    ``oci.pull`` classifies a 404/manifest-unknown reply as an
+    ``"Image not found: ..."`` message; auth (401) is classified first, so
+    an auth failure never counts as not-found here. A missing repository
+    (``NAME_UNKNOWN``), which ``oci.pull`` lumps into its generic message,
+    is also treated as not-found.
+    """
+    if exc.message.startswith(("Authentication failed", "Network error")):
+        return False
+    if exc.message.startswith("Image not found"):
+        return True
+    return any(marker in (exc.stderr or "") for marker in _ORAS_NOT_FOUND_MARKERS)
+
+
 def pull_json_artifact(
     image_ref: str,
     filename_suffix: str,
@@ -155,10 +182,15 @@ def pull_json_artifact(
     parses it as JSON, and resolves the image's digest.
 
     Returns:
-        ``(parsed_json, digest)``, or ``(None, None)`` when the pull
-        fails (a legitimate "not seeded yet" state -- the image simply
-        doesn't exist) or no matching file is found in the pulled
-        artifact.
+        ``(parsed_json, digest)``, or ``(None, None)`` when the image/
+        manifest does not exist (a legitimate "not seeded yet" state) or
+        no matching file is found in the pulled artifact.
+
+    Raises:
+        click.ClickException: The pull failed for any reason other than
+            "not found" (auth, network, unclassified). Treating those as
+            "not seeded" would let ``cas_push_index`` overwrite a real,
+            populated index with an empty-plus-one-mutation one.
 
     """
     with tempfile.TemporaryDirectory(prefix="npm-oras-pull.") as tmp:
@@ -170,8 +202,12 @@ def pull_json_artifact(
                 auth_file=auth_file,
                 verbose=verbose,
             )
-        except oci.OrasError:
-            return None, None
+        except oci.OrasError as exc:
+            if _is_oras_not_found(exc):
+                return None, None
+            raise click.ClickException(
+                f"Failed to pull {image_ref}: {exc.message}"
+            ) from exc
         match = next(
             (
                 entry
