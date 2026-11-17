@@ -374,6 +374,45 @@ class TestGetArtifactSha256:
         assert "/api/v3/artifacts/abc123/" in captured_url
 
 
+class TestGetContent:
+    """Tests for get_content()."""
+
+    def test_get_content_returns_full_body(self) -> None:
+        """GET of the content href returns the full JSON body, not labels."""
+        body = {
+            "pulp_href": "/api/v3/content/npm/packages/xyz/",
+            "name": "pkg",
+            "version": "1.0.0",
+            "artifact": "/api/v3/artifacts/abc/",
+            "pulp_labels": {"tl.compliance_level": "L2"},
+        }
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200, json=body)
+
+        client = _client_with_transport(handler)
+
+        result = client.get_content("/api/v3/content/npm/packages/xyz/")
+
+        assert result == body
+        assert len(captured) == 1
+        assert captured[0].method == "GET"
+        assert "/api/v3/content/npm/packages/xyz/" in str(captured[0].url)
+
+    def test_get_content_raises_pulp_error_on_failure(self) -> None:
+        """A non-2xx response raises PulpError."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={"detail": "Not found."})
+
+        client = _client_with_transport(handler)
+
+        with pytest.raises(PulpError):
+            client.get_content("/api/v3/content/npm/packages/xyz/")
+
+
 class TestDestroyRepositoryVersion:
     """Tests for destroy_repository_version()."""
 

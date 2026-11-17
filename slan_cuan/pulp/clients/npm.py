@@ -180,6 +180,30 @@ class PulpNpmClient(PulpClientBase):
         response_data = parse_json_dict(response, "Artifact", PulpError)
         return str(response_data.get("sha256", ""))
 
+    def get_content(self, content_href: str) -> dict[str, object]:
+        """Fetch the full detail record for an npm content unit.
+
+        Used as a fallback when a content list response omits fields
+        (e.g. ``artifact``) that the detail endpoint returns.
+
+        Args:
+            content_href: The pulp_href of the content unit.
+
+        Returns:
+            The full parsed JSON body of the content detail response.
+
+        Raises:
+            PulpError: If the GET request fails or the response isn't a
+                JSON object.
+
+        """
+        response = self._request(
+            "GET",
+            content_href,
+            "Content lookup",
+        )
+        return parse_json_dict(response, "Content", PulpError)
+
     def destroy_repository_version(self, version_href: str) -> None:
         """Delete a repository version, polling the task if one is returned.
 

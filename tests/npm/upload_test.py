@@ -490,6 +490,75 @@ class TestUploadCommand:
         )
 
 
+class TestArtifactDetailFallback:
+    """Existing-package artifact href: list row first, detail GET fallback."""
+
+    def test_missing_artifact_falls_back_to_content_detail(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A list row without `artifact` triggers get_content(pulp_href)."""
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        mocks.read_metadata.return_value = ("pkg", "1.0.0")
+        existing_href = "/api/v3/content/npm/packages/existing/"
+        mocks.client.find_by_name_version.return_value = {
+            "pulp_href": existing_href,
+        }
+        mocks.client.get_content.return_value = {
+            "pulp_href": existing_href,
+            "artifact": "/api/v3/artifacts/detail/",
+        }
+        mocks.client.get_artifact_sha256.return_value = "localsha"
+
+        result = runner.invoke(main, [*_BASE_ARGS, "--files-dir", str(files_dir)])
+
+        assert result.exit_code == 0, result.output
+        mocks.client.get_content.assert_called_once_with(existing_href)
+        mocks.client.get_artifact_sha256.assert_called_once_with(
+            "/api/v3/artifacts/detail/"
+        )
+        assert "Skipped - already in Pulp (1)" in result.output
+
+    def test_present_artifact_skips_content_detail_fetch(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A list row with `artifact` makes no extra detail GET."""
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        mocks.read_metadata.return_value = ("pkg", "1.0.0")
+        mocks.client.find_by_name_version.return_value = {
+            "pulp_href": "/api/v3/content/npm/packages/existing/",
+            "artifact": "/api/v3/artifacts/abc/",
+        }
+        mocks.client.get_artifact_sha256.return_value = "localsha"
+
+        result = runner.invoke(main, [*_BASE_ARGS, "--files-dir", str(files_dir)])
+
+        assert result.exit_code == 0, result.output
+        mocks.client.get_content.assert_not_called()
+        mocks.client.get_artifact_sha256.assert_called_once_with(
+            "/api/v3/artifacts/abc/"
+        )
+
+    def test_artifact_missing_from_list_and_detail_fails_file(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """No artifact in either response fails only that file."""
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        mocks.read_metadata.return_value = ("pkg", "1.0.0")
+        mocks.client.find_by_name_version.return_value = {
+            "pulp_href": "/api/v3/content/npm/packages/existing/",
+        }
+        mocks.client.get_content.return_value = {}
+
+        result = runner.invoke(main, [*_BASE_ARGS, "--files-dir", str(files_dir)])
+
+        assert result.exit_code != 0
+        assert "no artifact href" in result.output
+        mocks.client.get_artifact_sha256.assert_not_called()
+
+
 class TestUploadDryRun:
     """--dry-run previews `npm upload` without signing or any I/O."""
 

@@ -324,13 +324,12 @@ def _process_one_inner(
             click.echo(f"ERROR: no pulp_href for existing {name}@{version}")
             return "failed"
         content_href = str(content_href)
-        # KNOWN GAP (tracked, see task-11-report.md "Important 1"): the bash
-        # original falls back to a GET-by-content-href detail fetch when the
-        # list response omits `artifact`. PulpNpmClient.find_by_name_version
-        # (Task 9, already reviewed/approved) has no such fallback, and
-        # extending it is out of this task's scope — a missing artifact href
-        # here fails only this one file rather than crashing the batch.
+        # Port of the bash original's fallback: the Pulp npm list response
+        # has been observed omitting `artifact`, so fetch the content
+        # detail record by href when (and only when) it's missing.
         artifact_href = existing.get("artifact")
+        if not artifact_href:
+            artifact_href = client.get_content(content_href).get("artifact")
         if not artifact_href:
             click.echo(f"ERROR: no artifact href for existing {name}@{version}")
             return "failed"
