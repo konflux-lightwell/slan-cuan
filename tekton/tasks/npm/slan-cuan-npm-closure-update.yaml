@@ -37,7 +37,10 @@ spec:
     Pulp credentials are injected from SERVICE_ACCOUNT_SECRET_NAME's
     username/password keys via secretKeyRef, the same pattern
     slan-cuan-npm-upload.yaml uses (replacing the old Task's
-    /etc/service-account-secret volume mount). OCI registry auth for the
+    /etc/service-account-secret volume mount). The rest of the shared Pulp
+    connection option block (cert auth via PULP_CERT_SECRET mounted at
+    /certs/client, task timeouts, custom headers, INSECURE) is wired with
+    the same params as slan-cuan-npm-upload.yaml. OCI registry auth for the
     compliance-document/index pushes is not plumbed through
     ORAS_OPTIONS/select-oci-auth the way the old wrapper did it; like the
     other slan-cuan Tasks, it relies on Tekton creds-init populating
@@ -65,6 +68,44 @@ spec:
     - name: PULP_REPOSITORY
       type: string
       description: The Pulp npm repository (for content href resolution)
+    - name: INSECURE
+      type: string
+      description: Disable TLS verification (true/false).
+      default: "false"
+    - name: PULP_AUTH_TYPE
+      type: string
+      description: Pulp authentication method (tbr or cert).
+      default: "tbr"
+    - name: PULP_CERT_SECRET
+      type: string
+      description: >-
+        K8s Secret name containing client certificate for entitlement cert
+        auth (keys: tls.crt, tls.key). Only used when PULP_AUTH_TYPE=cert.
+      default: ""
+    - name: PULP_CLIENT_CERT_PATH
+      type: string
+      description: Path to the client certificate file inside the mounted secret.
+      default: ""
+    - name: PULP_CLIENT_KEY_PATH
+      type: string
+      description: Path to the client key file inside the mounted secret.
+      default: ""
+    - name: PULP_TASK_TIMEOUT
+      type: string
+      description: Maximum time in seconds to wait for asynchronous Pulp tasks.
+      default: "2700"
+    - name: PULP_MAX_TOTAL_TASK_TIMEOUT
+      type: string
+      description: >-
+        Absolute maximum time in seconds across all Pulp task state and
+        blocker timeout resets. Defaults to twice PULP_TASK_TIMEOUT.
+      default: ""
+    - name: PULP_CUSTOM_HEADERS
+      type: string
+      description: |
+        Custom HTTP headers to send on repository modify requests
+        (CRLF/newline-delimited 'Key: Value' lines or JSON object).
+      default: ""
     - name: COMPLIANCE_IMAGE_PREFIX
       type: string
       description: OCI repo prefix for per-package compliance-document artifacts
@@ -131,6 +172,10 @@ spec:
       name: sourceDataArtifact
       type: string
   volumes:
+    - name: client-cert
+      secret:
+        secretName: $(params.PULP_CERT_SECRET)
+        optional: true
     - name: workdir
       emptyDir: {}
     - name: trusted-ca
@@ -194,6 +239,20 @@ spec:
           value: $(params.CLOSURE_INDEX_IMAGE)
         - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_NPM_REGISTRY_URL
           value: $(params.TL_NPM_REGISTRY_URL)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_INSECURE
+          value: $(params.INSECURE)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_AUTH_TYPE
+          value: $(params.PULP_AUTH_TYPE)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_CLIENT_CERT
+          value: $(params.PULP_CLIENT_CERT_PATH)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_CLIENT_KEY
+          value: $(params.PULP_CLIENT_KEY_PATH)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_TASK_TIMEOUT
+          value: $(params.PULP_TASK_TIMEOUT)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_MAX_TOTAL_TASK_TIMEOUT
+          value: $(params.PULP_MAX_TOTAL_TASK_TIMEOUT)
+        - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_CUSTOM_HEADERS
+          value: $(params.PULP_CUSTOM_HEADERS)
         - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_ORAS_OPTIONS
           value: $(params.orasOptions)
         - name: SLAN_CUAN_NPM_CLOSURE_UPDATE_PULP_USERNAME
@@ -212,6 +271,10 @@ spec:
           value: $(params.dataDir)/$(params.filesDir)
         - name: PULP_CONTENT_HREF
           value: $(params.PULP_CONTENT_HREF)
+      volumeMounts:
+        - name: client-cert
+          mountPath: "/certs/client"
+          readOnly: true
       computeResources:
         limits:
           memory: 512Mi
