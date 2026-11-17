@@ -29,6 +29,8 @@ Direct port of ``scripts/npm/update-npm-closure``'s same-named functions
 from __future__ import annotations
 
 import copy
+import hashlib
+import re
 import time
 
 import click
@@ -43,6 +45,12 @@ INDEX_SCHEMA_VERSION = 1
 
 #: Pulp label recording a package's sticky compliance level (L1/L2/L3).
 COMPLIANCE_LABEL = "tl.compliance_level"
+
+#: OCI distribution-spec tag constraints used by ``compliance_oci_tag``.
+_OCI_TAG_MAX_LENGTH = 128
+_OCI_TAG_VALID_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
+_OCI_TAG_INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
+_OCI_TAG_FIRST_CHAR_RE = re.compile(r"^[A-Za-z0-9_]")
 
 
 def node_key(name: str, version: str) -> str:
@@ -79,15 +87,41 @@ def npm_version_satisfies(version: str, spec: str) -> bool:
 def compliance_oci_tag(name: str, version: str) -> str:
     """Build the OCI tag used for a package's compliance-document artifact.
 
-    Scoped names (``@scope/pkg``) have their leading ``@`` stripped and
-    ``/`` replaced with ``-``. Note this is a different sanitization than
-    ``attestation_oci_tag``'s regex-based one (no ``--`` separator, no
-    suffix, no character-class escaping or length cap) — the two naming
-    conventions come from genuinely different source scripts.
+    A plain unscoped ``name-version`` whose characters are all OCI-tag-safe
+    (``[A-Za-z0-9._-]``, first character ``[A-Za-z0-9_]``, at most 128
+    chars) is used verbatim, e.g. ``lodash-4.17.21``.
+
+    Anything else -- a scoped name, or a name/version needing sanitization
+    or truncation -- gets a readable, sanitized base (scoped ``@scope/pkg``
+    becomes ``scope--pkg``, invalid characters become ``-``) plus an
+    ``_<16 hex>`` suffix: the first 16 hex chars of the SHA-256 of
+    ``name@version``. That keeps lossy encodings collision-free: ``@scope/
+    pkg``, ``scope-pkg``, and ``scope--pkg`` all tag differently, as do
+    ``1.0.0+build.1`` and ``1.0.0-build.1``. A suffixed tag can never equal
+    a verbatim one, since a verbatim tag always ends in a semver version
+    (which contains ``.`` and never ``_``) while the suffix is dot-free hex
+    after an ``_``.
+
+    Deliberately a separate tag namespace from
+    ``slan_cuan.npm.attestation.attestation_oci_tag`` (``-att`` suffix,
+    no hash): the compliance and attestation artifacts for the same
+    package@version are different OCI refs.
     """
-    if name.startswith("@"):
-        return f"{name.lstrip('@').replace('/', '-')}-{version}"
-    return f"{name}-{version}"
+    raw = f"{name}-{version}"
+    if (
+        not name.startswith("@")
+        and len(raw) <= _OCI_TAG_MAX_LENGTH
+        and _OCI_TAG_VALID_RE.fullmatch(raw)
+    ):
+        return raw
+
+    readable = name[1:].replace("/", "--") if name.startswith("@") else name
+    base = _OCI_TAG_INVALID_CHARS_RE.sub("-", f"{readable}-{version}")
+    if not _OCI_TAG_FIRST_CHAR_RE.match(base):
+        base = f"_{base}"
+    digest = hashlib.sha256(node_key(name, version).encode()).hexdigest()
+    suffix = f"_{digest[:16]}"
+    return base[: _OCI_TAG_MAX_LENGTH - len(suffix)] + suffix
 
 
 def compliance_filename(name: str, version: str) -> str:

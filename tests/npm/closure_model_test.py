@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 import click
 import pytest
 
+from slan_cuan.npm.attestation import attestation_oci_tag
 from slan_cuan.npm.closure_model import (
     SCHEMA_VERSION,
     apply_index_release,
@@ -31,6 +34,13 @@ from slan_cuan.npm.closure_model import (
     sidecar_to_doc,
     validate_gap_subset,
 )
+
+
+def _is_valid_oci_tag(tag: str) -> bool:
+    """Return True for a tag matching the OCI distribution-spec grammar."""
+    return len(tag) <= 128 and bool(
+        re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]*", tag)
+    )
 
 
 class TestNodeKey:
@@ -587,19 +597,51 @@ class TestComplianceNamingHelpers:
         assert compliance_oci_tag("lodash", "4.17.21") == "lodash-4.17.21"
 
     def test_compliance_oci_tag_scoped_name(self):
-        """Scoped name strips the leading '@' and replaces '/' with '-'.
+        """Scoped name: '@' stripped, '/' -> '--', plus a hash suffix."""
+        tag = compliance_oci_tag("@scope/pkg", "1.0.0")
+        assert re.fullmatch(r"scope--pkg-1\.0\.0_[0-9a-f]{16}", tag)
 
-        This is a different sanitization than attestation_oci_tag's
-        regex-based one — no "--" separator, no "-att" suffix, no
-        character-class sanitization or length cap.
-        """
-        assert compliance_oci_tag("@scope/pkg", "1.0.0") == "scope-pkg-1.0.0"
+    def test_compliance_oci_tag_scoped_does_not_collide_with_unscoped(self):
+        """@scope/pkg, scope-pkg, and scope--pkg all get distinct tags."""
+        tags = {
+            compliance_oci_tag("@scope/pkg", "1.0.0"),
+            compliance_oci_tag("scope-pkg", "1.0.0"),
+            compliance_oci_tag("scope--pkg", "1.0.0"),
+        }
+        assert len(tags) == 3
+
+    def test_compliance_oci_tag_sanitizes_invalid_version_chars(self):
+        """'+' build metadata yields a valid tag, distinct from '-'."""
+        tag = compliance_oci_tag("pkg", "1.0.0+build.1")
+        assert _is_valid_oci_tag(tag)
+        assert tag.startswith("pkg-1.0.0-build.1_")
+        assert tag != compliance_oci_tag("pkg", "1.0.0-build.1")
+
+    def test_compliance_oci_tag_fixes_invalid_first_char_and_caps_length(
+        self,
+    ):
+        """Invalid leading char gets fixed; very long inputs cap at 128."""
+        assert _is_valid_oci_tag(compliance_oci_tag(".hidden", "1.0.0"))
+        long_a = compliance_oci_tag("a" * 200, "1.0.0")
+        long_b = compliance_oci_tag("a" * 200, "1.0.1")
+        assert len(long_a) == 128
+        assert _is_valid_oci_tag(long_a)
+        assert long_a != long_b
+
+    def test_compliance_oci_tag_differs_from_attestation_tag(self):
+        """Compliance and attestation tags are separate namespaces."""
+        for name in ("lodash", "@scope/pkg"):
+            assert compliance_oci_tag(name, "1.0.0") != attestation_oci_tag(
+                name, "1.0.0"
+            )
 
     def test_compliance_filename_matches_tag_convention(self):
         """compliance_filename appends '.tl-compliance.json' to the tag."""
-        assert (
-            compliance_filename("@scope/pkg", "1.0.0")
-            == "scope-pkg-1.0.0.tl-compliance.json"
+        assert compliance_filename("@scope/pkg", "1.0.0") == (
+            compliance_oci_tag("@scope/pkg", "1.0.0") + ".tl-compliance.json"
+        )
+        assert compliance_filename("@scope/pkg", "1.0.0") != (
+            compliance_filename("scope-pkg", "1.0.0")
         )
         assert (
             compliance_filename("lodash", "4.17.21")

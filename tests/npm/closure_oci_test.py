@@ -48,11 +48,15 @@ class TestComplianceImageRef:
         )
 
     def test_compliance_image_ref_sanitizes_scoped_name(self):
-        """A scoped package name loses its leading @ and / -> -."""
-        assert (
-            compliance_image_ref("@scope/pkg", "1.0.0", "quay.io/org/repo:latest")
-            == "quay.io/org/repo:scope-pkg-1.0.0"
+        """A scoped package name uses compliance_oci_tag's collision-free tag."""
+        assert compliance_image_ref(
+            "@scope/pkg", "1.0.0", "quay.io/org/repo:latest"
+        ) == "quay.io/org/repo:" + closure_model.compliance_oci_tag(
+            "@scope/pkg", "1.0.0"
         )
+        assert compliance_image_ref(
+            "@scope/pkg", "1.0.0", "quay.io/org/repo"
+        ) != compliance_image_ref("scope-pkg", "1.0.0", "quay.io/org/repo")
 
 
 class TestClosureIndexImageRef:
