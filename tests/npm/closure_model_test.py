@@ -22,6 +22,7 @@ from slan_cuan.npm.closure_model import (
     hydrate_seed_doc,
     index_add_parent,
     index_remove_key,
+    is_npm_alias_spec,
     node_key,
     normalize_direct_dependencies,
     normalize_doc,
@@ -59,6 +60,41 @@ class TestNodeKey:
     def test_parse_node_key_unscoped(self):
         """Unscoped name/version round-trips too."""
         assert parse_node_key("lodash@4.17.21") == ("lodash", "4.17.21")
+
+    def test_node_key_and_parse_round_trip_ordinary_semver_range(self):
+        """An ordinary semver-range version string round-trips cleanly."""
+        key = node_key("lodash", "^4.17.0")
+        assert key == "lodash@^4.17.0"
+        assert parse_node_key(key) == ("lodash", "^4.17.0")
+
+    def test_node_key_with_alias_spec_corrupts_round_trip(self):
+        """Documents why alias specs must never reach node_key directly.
+
+        An npm alias spec (``"npm:real-pkg@^1.2.0"``) contains its own
+        ``@``, so building a node key from it and parsing it back via
+        ``rsplit("@", 1)`` does NOT recover the original (name, version)
+        -- this is exactly why callers must detect alias specs (see
+        ``is_npm_alias_spec``) and handle them before ever calling
+        ``node_key``.
+        """
+        key = node_key("my-dep", "npm:real-pkg@^1.2.0")
+        assert key == "my-dep@npm:real-pkg@^1.2.0"
+        assert parse_node_key(key) != ("my-dep", "npm:real-pkg@^1.2.0")
+        assert parse_node_key(key) == ("my-dep@npm:real-pkg", "^1.2.0")
+
+
+class TestIsNpmAliasSpec:
+    """is_npm_alias_spec detects npm: alias dependency specs."""
+
+    def test_detects_alias_spec(self):
+        """A spec starting with 'npm:' is an alias spec."""
+        assert is_npm_alias_spec("npm:real-pkg@^1.2.0") is True
+
+    def test_ordinary_specs_are_not_alias_specs(self):
+        """Ordinary version/range specs are not alias specs."""
+        assert is_npm_alias_spec("^1.2.0") is False
+        assert is_npm_alias_spec("1.2.3") is False
+        assert is_npm_alias_spec("*") is False
 
 
 class TestComputeLevel:
@@ -101,6 +137,16 @@ class TestNormalizeGapList:
             {"name": "a", "requested": "1.0.0"},
             {"name": "", "version": "9.9.9"},
         ]
+        assert normalize_gap_list(value) == ["a@1.0.0", "b@2.0.0"]
+
+    def test_normalize_gap_list_mixed_string_first(self):
+        """A string item followed by a dict item doesn't crash or drop."""
+        value = ["a@1.0.0", {"name": "b", "version": "2.0.0"}]
+        assert normalize_gap_list(value) == ["a@1.0.0", "b@2.0.0"]
+
+    def test_normalize_gap_list_mixed_dict_first(self):
+        """A dict item followed by a string item still works (regression)."""
+        value = [{"name": "b", "version": "2.0.0"}, "a@1.0.0"]
         assert normalize_gap_list(value) == ["a@1.0.0", "b@2.0.0"]
 
 

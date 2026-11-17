@@ -510,6 +510,41 @@ class TestRebalanceCommand:
         payload = json.loads(result.stdout)
         assert payload["compliance_updated"] == []
 
+    def test_rebalance_command_skips_alias_dependency_spec(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """An npm: alias dependency spec is skipped, not treated as a gap.
+
+        A package.json dependency value like
+        ``"npm:real-pkg@^1.2.0"`` is an alias spec: its real registry
+        identity is a different package than the dependency's own name.
+        Resolving it via ``find_resolved_version_for_dep``/building a
+        node key from the alias dep's own name would either crash
+        ``parse_node_key`` (the spec itself contains an ``@``) or
+        silently attribute a different package's identity to the wrong
+        name, so it must be skipped entirely rather than resolved.
+        """
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        doc = self._doc(
+            direct_dependencies=[
+                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"}
+            ],
+        )
+        mocks.pull_compliance_doc.return_value = (doc, DIGEST)
+
+        result = runner.invoke(
+            main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.find_resolved_version_for_dep.assert_not_called()
+        mocks.tl_level_for_key.assert_not_called()
+        mocks.publish_compliance_doc.assert_not_called()
+        payload = json.loads(result.stdout)
+        assert payload["compliance_updated"] == []
+
 
 def _assert_no_io(mocks: SimpleNamespace) -> None:
     """Assert no Pulp client, Pulp helper, or OCI I/O was touched."""

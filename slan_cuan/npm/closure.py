@@ -830,6 +830,22 @@ def rebalance(
                 dep_spec = dep.get("requested") or ""
                 if not dep_name or not dep_spec:
                     continue
+                if closure_model.is_npm_alias_spec(dep_spec):
+                    # An alias spec's real registry identity (name +
+                    # version) is a different package than dep_name, and
+                    # the raw spec string itself contains an "@", which
+                    # would corrupt node_key/parse_node_key round-
+                    # tripping. The closure/compliance system tracks
+                    # real npm registry packages by name+version, so
+                    # skip creating a blocker/gap entry for this
+                    # dependency rather than build a key under the
+                    # wrong (or corrupted) identity.
+                    click.echo(
+                        f"Skip alias dependency {dep_name}@{dep_spec} "
+                        "(alias specs are not tracked as closure gaps)",
+                        err=True,
+                    )
+                    continue
                 resolved = find_resolved_version_for_dep(
                     client, dep_name, dep_spec, doc, repo_version
                 )

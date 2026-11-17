@@ -53,6 +53,23 @@ _OCI_TAG_INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
 _OCI_TAG_FIRST_CHAR_RE = re.compile(r"^[A-Za-z0-9_]")
 
 
+def is_npm_alias_spec(spec: str) -> bool:
+    """Return True if ``spec`` is an npm alias spec (``npm:name@range``).
+
+    A package.json dependency value like ``"npm:real-pkg@^1.2.0"`` means
+    "install ``real-pkg`` at this range, but refer to it locally under a
+    different key name." Its real registry identity (name + version) is
+    different from the dependency's own key name, so closure/compliance
+    gap tracking -- which keys everything by ``name@version`` of the
+    actual registry package -- must not build a node key directly from
+    an alias dependency's own name and this raw spec string: doing so
+    would both corrupt ``node_key``/``parse_node_key`` round-tripping
+    (the spec itself contains an ``@``) and mix an alias's local name
+    with a different package's real identity.
+    """
+    return spec.startswith("npm:")
+
+
 def node_key(name: str, version: str) -> str:
     """Build a closure graph key from a package name and version."""
     return f"{name}@{version}"
@@ -145,26 +162,22 @@ def compute_level(doc: dict) -> str:
 def normalize_gap_list(value: list | None) -> list[str]:
     """Normalize a gap list to a sorted, deduplicated list of node keys.
 
-    Accepts either a list of ``name@version`` strings, or a list of
-    ``{"name": ..., "version"|"requested": ...}`` dicts (dropping any
-    entry missing a usable name or version).
+    Accepts either a list of ``name@version`` strings, a list of
+    ``{"name": ..., "version"|"requested": ...}`` dicts, or a mix of the
+    two (dropping any dict entry missing a usable name or version).
     """
-    if not value:
+    if not value or not isinstance(value, list):
         return []
-    if isinstance(value, list) and value and isinstance(value[0], str):
-        return sorted(set(value))
-    if isinstance(value, list):
-        out = []
-        for item in value:
-            if isinstance(item, str):
-                out.append(item)
-            elif isinstance(item, dict):
-                name = item.get("name") or ""
-                version = item.get("version") or item.get("requested") or ""
-                if name and version:
-                    out.append(node_key(name, version))
-        return sorted(set(out))
-    return []
+    out = []
+    for item in value:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            name = item.get("name") or ""
+            version = item.get("version") or item.get("requested") or ""
+            if name and version:
+                out.append(node_key(name, version))
+    return sorted(set(out))
 
 
 def normalize_direct_dependencies(value: list | None) -> list[dict]:
