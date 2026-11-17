@@ -68,7 +68,7 @@ def _classify_oras_error(
 
     """
     lowered = stderr.lower()
-    if "401 Unauthorized" in stderr or "authentication required" in stderr:
+    if "401 unauthorized" in lowered or "authentication required" in lowered:
         message = f"Authentication failed for {ref}"
     elif (
         "404 Not Found" in stderr

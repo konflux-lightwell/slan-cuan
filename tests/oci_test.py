@@ -1052,3 +1052,71 @@ class TestOrasErrorClassification:
         )
         with pytest.raises(OrasError, match="^Authentication failed for "):
             call(tmp_path)
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "Error: 401 UNAUTHORIZED",
+            "Error: Authentication Required",
+        ],
+    )
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_auth_failure_is_case_insensitive(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        stderr: str,
+        tmp_path: Path,
+    ) -> None:
+        """Upper/mixed-case auth-failure strings are still classified."""
+        mock_run.return_value = Mock(returncode=1, stderr=stderr, stdout="")
+        with pytest.raises(OrasError, match="^Authentication failed for "):
+            call(tmp_path)
+
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_multiline_stderr_trailing_not_found_is_not_found(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        tmp_path: Path,
+    ) -> None:
+        """Multi-line stderr is not-found when the FINAL line ends that way."""
+        stderr = (
+            "Warning: using cached credentials\n"
+            "Error response from registry: "
+            "quay.io/org/repo:tag: not found"
+        )
+        mock_run.return_value = Mock(returncode=1, stderr=stderr, stdout="")
+        with pytest.raises(OrasError) as excinfo:
+            call(tmp_path)
+        assert excinfo.value.message == not_found_msg
+
+    @pytest.mark.parametrize(("call", "not_found_msg", "generic"), _ORAS_FUNCS)
+    @patch("slan_cuan.oci.subprocess.run")
+    def test_multiline_stderr_not_found_on_nonfinal_line_stays_generic(
+        self,
+        mock_run: Mock,
+        call: Callable[[Path], None],
+        not_found_msg: str,
+        generic: str,
+        tmp_path: Path,
+    ) -> None:
+        """A ``: not found`` on a non-final line does not match.
+
+        Only the real final line -- a generic error summary here -- should
+        drive classification.
+        """
+        stderr = (
+            "quay.io/org/repo:tag: not found\n"
+            "Error: unexpected server error (HTTP 500)"
+        )
+        mock_run.return_value = Mock(returncode=1, stderr=stderr, stdout="")
+        with pytest.raises(OrasError) as excinfo:
+            call(tmp_path)
+        assert excinfo.value.message == generic + stderr
