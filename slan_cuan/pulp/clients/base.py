@@ -537,12 +537,18 @@ class PulpClientBase:
         self,
         repository_href: str,
         content_unit_hrefs: list[str],
+        *,
+        remove_content_unit_hrefs: list[str] | None = None,
     ) -> ModifyResult:
-        """Add content units to a repository in a single version.
+        """Add (and optionally remove) content units in a single version.
 
         Args:
             repository_href: The pulp_href of the repository.
             content_unit_hrefs: List of content unit pulp_href values to add.
+            remove_content_unit_hrefs: Optional list of content unit
+                pulp_href values to remove in the same modify call (mirrors
+                the bash scripts' ``remove_content_units`` payload field,
+                used by the npm upload replace-on-digest-mismatch path).
 
         Returns:
             ModifyResult with task details and repository version.
@@ -552,7 +558,11 @@ class PulpClientBase:
 
         """
         url = f"{repository_href}modify/"
-        payload = {"add_content_units": content_unit_hrefs}
+        payload: dict[str, list[str]] = {}
+        if content_unit_hrefs:
+            payload["add_content_units"] = content_unit_hrefs
+        if remove_content_unit_hrefs:
+            payload["remove_content_units"] = remove_content_unit_hrefs
 
         response = self._request(
             "POST",

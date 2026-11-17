@@ -503,6 +503,87 @@ class TestModifyRepository:
         assert result.repository_version == "/api/v3/versions/1/"
         assert captured_headers.get("x-task-diagnostics") == "pyinstrument"
 
+    @patch("slan_cuan.pulp.tasks.time.sleep")
+    def test_modify_repository_remove_only_payload(
+        self, mock_sleep: Mock
+    ) -> None:
+        """remove_content_unit_hrefs alone sends only remove_content_units."""
+        captured_payload: dict[str, object] | None = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_payload
+            if "modify/" in str(request.url):
+                captured_payload = json.loads(request.content)
+                return httpx.Response(
+                    202, json={"task": "/api/v3/tasks/task-uuid/"}
+                )
+            return httpx.Response(
+                200, json={"state": "completed", "created_resources": []}
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.modify_repository(
+            "/api/v3/repositories/maven/maven/uuid/",
+            [],
+            remove_content_unit_hrefs=["/api/v3/content/maven/artifact/abc/"],
+        )
+
+        assert captured_payload == {
+            "remove_content_units": ["/api/v3/content/maven/artifact/abc/"]
+        }
+
+    @patch("slan_cuan.pulp.tasks.time.sleep")
+    def test_modify_repository_add_and_remove_combined_payload(
+        self, mock_sleep: Mock
+    ) -> None:
+        """Both add and remove hrefs can be sent in a single modify call."""
+        captured_payload: dict[str, object] | None = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_payload
+            if "modify/" in str(request.url):
+                captured_payload = json.loads(request.content)
+                return httpx.Response(
+                    202, json={"task": "/api/v3/tasks/task-uuid/"}
+                )
+            return httpx.Response(
+                200, json={"state": "completed", "created_resources": []}
+            )
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.modify_repository(
+            "/api/v3/repositories/maven/maven/uuid/",
+            ["/api/v3/content/maven/artifact/new/"],
+            remove_content_unit_hrefs=["/api/v3/content/maven/artifact/old/"],
+        )
+
+        assert captured_payload == {
+            "add_content_units": ["/api/v3/content/maven/artifact/new/"],
+            "remove_content_units": ["/api/v3/content/maven/artifact/old/"],
+        }
+
 
 class TestResolveRepository:
     """Tests for resolve_repository() method."""
