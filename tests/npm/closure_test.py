@@ -1,0 +1,655 @@
+"""Tests for the `slan-cuan npm closure` command group.
+
+These are integration-flavored tests of orchestration -- Tasks 13-15's own
+pure/Pulp/OCI logic is already unit-tested in ``closure_model_test.py``,
+``closure_pulp_test.py``, and ``closure_oci_test.py``. Here, ``PulpNpmClient``
+construction and every ``closure_pulp``/``closure_oci`` module function are
+mocked; what's under test is that ``closure.py`` wires them together in the
+right order with the right data.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+from contextlib import ExitStack
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+from click.testing import CliRunner
+
+from slan_cuan.cli import main
+from slan_cuan.npm import closure_model
+from slan_cuan.npm.closure import drain_blocker_parents
+
+_REPO_HREF = "/api/v3/repositories/npm/npm/abc/"
+_REPO_VERSION_HREF = "/api/v3/repositories/npm/npm/abc/versions/5/"
+_REPO = {
+    "name": "npm-registry",
+    "pulp_href": _REPO_HREF,
+    "latest_version_href": _REPO_VERSION_HREF,
+}
+DIGEST = "sha256:" + "a" * 64
+INDEX_DIGEST = "sha256:" + "b" * 64
+
+_PULP_ARGS = [
+    "--pulp-url",
+    "https://pulp.example.com",
+    "--pulp-repository",
+    "npm-registry",
+    "--pulp-domain",
+    "lightwell",
+    "--pulp-username",
+    "user",
+    "--pulp-password",
+    "pass",
+]
+_OCI_ARGS = ["--compliance-image-prefix", "quay.io/org/tl-compliance"]
+
+
+def _write_sidecar(
+    tmp_path: Path,
+    *,
+    name: str = "pkg",
+    version: str = "1.0.0",
+    compliance_level: str = "L3",
+    direct_dependencies: list[dict] | None = None,
+    missing_gaps: list[str] | None = None,
+    pending_l3_gaps: list[str] | None = None,
+) -> Path:
+    """Write a *.tl-compliance.json sidecar and return its path."""
+    payload = {
+        "name": name,
+        "version": version,
+        "compliance_level": compliance_level,
+        "direct_dependencies": direct_dependencies or [],
+        "missing_gaps": missing_gaps or [],
+        "pending_l3_gaps": pending_l3_gaps or [],
+    }
+    path = tmp_path / f"{name}-{version}.tl-compliance.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+@pytest.fixture
+def runner() -> CliRunner:
+    """Return a Click CLI test runner."""
+    return CliRunner()
+
+
+@pytest.fixture
+def mocks():
+    """Patch every external dependency of slan_cuan.npm.closure.
+
+    Defaults to a quiet "no blockers, nothing to do" happy path; individual
+    tests override return_value/side_effect as needed.
+    """
+    with ExitStack() as stack:
+        client = MagicMock()
+        client_cls = stack.enter_context(
+            patch("slan_cuan.npm.closure.PulpNpmClient")
+        )
+        client_cls.return_value.__enter__.return_value = client
+
+        resolve_repo = stack.enter_context(
+            patch("slan_cuan.npm.closure._resolve_repo", return_value=dict(_REPO))
+        )
+
+        pull_index = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_oci.pull_index")
+        )
+        pull_index.return_value = (closure_model.empty_index(), None)
+
+        cas_publish_compliance = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_oci.cas_publish_compliance")
+        )
+        cas_publish_compliance.return_value = DIGEST
+
+        cas_push_index = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_oci.cas_push_index")
+        )
+        cas_push_index.return_value = ({"revision": 1}, INDEX_DIGEST)
+
+        publish_compliance_doc = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_oci.publish_compliance_doc")
+        )
+        publish_compliance_doc.return_value = DIGEST
+
+        publish_index = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_oci.publish_index")
+        )
+        publish_index.return_value = (
+            {"revision": 1, "entries": {}},
+            INDEX_DIGEST,
+        )
+
+        pull_compliance_doc = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_oci.pull_compliance_doc")
+        )
+        pull_compliance_doc.return_value = (None, None)
+
+        list_repo_packages = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_pulp.list_repo_packages")
+        )
+        list_repo_packages.return_value = iter([])
+
+        find_content_in_repo = stack.enter_context(
+            patch("slan_cuan.npm.closure.closure_pulp.find_content_in_repo")
+        )
+        find_content_in_repo.return_value = None
+
+        drain = stack.enter_context(
+            patch("slan_cuan.npm.closure.drain_blocker_parents")
+        )
+        drain.return_value = []
+
+        find_resolved_version_for_dep = stack.enter_context(
+            patch("slan_cuan.npm.closure.find_resolved_version_for_dep")
+        )
+        find_resolved_version_for_dep.return_value = None
+
+        tl_level_for_key = stack.enter_context(
+            patch("slan_cuan.npm.closure.tl_level_for_key")
+        )
+        tl_level_for_key.return_value = "L3"
+
+        yield SimpleNamespace(
+            client=client,
+            client_cls=client_cls,
+            resolve_repo=resolve_repo,
+            pull_index=pull_index,
+            cas_publish_compliance=cas_publish_compliance,
+            cas_push_index=cas_push_index,
+            publish_compliance_doc=publish_compliance_doc,
+            publish_index=publish_index,
+            pull_compliance_doc=pull_compliance_doc,
+            list_repo_packages=list_repo_packages,
+            find_content_in_repo=find_content_in_repo,
+            drain=drain,
+            find_resolved_version_for_dep=find_resolved_version_for_dep,
+            tl_level_for_key=tl_level_for_key,
+        )
+
+
+class TestUpdateCommand:
+    """CLI-level tests for `slan-cuan npm closure update`."""
+
+    def test_update_command_prints_summary_json(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A clean no-blockers release prints the five documented keys."""
+        sidecar = _write_sidecar(tmp_path)
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert set(payload.keys()) == {
+            "package",
+            "compliance_level",
+            "compliance_oci_digest",
+            "parents_refreshed",
+            "index_revision",
+            "index_oci_digest",
+        }
+        assert payload["package"] == "pkg@1.0.0"
+        assert payload["compliance_level"] == "L3"
+        assert payload["compliance_oci_digest"] == DIGEST
+        assert payload["parents_refreshed"] == []
+        assert payload["index_revision"] == 1
+        assert payload["index_oci_digest"] == INDEX_DIGEST
+
+    def test_update_command_rejects_non_npm_pulp_href(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A --pulp-href that isn't an npm content href is rejected up front."""
+        sidecar = _write_sidecar(tmp_path)
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                "--pulp-href",
+                "/api/pulp/lightwell/api/v3/content/python/packages/abc/",
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Refusing non-npm content href" in result.output
+        mocks.resolve_repo.assert_not_called()
+        mocks.pull_index.assert_not_called()
+        mocks.cas_publish_compliance.assert_not_called()
+        mocks.cas_push_index.assert_not_called()
+
+    def test_update_command_drains_blocker_parents_before_publishing(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A release that is itself an index blocker drains before publish."""
+        sidecar = _write_sidecar(tmp_path)
+        index = {
+            "schema_version": 1,
+            "revision": 3,
+            "updated_at": "2026-01-01T00:00:00Z",
+            "entries": {"pkg@1.0.0": {"parents": ["waiter@2.0.0"]}},
+        }
+        mocks.pull_index.return_value = (index, "sha256:" + "c" * 64)
+
+        call_order: list[str] = []
+        mocks.drain.side_effect = lambda *a, **k: call_order.append("drain") or []
+        mocks.cas_publish_compliance.side_effect = lambda *a, **k: (
+            call_order.append("publish") or DIGEST
+        )
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.drain.assert_called_once()
+        assert mocks.drain.call_args[0][3] == "pkg@1.0.0"
+        assert call_order == ["drain", "publish"]
+
+    def test_update_command_registers_release_gaps_on_index_when_not_l3(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A non-L3 release registers its own gaps as index entries."""
+        sidecar = _write_sidecar(
+            tmp_path,
+            compliance_level="L1",
+            direct_dependencies=[{"name": "dep", "requested": "^1.0.0"}],
+            missing_gaps=["dep@^1.0.0"],
+        )
+
+        captured: dict[str, dict] = {}
+
+        def _fake_cas_push_index(mutator, **kwargs):
+            captured["index"] = mutator(closure_model.empty_index())
+            return captured["index"], INDEX_DIGEST
+
+        mocks.cas_push_index.side_effect = _fake_cas_push_index
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["index"]["entries"]["dep@^1.0.0"]["parents"] == [
+            "pkg@1.0.0"
+        ]
+
+    def test_update_command_clears_index_entries_on_l3_release(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """An L3 release clears the index entries it satisfies."""
+        sidecar = _write_sidecar(tmp_path, compliance_level="L3")
+        pre_index = {
+            "schema_version": 1,
+            "revision": 0,
+            "updated_at": "2026-01-01T00:00:00Z",
+            "entries": {"pkg@1.0.0": {"parents": ["waiter@1.0.0"]}},
+        }
+        mocks.pull_index.return_value = (copy.deepcopy(pre_index), None)
+
+        captured: dict[str, dict] = {}
+
+        def _fake_cas_push_index(mutator, **kwargs):
+            captured["index"] = mutator(copy.deepcopy(pre_index))
+            return captured["index"], INDEX_DIGEST
+
+        mocks.cas_push_index.side_effect = _fake_cas_push_index
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["index"]["entries"] == {}
+
+
+class TestSeedCommand:
+    """CLI-level tests for `slan-cuan npm closure seed`."""
+
+    def test_seed_command_skips_packages_with_existing_compliance_doc(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """A package with an existing compliance doc is not republished."""
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        existing_doc = closure_model.normalize_doc(
+            {"name": "pkg", "version": "1.0.0", "compliance_level": "L2"}
+        )
+        mocks.pull_compliance_doc.return_value = (existing_doc, DIGEST)
+
+        result = runner.invoke(
+            main, ["npm", "closure", "seed", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.publish_compliance_doc.assert_not_called()
+        payload = json.loads(result.stdout)
+        assert payload["node_count"] == 1
+        assert payload["compliance_oci"] == {}
+        assert payload["index"] is None
+
+    def test_seed_command_hydrates_new_packages_as_l3(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """A package with no existing compliance doc is seeded at L3."""
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        mocks.pull_compliance_doc.return_value = (None, None)
+
+        result = runner.invoke(
+            main, ["npm", "closure", "seed", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.publish_compliance_doc.assert_called_once()
+        published_doc = mocks.publish_compliance_doc.call_args[0][1]
+        assert published_doc["compliance_level"] == "L3"
+        assert published_doc["name"] == "pkg"
+        payload = json.loads(result.stdout)
+        assert payload["node_count"] == 1
+        assert payload["compliance_oci"] == {"pkg@1.0.0": DIGEST}
+
+    def test_seed_command_init_index_rebuilds_and_pushes(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """--init-index rebuilds the index from seeded docs and pushes it."""
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        mocks.pull_compliance_doc.return_value = (None, None)
+        mocks.publish_index.return_value = (
+            {"revision": 1, "entries": {}},
+            INDEX_DIGEST,
+        )
+
+        result = runner.invoke(
+            main,
+            ["npm", "closure", "seed", "--init-index", *_PULP_ARGS, *_OCI_ARGS],
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.publish_index.assert_called_once()
+        assert mocks.publish_index.call_args.kwargs["expected_revision"] == 0
+        payload = json.loads(result.stdout)
+        assert payload["index"] == {"revision": 1, "digest": INDEX_DIGEST}
+
+
+class TestRebalanceCommand:
+    """CLI-level tests for `slan-cuan npm closure rebalance`."""
+
+    def _doc(self, **overrides) -> dict:
+        base = {
+            "name": "pkg",
+            "version": "1.0.0",
+            "compliance_level": "L3",
+            "direct_dependencies": [{"name": "dep", "requested": "^1.0.0"}],
+            "missing_gaps": [],
+            "pending_l3_gaps": [],
+        }
+        base.update(overrides)
+        return closure_model.normalize_doc(base)
+
+    def test_rebalance_command_index_only_skips_gap_rederivation(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """--index-only never calls the per-dependency resolution helpers."""
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        mocks.pull_compliance_doc.return_value = (self._doc(), DIGEST)
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "rebalance",
+                "--index-only",
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.find_resolved_version_for_dep.assert_not_called()
+        mocks.tl_level_for_key.assert_not_called()
+        mocks.publish_compliance_doc.assert_not_called()
+        payload = json.loads(result.stdout)
+        assert payload["mode"] == "index-only"
+
+    def test_rebalance_command_recomputes_gaps_and_republishes_on_change(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """A resolution change from the stored doc triggers a republish."""
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        mocks.pull_compliance_doc.return_value = (self._doc(), DIGEST)
+        mocks.find_resolved_version_for_dep.return_value = None  # now unresolved
+
+        result = runner.invoke(
+            main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.publish_compliance_doc.assert_called_once()
+        payload = json.loads(result.stdout)
+        assert payload["compliance_updated"] == ["pkg@1.0.0"]
+        assert payload["mode"] == "full"
+
+    def test_rebalance_command_leaves_unchanged_docs_unpublished(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """A doc whose recomputed gaps/level match the stored one is skipped."""
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        # Stored doc already reflects "dep" unresolved -- recomputation
+        # with the same (mocked) resolution outcome should be a no-op.
+        doc = self._doc(missing_gaps=["dep@^1.0.0"], compliance_level="L1")
+        mocks.pull_compliance_doc.return_value = (doc, DIGEST)
+        mocks.find_resolved_version_for_dep.return_value = None
+
+        result = runner.invoke(
+            main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.publish_compliance_doc.assert_not_called()
+        payload = json.loads(result.stdout)
+        assert payload["compliance_updated"] == []
+
+
+class TestShowCommand:
+    """CLI-level tests for `slan-cuan npm closure show`."""
+
+    def test_show_command_prints_compliance_path_file_verbatim_when_given(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """--compliance-path prints the file's exact content, no OCI pull."""
+        content = json.dumps({"name": "pkg", "version": "1.0.0"})
+        path = tmp_path / "local.tl-compliance.json"
+        path.write_text(content)
+
+        with patch(
+            "slan_cuan.npm.closure.closure_oci.pull_compliance_doc"
+        ) as pull_doc:
+            result = runner.invoke(
+                main,
+                ["npm", "closure", "show", "--compliance-path", str(path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert result.output == content
+        pull_doc.assert_not_called()
+
+    def test_show_command_raises_when_no_doc_found(
+        self, runner: CliRunner
+    ) -> None:
+        """No compliance doc in OCI raises a ClickException."""
+        with patch(
+            "slan_cuan.npm.closure.closure_oci.pull_compliance_doc",
+            return_value=(None, None),
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "npm",
+                    "closure",
+                    "show",
+                    "--name",
+                    "pkg",
+                    "--version",
+                    "1.0.0",
+                    *_OCI_ARGS,
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "No compliance OCI for pkg@1.0.0" in result.output
+
+
+class TestShowIndexCommand:
+    """CLI-level tests for `slan-cuan npm closure show-index`."""
+
+    def test_show_index_command_prints_digest_and_index(
+        self, runner: CliRunner
+    ) -> None:
+        """show-index prints the pulled digest and index verbatim as JSON."""
+        index = {"schema_version": 1, "revision": 2, "entries": {}}
+        with patch(
+            "slan_cuan.npm.closure.closure_oci.pull_index",
+            return_value=(index, DIGEST),
+        ):
+            result = runner.invoke(
+                main, ["npm", "closure", "show-index", *_OCI_ARGS]
+            )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["digest"] == DIGEST
+        assert payload["index"] == index
+
+
+class TestDrainBlockerParents:
+    """Direct unit tests for drain_blocker_parents's transitive promotion."""
+
+    def test_drain_blocker_parents_promotes_transitively(self) -> None:
+        """A parent reaching L3 after promotion has its own parents promoted."""
+        index = {
+            "schema_version": 1,
+            "revision": 0,
+            "updated_at": "2026-01-01T00:00:00Z",
+            "entries": {
+                "dep@1.0.0": {"parents": ["mid@1.0.0"]},
+                "mid@1.0.0": {"parents": ["top@1.0.0"]},
+            },
+        }
+        mid_doc = closure_model.normalize_doc(
+            {
+                "name": "mid",
+                "version": "1.0.0",
+                "missing_gaps": ["dep@1.0.0"],
+                "compliance_level": "L1",
+            }
+        )
+        top_doc = closure_model.normalize_doc(
+            {
+                "name": "top",
+                "version": "1.0.0",
+                "missing_gaps": ["mid@1.0.0"],
+                "compliance_level": "L1",
+            }
+        )
+        docs = {"mid@1.0.0": mid_doc, "top@1.0.0": top_doc}
+
+        def _fake_pull_compliance_doc(name, version, *args, **kwargs):
+            key = closure_model.node_key(name, version)
+            doc = docs.get(key)
+            return (copy.deepcopy(doc), None) if doc else (None, None)
+
+        def _fake_cas_publish_compliance(client, doc, repo, **kwargs):
+            key = closure_model.node_key(doc["name"], doc["version"])
+            docs[key] = copy.deepcopy(doc)
+            return (
+                "sha256:"
+                + key.replace("@", "").replace(".", "").ljust(64, "0")[:64]
+            )
+
+        client = MagicMock()
+        with (
+            patch(
+                "slan_cuan.npm.closure.closure_oci.pull_compliance_doc",
+                side_effect=_fake_pull_compliance_doc,
+            ),
+            patch(
+                "slan_cuan.npm.closure.closure_oci.cas_publish_compliance",
+                side_effect=_fake_cas_publish_compliance,
+            ),
+        ):
+            refreshed = drain_blocker_parents(
+                client,
+                dict(_REPO),
+                index,
+                "dep@1.0.0",
+                "L3",
+                compliance_image_prefix="quay.io/org/tl-compliance",
+                registry_url="https://registry.example.com",
+            )
+
+        assert refreshed == ["mid@1.0.0", "top@1.0.0"]
+        assert docs["mid@1.0.0"]["compliance_level"] == "L3"
+        assert docs["mid@1.0.0"]["missing_gaps"] == []
+        assert docs["top@1.0.0"]["compliance_level"] == "L3"
+        assert docs["top@1.0.0"]["missing_gaps"] == []
