@@ -463,9 +463,12 @@ def _index_push_verified(
     """Return True if a re-pulled index confirms our push landed.
 
     Confirmed when the live artifact is exactly the one we pushed (same
-    digest), or when its revision is strictly past ours -- a later writer
-    pulled some post-our-push revision and bumped past it, the same
-    ``>=`` acceptance ``cas_publish_compliance`` uses for its revision.
+    digest), or when its revision is strictly past ours -- some writer has
+    since pushed a higher revision, so ours is no longer the latest either
+    way. Note this is a heuristic, not a guarantee the later revision was
+    built on top of ours: with three or more racing writers, a later
+    revision can be built on a different writer's overwrite of ours,
+    which this check cannot distinguish from a revision built on ours.
 
     A revision-only ``>=`` check is NOT enough here: two writers that both
     pulled revision N both push N+1, so the loser re-pulls N+1 and would

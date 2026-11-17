@@ -536,11 +536,12 @@ class TestCasPushIndex:
         mock_sleep.assert_not_called()
 
     def test_cas_push_index_accepts_later_revision_on_verify(self):
-        """A later writer built on top of our push still verifies.
+        """A strictly-higher live revision also counts as verified.
 
-        A re-pulled revision strictly above ours means another writer
-        pulled a post-our-push revision and bumped past it, the same
-        ``>=`` acceptance ``cas_publish_compliance`` uses.
+        A re-pulled revision strictly above ours means some writer has
+        since pushed a higher revision, so ours is no longer the latest
+        either way -- this is the accept-a-later-revision heuristic, not
+        a guarantee that revision was built on top of ours.
         """
         pulled = ({"revision": 4, "entries": {}}, OTHER_DIGEST)
         pushed = ({"revision": 5, "entries": {}}, DIGEST)
