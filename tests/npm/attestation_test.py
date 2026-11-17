@@ -96,6 +96,11 @@ class TestAttestationOciTag:
         assert tag == "pkg-2.1.0-build.42-att"
         assert all(c.isalnum() or c in "._-" for c in tag)
 
+    def test_attestation_oci_tag_scoped_name_with_build_metadata(self) -> None:
+        """Scope replacement and build-metadata sanitization combine."""
+        tag = attestation_oci_tag("@scope/pkg", "1.0.0+meta")
+        assert tag == "scope--pkg-1.0.0-meta-att"
+
     def test_attestation_oci_tag_truncates_to_128_chars(self) -> None:
         """Result is capped at 128 characters."""
         tag = attestation_oci_tag("x" * 200, "1.0.0")
