@@ -174,12 +174,145 @@ class TestSyncContentPulpLabels:
         assert keys == [COMPLIANCE_DIGEST_LABEL]
 
     def test_sync_labels_raises_on_foreign_digest_race(self):
-        """A persistent foreign digest retries, then fails closed."""
+        """Our claim never sticks (foreign digest persists): fail closed at once.
+
+        A stale foreign digest at round start is legitimately claimed over
+        (each release replaces the digest), but if the post-claim verify
+        still shows the foreign digest, another writer won -- raise
+        immediately, with no retry round that would re-claim over it.
+        """
         client = Mock()
         client.get_labels.return_value = {
             COMPLIANCE_DIGEST_LABEL: OTHER_DIGEST,
             COMPLIANCE_LABEL: "L1",
         }
+        with (
+            patch("slan_cuan.npm.closure_pulp.time.sleep") as mock_sleep,
+            pytest.raises(click.ClickException, match="refusing overwrite"),
+        ):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+                max_retries=3,
+            )
+        assert client.set_label.call_count == 1
+        assert client.set_label.call_args.args[1] == COMPLIANCE_DIGEST_LABEL
+        assert client.get_labels.call_count == 2
+        mock_sleep.assert_not_called()
+
+    def test_sync_labels_raises_when_foreign_digest_appears_after_our_claim(
+        self,
+    ):
+        """Ping-pong regression: a writer claiming after us must not be clobbered.
+
+        Our claim succeeds and is verified; before our final verify, a
+        concurrent writer claims a different digest. This must raise on the
+        very first sighting, with no further set_label calls and no retry
+        round (which would re-claim and overwrite the other writer).
+        """
+        client = Mock()
+        client.get_labels.side_effect = [
+            {},  # initial read: unclaimed
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},  # post-claim verify: ours
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},  # before level write: ours
+            # final verify: a concurrent writer claimed after us
+            {COMPLIANCE_DIGEST_LABEL: OTHER_DIGEST, COMPLIANCE_LABEL: "L2"},
+        ]
+        with (
+            patch("slan_cuan.npm.closure_pulp.time.sleep") as mock_sleep,
+            pytest.raises(click.ClickException) as excinfo,
+        ):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+                max_retries=5,
+            )
+        msg = excinfo.value.message
+        assert DIGEST in msg
+        assert OTHER_DIGEST in msg
+        assert "refusing overwrite" in msg
+        keys = [c.args[1] for c in client.set_label.call_args_list]
+        # Our digest claim + our level write only; nothing after the
+        # foreign digest was seen.
+        assert keys == [COMPLIANCE_DIGEST_LABEL, COMPLIANCE_LABEL]
+        assert client.get_labels.call_count == 4
+        mock_sleep.assert_not_called()
+
+    def test_sync_labels_raises_on_foreign_digest_before_level_write(self):
+        """A foreign digest at the pre-level-write reread fails closed."""
+        client = Mock()
+        client.get_labels.side_effect = [
+            {},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+            {COMPLIANCE_DIGEST_LABEL: OTHER_DIGEST},
+        ]
+        with (
+            patch("slan_cuan.npm.closure_pulp.time.sleep") as mock_sleep,
+            pytest.raises(click.ClickException, match="refusing overwrite"),
+        ):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+            )
+        keys = [c.args[1] for c in client.set_label.call_args_list]
+        assert keys == [COMPLIANCE_DIGEST_LABEL]
+        mock_sleep.assert_not_called()
+
+    def test_sync_labels_retry_round_does_not_reclaim_over_foreign_digest(
+        self,
+    ):
+        """After a level-lag retry, a foreign digest at round start raises.
+
+        Round 1 holds our digest but the level lags (legitimate retry).
+        Before round 2 reads, a concurrent writer claims -- round 2 must
+        refuse rather than re-claim over it.
+        """
+        client = Mock()
+        client.get_labels.side_effect = [
+            {},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},  # final verify: level lags
+            {COMPLIANCE_DIGEST_LABEL: OTHER_DIGEST},  # round 2 start
+        ]
+        with (
+            patch("slan_cuan.npm.closure_pulp.time.sleep") as mock_sleep,
+            pytest.raises(click.ClickException, match="refusing overwrite"),
+        ):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+            )
+        keys = [c.args[1] for c in client.set_label.call_args_list]
+        assert keys == [COMPLIANCE_DIGEST_LABEL, COMPLIANCE_LABEL]
+        assert mock_sleep.call_count == 1
+
+    def test_sync_labels_raises_after_max_retries_when_level_never_lands(
+        self,
+    ):
+        """Digest stays ours but level never catches up: retry, then fail."""
+        client = Mock()
+        client.get_labels.return_value = {COMPLIANCE_DIGEST_LABEL: DIGEST}
         with (
             patch("slan_cuan.npm.closure_pulp.time.sleep") as mock_sleep,
             pytest.raises(click.ClickException, match="Pulp label CAS failed"),
@@ -194,10 +327,9 @@ class TestSyncContentPulpLabels:
                 DIGEST,
                 max_retries=3,
             )
-        assert client.set_label.called
-        digest_write_keys = {c.args[1] for c in client.set_label.call_args_list}
-        assert digest_write_keys == {COMPLIANCE_DIGEST_LABEL}
         assert mock_sleep.call_count == 2
+        keys = {c.args[1] for c in client.set_label.call_args_list}
+        assert keys == {COMPLIANCE_LABEL}
 
     def test_sync_labels_noop_when_content_not_found(self):
         """A missing content unit is a clean no-op, not an error."""

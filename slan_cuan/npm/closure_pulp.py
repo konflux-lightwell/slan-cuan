@@ -19,16 +19,14 @@ own -- all of that multi-step orchestration (claim, re-verify, sticky-max
 raise, re-verify, retry loop) lives here, built from repeated calls to those
 two primitives.
 
-Deliberate deviation from the original script: the original's
-``_assert_digest_or_race`` raises ``SystemExit`` the first time it sees a
-foreign digest, with no retry at all. Here a foreign-digest race is instead
-treated as a *retryable* condition -- the caller backs off and tries the
-whole claim/verify round again, only raising after ``max_retries`` rounds.
-A foreign digest seen mid-race may belong to another writer converging on
-the same compliance data (e.g. a retried release of the same artifact), so
-giving it a bounded number of chances to settle is strictly safer than
-refusing on the very first sighting, while still failing closed if the
-conflict never clears.
+Foreign-digest handling matches the original script's
+``_assert_digest_or_race``: once this writer has claimed (or observed itself
+holding) the digest lock, seeing any other digest -- or an emptied digest --
+at a later re-read raises ``click.ClickException`` immediately ("refusing
+overwrite; retry the release"). It is never retried, because a retry round
+would re-claim and silently clobber the concurrent writer's digest. The only
+retried condition is "our digest is held but the level has not yet reached
+the desired level" in the final verify.
 """
 
 from __future__ import annotations
@@ -66,10 +64,6 @@ DEFAULT_CAS_MAX_RETRIES = int(os.environ.get("CLOSURE_CAS_MAX_RETRIES", "8"))
 
 class _ContentGone(Exception):
     """Internal signal: the content unit no longer resolves by href."""
-
-
-class _LabelRace(Exception):
-    """Internal signal: a concurrent writer holds/won a label; retry."""
 
 
 def normalize_digest(digest: str) -> str:
@@ -163,17 +157,34 @@ def _labels_already_satisfied(
     return level_rank(cur_level) >= level_rank(desired_level)
 
 
-def _assert_digest_or_race(labels: dict[str, str], desired_digest: str) -> None:
-    """Require the digest label to equal ``desired_digest``.
+def _assert_digest_or_race(
+    labels: dict[str, str], desired_digest: str, key: str, context: str
+) -> None:
+    """Require the digest label to equal ``desired_digest``; fail closed.
+
+    Called only after this writer has claimed (or observed itself holding)
+    the digest lock, so any other value means a concurrent writer has taken
+    the lock (or it was cleared). Never retried: a retry round would
+    re-claim and overwrite the other writer's digest.
 
     Raises:
-        _LabelRace: A different (or missing) digest is present -- another
-            writer holds the lock, or we lost it. Caller retries.
+        click.ClickException: A foreign or empty digest is present.
 
     """
     cur_digest = normalize_digest(labels.get(COMPLIANCE_DIGEST_LABEL, ""))
-    if cur_digest != desired_digest:
-        raise _LabelRace
+    if cur_digest == desired_digest:
+        return
+    if cur_digest:
+        raise click.ClickException(
+            f"Pulp label digest race for {key} ({context}): wanted "
+            f"{desired_digest}, found {cur_digest} "
+            "(refusing overwrite; retry the release)"
+        )
+    raise click.ClickException(
+        f"Pulp label digest race for {key} ({context}): wanted "
+        f"{desired_digest}, found empty "
+        "(refusing to continue; retry the release)"
+    )
 
 
 def _claim_compliance_digest(
@@ -183,7 +194,7 @@ def _claim_compliance_digest(
 
     Raises:
         _ContentGone: Content vanished before the claim could be verified.
-        _LabelRace: Another writer's digest won the race.
+        click.ClickException: Another writer's digest won the race.
 
     """
     client.set_label(content_href, COMPLIANCE_DIGEST_LABEL, desired_digest)
@@ -192,21 +203,25 @@ def _claim_compliance_digest(
         err=True,
     )
     labels = _read_pulp_labels(client, content_href)
-    _assert_digest_or_race(labels, desired_digest)
+    _assert_digest_or_race(labels, desired_digest, key, "after digest write")
 
 
 def _reread_holding_digest(
-    client: PulpNpmClient, content_href: str, desired_digest: str
+    client: PulpNpmClient,
+    content_href: str,
+    desired_digest: str,
+    key: str,
+    context: str,
 ) -> str:
     """Re-read labels, requiring our digest is still held; return the level.
 
     Raises:
         _ContentGone: Content vanished.
-        _LabelRace: Another writer's digest has replaced ours.
+        click.ClickException: Another writer's digest has replaced ours.
 
     """
     labels = _read_pulp_labels(client, content_href)
-    _assert_digest_or_race(labels, desired_digest)
+    _assert_digest_or_race(labels, desired_digest, key, context)
     return labels.get(COMPLIANCE_LABEL) or ""
 
 
@@ -237,15 +252,18 @@ def _final_labels_ok(
     content_href: str,
     desired_digest: str,
     desired_level: str,
+    key: str,
 ) -> bool:
     """Return True when digest is still ours and level is at least desired.
 
     Raises:
         _ContentGone: Content vanished.
-        _LabelRace: Another writer's digest has replaced ours.
+        click.ClickException: Another writer's digest has replaced ours.
 
     """
-    cur_level = _reread_holding_digest(client, content_href, desired_digest)
+    cur_level = _reread_holding_digest(
+        client, content_href, desired_digest, key, "final verify"
+    )
     if not desired_level:
         return True
     return level_rank(cur_level) >= level_rank(desired_level)
@@ -267,13 +285,20 @@ def sync_content_pulp_labels(
     Pulp ``set_label`` is not atomic CAS. High-level protocol per round:
 
     1. Read current labels; return if already satisfied or if the content
-       unit no longer exists.
+       unit no longer exists. On a retry round (after this writer has
+       already claimed/held the digest), a foreign or empty digest here
+       fails closed instead of being re-claimed.
     2. Claim ``tl.compliance_oci_digest`` (if not already ours) and verify
        it stuck.
     3. Re-read under that digest; raise the level only if the sticky max
        needs it (never downgrades).
-    4. Final verify digest + level; return on success, else back off and
-       retry the whole round, up to ``max_retries`` times.
+    4. Final verify digest + level; return on success. If the digest is
+       still ours but the level has not yet reached ``desired_level``, back
+       off and retry the whole round, up to ``max_retries`` times.
+
+    Any foreign/empty digest seen after this writer's claim (steps 2-4, or
+    step 1 of a later round) raises immediately -- never retried, since a
+    retry would re-claim and silently overwrite the concurrent writer.
 
     ``repo_version_href`` is accepted for interface symmetry with
     ``find_content_in_repo`` (which callers use to resolve ``content_href``
@@ -282,9 +307,9 @@ def sync_content_pulp_labels(
     used in the body here.
 
     Raises:
-        click.ClickException: The digest/level could not be established
-            within ``max_retries`` rounds -- a persistent foreign-digest
-            race, or the level verify never catching up.
+        click.ClickException: A concurrent writer's digest was seen after
+            our claim (fail closed, no retry), or the level verify never
+            caught up within ``max_retries`` rounds.
 
     """
     desired_digest = normalize_digest(compliance_digest)
@@ -292,10 +317,18 @@ def sync_content_pulp_labels(
         return
     key = node_key(name, version)
     desired_level = level or ""
+    # Set once we have claimed (or observed ourselves holding) the digest
+    # lock. From then on, a foreign/empty digest is a lost race, not a
+    # stale value to overwrite.
+    holding = False
 
     for attempt in range(max_retries):
         try:
             labels = _read_pulp_labels(client, content_href)
+            if holding:
+                _assert_digest_or_race(
+                    labels, desired_digest, key, f"retry round {attempt + 1}"
+                )
             cur_digest = normalize_digest(labels.get(COMPLIANCE_DIGEST_LABEL, ""))
             cur_level = labels.get(COMPLIANCE_LABEL) or ""
 
@@ -308,19 +341,20 @@ def sync_content_pulp_labels(
                 _claim_compliance_digest(
                     client, content_href, desired_digest, key
                 )
+            holding = True
 
             if not desired_level:
                 return
 
             cur_level = _reread_holding_digest(
-                client, content_href, desired_digest
+                client, content_href, desired_digest, key, "before level write"
             )
             _maybe_raise_compliance_level(
                 client, content_href, cur_level, desired_level, key
             )
 
             if _final_labels_ok(
-                client, content_href, desired_digest, desired_level
+                client, content_href, desired_digest, desired_level, key
             ):
                 return
         except _ContentGone:
@@ -331,15 +365,12 @@ def sync_content_pulp_labels(
                 err=True,
             )
             return
-        except _LabelRace:
-            pass  # another writer currently holds/contests the lock; retry
 
         if attempt + 1 >= max_retries:
             break
         click.echo(
             f"Pulp label CAS retry {attempt + 1}/{max_retries} for {key} "
-            f"(wanted digest {desired_digest} "
-            f"level {desired_level or '<none>'})",
+            f"(level not yet >= {desired_level})",
             err=True,
         )
         time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
