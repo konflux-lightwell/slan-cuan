@@ -558,6 +558,64 @@ class TestArtifactDetailFallback:
         assert "no artifact href" in result.output
         mocks.client.get_artifact_sha256.assert_not_called()
 
+    def test_malformed_artifact_digest_fails_only_that_file_no_replace(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A PulpError from get_artifact_sha256 fails just that one file.
+
+        Even with --allow-content-replace, a malformed artifact response
+        (no/null sha256) must never be treated as a digest mismatch that
+        triggers the destructive replace path; the rest of the batch still
+        proceeds.
+        """
+        files_dir = tmp_path / "files"
+        tgz_a = _touch_tgz(files_dir, "a-1.0.0.tgz")
+        tgz_b = _touch_tgz(files_dir, "b-1.0.0.tgz")
+
+        def metadata_side_effect(path: Path) -> tuple[str, str]:
+            return ("a", "1.0.0") if path == tgz_a else ("b", "1.0.0")
+
+        def find_side_effect(
+            name: str, version: str, version_href: str
+        ) -> dict[str, str] | None:
+            if name == "a":
+                return {
+                    "pulp_href": "/api/v3/content/npm/packages/a/",
+                    "artifact": "/api/v3/artifacts/a/",
+                }
+            return None
+
+        mocks.read_metadata.side_effect = metadata_side_effect
+        mocks.client.find_by_name_version.side_effect = find_side_effect
+        mocks.client.get_artifact_sha256.side_effect = PulpError(
+            "Artifact response has no sha256",
+            status_code=200,
+            response_body="{}",
+        )
+        mocks.client.upload_content.return_value = NpmContentUnit(
+            pulp_href="/href/b/", name="b", version="1.0.0"
+        )
+
+        result = runner.invoke(
+            main,
+            [
+                *_BASE_ARGS,
+                "--files-dir",
+                str(files_dir),
+                "--allow-content-replace",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Uploaded (1)" in result.output
+        assert "Failed (1)" in result.output
+        assert "no sha256" in result.output
+        mocks.client.destroy_repository_version.assert_not_called()
+        mocks.client.orphan_cleanup.assert_not_called()
+        mocks.client.upload_content.assert_called_once_with(
+            tgz_b, "b", "1.0.0", labels=None
+        )
+
 
 class TestUploadDryRun:
     """--dry-run previews `npm upload` without signing or any I/O."""

@@ -373,6 +373,27 @@ class TestGetArtifactSha256:
         assert captured_url is not None
         assert "/api/v3/artifacts/abc123/" in captured_url
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"pulp_href": "/api/v3/artifacts/abc/"}, id="missing"),
+            pytest.param({"sha256": None}, id="null"),
+            pytest.param({"sha256": ""}, id="empty"),
+        ],
+    )
+    def test_get_artifact_sha256_raises_on_missing_digest(
+        self, body: dict[str, object]
+    ) -> None:
+        """A missing/null/empty sha256 raises instead of a sentinel string."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        client = _client_with_transport(handler)
+
+        with pytest.raises(PulpError, match="sha256"):
+            client.get_artifact_sha256("/api/v3/artifacts/abc/")
+
 
 class TestGetContent:
     """Tests for get_content()."""

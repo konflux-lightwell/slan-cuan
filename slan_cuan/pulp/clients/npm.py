@@ -168,8 +168,12 @@ class PulpNpmClient(PulpClientBase):
             The artifact's sha256 hex digest.
 
         Raises:
-            PulpError: If the GET request fails or the response isn't a
-                JSON object.
+            PulpError: If the GET request fails, the response isn't a
+                JSON object, or its ``sha256`` field is missing, null,
+                empty, or not a string. Raising (rather than returning a
+                sentinel) keeps a malformed response from being mistaken
+                for a digest mismatch, which with --allow-content-replace
+                would trigger the destructive replace path.
 
         """
         response = self._request(
@@ -178,7 +182,15 @@ class PulpNpmClient(PulpClientBase):
             "Artifact lookup",
         )
         response_data = parse_json_dict(response, "Artifact", PulpError)
-        return str(response_data.get("sha256", ""))
+        sha256 = response_data.get("sha256")
+        if not isinstance(sha256, str) or not sha256:
+            raise PulpError(
+                f"Artifact response for {artifact_href} has no usable "
+                f"sha256 (got {sha256!r})",
+                status_code=response.status_code,
+                response_body=response.text,
+            )
+        return sha256
 
     def get_content(self, content_href: str) -> dict[str, object]:
         """Fetch the full detail record for an npm content unit.
