@@ -394,12 +394,20 @@ def cas_push_index(
     Each round: pull the current index, run ``mutator`` on a deep copy of
     it, pin the mutated copy's revision back to what was just pulled, and
     push via ``publish_index`` with that pulled revision as
-    ``expected_revision``. A push failure (e.g. a concurrent writer's push
-    landed first) is retried, up to ``max_retries`` rounds, with linear
-    backoff between rounds.
+    ``expected_revision``, then re-pull to verify the write actually landed
+    (see ``_index_push_verified``). A push failure, or a push that a
+    concurrent writer overwrote, is retried -- re-pull, re-mutate, re-push
+    -- up to ``max_retries`` rounds, with linear backoff between rounds.
+
+    ``oras push`` to a mutable tag never fails on a conflicting concurrent
+    write, so without the verify step two writers that both pulled
+    revision N would both "succeed" at pushing N+1 and the loser's
+    mutation would silently vanish. This is detection, not true atomic
+    compare-and-swap (that needs a server-side lock): a writer that lands
+    between our verify re-pull and return is not caught.
 
     Raises:
-        click.ClickException: The push never succeeded within
+        click.ClickException: The push never succeeded and verified within
             ``max_retries`` rounds.
 
     ``max_retries`` defaults (when ``None``) to
@@ -415,23 +423,64 @@ def cas_push_index(
         updated = mutator(copy.deepcopy(index))
         updated["revision"] = expected
         try:
-            return publish_index(
+            pushed, digest = publish_index(
                 updated,
                 compliance_image_prefix=compliance_image_prefix,
                 closure_index_image=closure_index_image,
                 expected_revision=expected,
             )
         except oci.OrasError as exc:
-            if attempt + 1 >= max_retries:
-                raise click.ClickException(
-                    f"Index CAS failed after {max_retries} retries: {exc}"
-                ) from exc
-            click.echo(
-                f"Index CAS retry {attempt + 1}/{max_retries}: {exc}",
-                err=True,
+            reason = str(exc)
+        else:
+            current, current_digest = pull_index(
+                compliance_image_prefix, closure_index_image
             )
-            time.sleep(0.2 * (attempt + 1))
+            if _index_push_verified(pushed, digest, current, current_digest):
+                return pushed, digest
+            reason = (
+                f"pushed revision {pushed['revision']} ({digest}) was not "
+                f"live on re-pull (found revision {current['revision']}, "
+                f"{current_digest}); a concurrent writer likely overwrote it"
+            )
+        if attempt + 1 >= max_retries:
+            raise click.ClickException(
+                f"Index CAS failed after {max_retries} retries: {reason}"
+            )
+        click.echo(
+            f"Index CAS retry {attempt + 1}/{max_retries}: {reason}",
+            err=True,
+        )
+        time.sleep(0.2 * (attempt + 1))
     raise click.ClickException(f"Index CAS failed after {max_retries} retries")
+
+
+def _index_push_verified(
+    pushed: dict,
+    pushed_digest: str,
+    current: dict,
+    current_digest: str | None,
+) -> bool:
+    """Return True if a re-pulled index confirms our push landed.
+
+    Confirmed when the live artifact is exactly the one we pushed (same
+    digest), or when its revision is strictly past ours -- a later writer
+    pulled some post-our-push revision and bumped past it, the same
+    ``>=`` acceptance ``cas_publish_compliance`` uses for its revision.
+
+    A revision-only ``>=`` check is NOT enough here: two writers that both
+    pulled revision N both push N+1, so the loser re-pulls N+1 and would
+    wrongly "verify". At equal revision only a digest match proves the
+    live index is ours. A missing index (no ``current_digest``) or a
+    lower revision never verifies.
+    """
+    if not current_digest:
+        return False
+    # oci.push's digest regex is case-insensitive; oras resolve is lower.
+    if normalize_digest(current_digest).lower() == (
+        normalize_digest(pushed_digest).lower()
+    ):
+        return True
+    return int(current["revision"]) > int(pushed["revision"])
 
 
 def cas_publish_compliance(

@@ -491,7 +491,8 @@ class TestCasPushIndex:
         with (
             patch(
                 "slan_cuan.npm.closure_oci.pull_index",
-                return_value=pulled,
+                # pull, pull (retry round), verify-after-write re-pull.
+                side_effect=[pulled, pulled, success],
             ) as mock_pull_index,
             patch(
                 "slan_cuan.npm.closure_oci.publish_index",
@@ -508,7 +509,144 @@ class TestCasPushIndex:
                 max_retries=5,
             )
         assert result == success
+        assert mock_pull_index.call_count == 3
+        assert mock_publish_index.call_count == 2
+
+    def test_cas_push_index_verifies_uncontested_push(self):
+        """An uncontested push is re-pulled once, verified, and returned."""
+        pulled = ({"revision": 4, "entries": {}}, OTHER_DIGEST)
+        entries = {"a@1": {"parents": ["b@1"]}}
+        pushed = ({"revision": 5, "entries": entries}, DIGEST)
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.pull_index",
+                side_effect=[pulled, pushed],
+            ) as mock_pull_index,
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index", return_value=pushed
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep") as mock_sleep,
+        ):
+            result = cas_push_index(
+                lambda idx: idx, compliance_image_prefix=PREFIX, max_retries=3
+            )
+        assert result == pushed
         assert mock_pull_index.call_count == 2
+        mock_publish_index.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    def test_cas_push_index_accepts_later_revision_on_verify(self):
+        """A later writer built on top of our push still verifies.
+
+        A re-pulled revision strictly above ours means another writer
+        pulled a post-our-push revision and bumped past it, the same
+        ``>=`` acceptance ``cas_publish_compliance`` uses.
+        """
+        pulled = ({"revision": 4, "entries": {}}, OTHER_DIGEST)
+        pushed = ({"revision": 5, "entries": {}}, DIGEST)
+        later = ({"revision": 6, "entries": {}}, "sha256:" + "c" * 64)
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.pull_index",
+                side_effect=[pulled, later],
+            ),
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index", return_value=pushed
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep"),
+        ):
+            result = cas_push_index(
+                lambda idx: idx, compliance_image_prefix=PREFIX, max_retries=3
+            )
+        assert result == pushed
+        mock_publish_index.assert_called_once()
+
+    def test_cas_push_index_retries_when_concurrent_writer_overwrote(self):
+        """Same revision, different digest on re-pull -> lost race, retry.
+
+        Simulates two writers that both pulled revision 4 and both pushed
+        revision 5: the other writer's push landed on top of ours, so the
+        re-pull shows revision 5 with THEIR digest. The mutation must be
+        re-applied against that newer state (revision 5 -> 6).
+        """
+        racer_digest = "sha256:" + "c" * 64
+        first_pull = ({"revision": 4, "entries": {}}, OTHER_DIGEST)
+        racer_state = (
+            {"revision": 5, "entries": {"x@1": {"parents": ["racer@1"]}}},
+            racer_digest,
+        )
+        ours_lost = ({"revision": 5, "entries": {}}, DIGEST)
+        ours_final = (
+            {"revision": 6, "entries": {"x@1": {"parents": ["racer@1"]}}},
+            "sha256:" + "d" * 64,
+        )
+        mutated_inputs: list[dict] = []
+
+        def _mutator(idx: dict) -> dict:
+            mutated_inputs.append(idx)
+            return idx
+
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.pull_index",
+                side_effect=[first_pull, racer_state, racer_state, ours_final],
+            ) as mock_pull_index,
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index",
+                side_effect=[ours_lost, ours_final],
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep"),
+        ):
+            result = cas_push_index(
+                _mutator, compliance_image_prefix=PREFIX, max_retries=3
+            )
+        assert result == ours_final
+        assert mock_pull_index.call_count == 4
+        assert mock_publish_index.call_count == 2
+        # Retry round re-mutated the racer's newer state, pinned to rev 5.
+        assert mutated_inputs[1] == racer_state[0]
+        assert mock_publish_index.call_args.kwargs["expected_revision"] == 5
+
+    def test_cas_push_index_raises_when_verify_never_confirms(self):
+        """A push that never verifies within max_retries raises."""
+        pulled = ({"revision": 4, "entries": {}}, OTHER_DIGEST)
+        pushed = ({"revision": 5, "entries": {}}, DIGEST)
+        overwritten = ({"revision": 5, "entries": {}}, "sha256:" + "c" * 64)
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.pull_index",
+                side_effect=[pulled, overwritten] * 3,
+            ),
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index", return_value=pushed
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep") as mock_sleep,
+            pytest.raises(click.ClickException, match="Index CAS failed"),
+        ):
+            cas_push_index(
+                lambda idx: idx, compliance_image_prefix=PREFIX, max_retries=3
+            )
+        assert mock_publish_index.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    def test_cas_push_index_retries_when_verify_finds_no_index(self):
+        """A re-pull that finds no index at all is not a verified write."""
+        pulled = ({"revision": 0, "entries": {}}, None)
+        pushed = ({"revision": 1, "entries": {}}, DIGEST)
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.pull_index",
+                side_effect=[pulled, pulled, pulled, pushed],
+            ),
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index", return_value=pushed
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep"),
+        ):
+            result = cas_push_index(
+                lambda idx: idx, compliance_image_prefix=PREFIX, max_retries=3
+            )
+        assert result == pushed
         assert mock_publish_index.call_count == 2
 
     def test_cas_push_index_raises_after_max_retries(self):
