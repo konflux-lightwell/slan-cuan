@@ -118,6 +118,19 @@ class TestPull:
             pull(image_ref, tmp_path)
 
     @patch("slan_cuan.oci.subprocess.run")
+    def test_pull_not_found_404_case_insensitive(
+        self, mock_run: Mock, image_ref: ImageReference, tmp_path: Path
+    ) -> None:
+        """Oras pull classifies a lowercase '404 not found' as not-found."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="error: 404 not found",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="Image not found"):
+            pull(image_ref, tmp_path)
+
+    @patch("slan_cuan.oci.subprocess.run")
     def test_pull_network_error_connection(
         self, mock_run: Mock, image_ref: ImageReference, tmp_path: Path
     ) -> None:

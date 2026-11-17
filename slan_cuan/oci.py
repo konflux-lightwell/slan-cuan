@@ -71,10 +71,10 @@ def _classify_oras_error(
     if "401 unauthorized" in lowered or "authentication required" in lowered:
         message = f"Authentication failed for {ref}"
     elif (
-        "404 Not Found" in stderr
+        "404 not found" in lowered
         or "manifest unknown" in lowered
         or "manifest_unknown" in lowered
-        or _ORAS_TRAILING_NOT_FOUND.search(stderr)
+        or _ORAS_TRAILING_NOT_FOUND.search(lowered)
     ):
         message = not_found_message
     elif "network" in lowered or "connection" in lowered or "timeout" in lowered:
