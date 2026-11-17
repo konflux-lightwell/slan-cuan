@@ -139,6 +139,25 @@ class TestSatisfies:
         # And matches ranges that have a prerelease in the spec
         assert satisfies("1.2.3-beta", ">=1.2.3-alpha") is True
 
+    def test_satisfies_prerelease_tuple_must_match_bound(self):
+        """A prerelease bound only counts if its (M,m,p) matches the version.
+
+        Real node-semver: >=1.0.0 <2.0.0-0 does NOT allow 1.2.3-alpha.1
+        through, even though <2.0.0-0 carries a prerelease tag, because
+        that bound's tuple (2, 0, 0) doesn't match the tested version's
+        tuple (1, 2, 3).
+        """
+        assert satisfies("1.2.3-alpha.1", ">=1.0.0 <2.0.0-0") is False
+
+    def test_satisfies_prerelease_allowed_when_matching_bound_has_one(self):
+        """A prerelease is allowed when the MATCHING bound has one.
+
+        >=1.2.3-0 <1.2.4: the lower bound shares (1, 2, 3) with the
+        tested version and carries a prerelease tag, so 1.2.3-alpha.1
+        is allowed through.
+        """
+        assert satisfies("1.2.3-alpha.1", ">=1.2.3-0 <1.2.4") is True
+
     def test_satisfies_invalid_version_returns_false(self):
         """Satisfies returns False for invalid version strings."""
         assert satisfies("not-a-version", "1.2.3") is False

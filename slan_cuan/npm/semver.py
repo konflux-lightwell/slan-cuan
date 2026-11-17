@@ -237,10 +237,22 @@ def _cmp_op(version: Version, op: str, bound: Version | None) -> bool:
 
 def _clause_allows_prerelease(
     comparators: list[tuple[str, Version | None]],
+    version_tuple: tuple[int, int, int],
 ) -> bool:
-    """Check if any comparator in the clause has a prerelease."""
+    """Check if a comparator bound shares the version's own tuple.
+
+    Per real npm/node-semver semantics, a prerelease version only
+    satisfies a range if the range contains a comparator bound that both
+    carries a prerelease tag AND has the same (major, minor, patch) as
+    the version under test -- not merely any prerelease bound anywhere
+    in the clause.
+    """
     for op, bound in comparators:
-        if bound is not None and bound.prerelease:
+        if (
+            bound is not None
+            and bound.prerelease
+            and bound.tuple() == version_tuple
+        ):
             return True
     return False
 
@@ -262,7 +274,7 @@ def satisfies(version_text: str, spec: str) -> bool:
                 comparators.extend(_token_to_bounds(token))
         except (TypeError, ValueError):
             continue
-        allow_pre = _clause_allows_prerelease(comparators)
+        allow_pre = _clause_allows_prerelease(comparators, version.tuple())
         if version.prerelease and not allow_pre:
             continue
         if all(_cmp_op(version, op, bound) for op, bound in comparators):
