@@ -105,6 +105,47 @@ class TestPullJsonArtifact:
             result = pull_json_artifact(PREFIX, ".tl-compliance.json")
         assert result == (None, None)
 
+    #: Verbatim stderr from real ``oras pull`` (oras 1.3.0) against Quay
+    #: for a tag that does not exist. None of the 404/MANIFEST_UNKNOWN
+    #: markers appear in it, so ``oci.pull`` falls through to its
+    #: generic "oras pull failed: ..." message.
+    REAL_ORAS_MISSING_TAG_STDERR = (
+        "Error response from registry: "
+        "quay.io/prometheus/busybox:lwlp4134-nonexistent-tag: not found"
+    )
+
+    def test_pull_json_artifact_returns_none_for_real_oras_not_found(self):
+        """Real oras 1.3.0 missing-tag output yields (None, None)."""
+        stderr = self.REAL_ORAS_MISSING_TAG_STDERR
+        with patch(
+            "slan_cuan.npm.closure_oci.oci.pull",
+            side_effect=oci.OrasError(f"oras pull failed: {stderr}", stderr, 1),
+        ):
+            result = pull_json_artifact(PREFIX, ".tl-compliance.json")
+        assert result == (None, None)
+
+    def test_pull_json_artifact_not_found_beats_network_keyword_in_ref(self):
+        """A ref containing "timeout"/"connection" is still not-found.
+
+        ``oci.pull`` checks for "network"/"connection"/"timeout" anywhere
+        in stderr, and the image ref (which embeds the npm package name,
+        e.g. ``timeout-signal``) is echoed in oras's not-found message --
+        so a never-seeded package with such a name gets mislabelled
+        "Network error". The trailing ``: not found`` must still win.
+        """
+        stderr = (
+            "Error response from registry: "
+            "quay.io/org/repo:timeout-signal-2.0.0: not found"
+        )
+        with patch(
+            "slan_cuan.npm.closure_oci.oci.pull",
+            side_effect=oci.OrasError(
+                f"Network error pulling {PREFIX}", stderr, 1
+            ),
+        ):
+            result = pull_json_artifact(PREFIX, ".tl-compliance.json")
+        assert result == (None, None)
+
     @pytest.mark.parametrize(
         ("message", "stderr"),
         [
@@ -117,6 +158,16 @@ class TestPullJsonArtifact:
                 "Error: dial tcp: connection refused",
             ),
             ("oras pull failed: boom", "boom"),
+            # "not found" mid-string, not as the trailing ": not found"
+            # oras emits for a missing tag/repo -- must stay a hard error.
+            (
+                "oras pull failed: resource not found: access denied",
+                "Error: resource not found: access denied",
+            ),
+            (
+                "oras pull failed: credential helper not found in PATH",
+                "Error: credential helper not found in PATH",
+            ),
         ],
     )
     def test_pull_json_artifact_raises_on_non_not_found_errors(

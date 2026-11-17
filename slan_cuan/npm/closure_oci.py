@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -148,6 +149,11 @@ _ORAS_NOT_FOUND_MARKERS = (
     "MANIFEST_UNKNOWN",
 )
 
+#: What real oras (1.3.0, against Quay) actually prints for a missing tag:
+#: ``Error response from registry: <ref>: not found``. Anchored to the end
+#: of stderr so an unrelated "not found" mid-message can't match.
+_ORAS_TRAILING_NOT_FOUND = re.compile(r":\s*not found\s*$")
+
 
 def _is_oras_not_found(exc: oci.OrasError) -> bool:
     """Return True only when an ``oras pull`` failure means "not found".
@@ -157,12 +163,24 @@ def _is_oras_not_found(exc: oci.OrasError) -> bool:
     an auth failure never counts as not-found here. A missing repository
     (``NAME_UNKNOWN``), which ``oci.pull`` lumps into its generic message,
     is also treated as not-found.
+
+    Real oras output for a missing tag (``"...: <ref>: not found"``)
+    matches none of those, so it is also recognized by its trailing
+    ``: not found``. That check runs before the network-error short-circuit
+    because ``oci.pull`` labels any stderr containing "network"/
+    "connection"/"timeout" a network error -- and the echoed ref embeds the
+    npm package name (e.g. ``timeout-signal``).
     """
-    if exc.message.startswith(("Authentication failed", "Network error")):
+    stderr = exc.stderr or ""
+    if exc.message.startswith("Authentication failed"):
+        return False
+    if _ORAS_TRAILING_NOT_FOUND.search(stderr):
+        return True
+    if exc.message.startswith("Network error"):
         return False
     if exc.message.startswith("Image not found"):
         return True
-    return any(marker in (exc.stderr or "") for marker in _ORAS_NOT_FOUND_MARKERS)
+    return any(marker in stderr for marker in _ORAS_NOT_FOUND_MARKERS)
 
 
 def pull_json_artifact(
