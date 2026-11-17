@@ -510,29 +510,31 @@ class TestRebalanceCommand:
         payload = json.loads(result.stdout)
         assert payload["compliance_updated"] == []
 
-    def test_rebalance_command_skips_alias_dependency_spec(
+    def _alias_doc(self) -> dict:
+        return self._doc(
+            direct_dependencies=[
+                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"}
+            ],
+        )
+
+    def test_rebalance_command_never_resolves_alias_dependency_spec(
         self, runner: CliRunner, mocks: SimpleNamespace
     ) -> None:
-        """An npm: alias dependency spec is skipped, not treated as a gap.
+        """An npm: alias dependency spec is never resolved.
 
         A package.json dependency value like
         ``"npm:real-pkg@^1.2.0"`` is an alias spec: its real registry
         identity is a different package than the dependency's own name.
         Resolving it via ``find_resolved_version_for_dep``/building a
-        node key from the alias dep's own name would either crash
-        ``parse_node_key`` (the spec itself contains an ``@``) or
+        node key from the alias dep's own name and raw spec would either
+        crash ``parse_node_key`` (the spec itself contains an ``@``) or
         silently attribute a different package's identity to the wrong
-        name, so it must be skipped entirely rather than resolved.
+        name, so it must never be resolved.
         """
         mocks.list_repo_packages.return_value = iter(
             [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
         )
-        doc = self._doc(
-            direct_dependencies=[
-                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"}
-            ],
-        )
-        mocks.pull_compliance_doc.return_value = (doc, DIGEST)
+        mocks.pull_compliance_doc.return_value = (self._alias_doc(), DIGEST)
 
         result = runner.invoke(
             main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
@@ -541,9 +543,40 @@ class TestRebalanceCommand:
         assert result.exit_code == 0, result.output
         mocks.find_resolved_version_for_dep.assert_not_called()
         mocks.tl_level_for_key.assert_not_called()
-        mocks.publish_compliance_doc.assert_not_called()
+
+    def test_rebalance_command_alias_dependency_keeps_package_below_l3(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """An unverifiable alias dependency fails closed as a missing gap.
+
+        A package whose only direct dependency is an npm alias must not
+        be certified L3: the alias's real target was never checked, so
+        it is recorded as a permanently-unresolvable missing gap keyed
+        by the LOCAL dependency name (keeping ``validate_gap_subset``'s
+        invariant) and a fixed sentinel version.
+        """
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        mocks.pull_compliance_doc.return_value = (self._alias_doc(), DIGEST)
+
+        result = runner.invoke(
+            main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.publish_compliance_doc.assert_called_once()
+        published = mocks.publish_compliance_doc.call_args.args[1]
+        assert published["compliance_level"] == "L1"
+        assert published["missing_gaps"] == [
+            closure_model.node_key(
+                "my-dep", closure_model.UNVERIFIABLE_ALIAS_VERSION
+            )
+        ]
+        assert published["pending_l3_gaps"] == []
+        closure_model.validate_gap_subset(published)
         payload = json.loads(result.stdout)
-        assert payload["compliance_updated"] == []
+        assert payload["compliance_updated"] == ["pkg@1.0.0"]
 
 
 def _assert_no_io(mocks: SimpleNamespace) -> None:

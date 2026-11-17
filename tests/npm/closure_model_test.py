@@ -10,6 +10,8 @@ import pytest
 from slan_cuan.npm.attestation import attestation_oci_tag
 from slan_cuan.npm.closure_model import (
     SCHEMA_VERSION,
+    UNVERIFIABLE_ALIAS_VERSION,
+    alias_gap_key,
     apply_index_release,
     compliance_filename,
     compliance_oci_tag,
@@ -95,6 +97,51 @@ class TestIsNpmAliasSpec:
         assert is_npm_alias_spec("^1.2.0") is False
         assert is_npm_alias_spec("1.2.3") is False
         assert is_npm_alias_spec("*") is False
+
+
+class TestAliasGapKey:
+    """alias_gap_key builds a permanently-unresolvable gap key."""
+
+    def test_round_trips_under_local_name(self):
+        """The key round-trips to (local dep name, sentinel)."""
+        assert "@" not in UNVERIFIABLE_ALIAS_VERSION
+        key = alias_gap_key("@scope/my-dep")
+        assert parse_node_key(key) == (
+            "@scope/my-dep",
+            UNVERIFIABLE_ALIAS_VERSION,
+        )
+
+    def test_satisfies_gap_subset_invariant(self):
+        """A doc with an alias gap under its local name validates."""
+        doc = {
+            "name": "pkg",
+            "version": "1.0.0",
+            "direct_dependencies": [
+                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"}
+            ],
+            "missing_gaps": [alias_gap_key("my-dep")],
+        }
+        validate_gap_subset(doc)
+        assert compute_level(doc) == "L1"
+
+    @pytest.mark.parametrize(
+        "release_version",
+        [
+            "0.0.0",
+            "1.2.3",
+            "99.99.99",
+            "1.0.0-alpha.1",
+            UNVERIFIABLE_ALIAS_VERSION,
+        ],
+    )
+    def test_never_matched_by_any_release(self, release_version):
+        """No release of the dep (even the sentinel itself) clears it."""
+        index = empty_index()
+        index_add_parent(index, alias_gap_key("my-dep"), "pkg@1.0.0")
+        assert (
+            find_index_blocker_keys_for_release(index, "my-dep", release_version)
+            == []
+        )
 
 
 class TestComputeLevel:

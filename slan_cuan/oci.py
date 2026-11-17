@@ -72,7 +72,8 @@ def _classify_oras_error(
         message = f"Authentication failed for {ref}"
     elif (
         "404 Not Found" in stderr
-        or "manifest unknown" in stderr
+        or "manifest unknown" in lowered
+        or "manifest_unknown" in lowered
         or _ORAS_TRAILING_NOT_FOUND.search(stderr)
     ):
         message = not_found_message

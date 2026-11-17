@@ -92,6 +92,19 @@ class TestPull:
             pull(image_ref, tmp_path)
 
     @patch("slan_cuan.oci.subprocess.run")
+    def test_pull_not_found_uppercase_error_code(
+        self, mock_run: Mock, image_ref: ImageReference, tmp_path: Path
+    ) -> None:
+        """A bare uppercase MANIFEST_UNKNOWN error code is not-found too."""
+        mock_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: GET https://quay.io/v2/x: MANIFEST_UNKNOWN",
+            stdout="",
+        )
+        with pytest.raises(OrasError, match="Image not found"):
+            pull(image_ref, tmp_path)
+
+    @patch("slan_cuan.oci.subprocess.run")
     def test_pull_not_found_404(
         self, mock_run: Mock, image_ref: ImageReference, tmp_path: Path
     ) -> None:

@@ -838,16 +838,17 @@ def rebalance(
                     # version) is a different package than dep_name, and
                     # the raw spec string itself contains an "@", which
                     # would corrupt node_key/parse_node_key round-
-                    # tripping. The closure/compliance system tracks
-                    # real npm registry packages by name+version, so
-                    # skip creating a blocker/gap entry for this
-                    # dependency rather than build a key under the
-                    # wrong (or corrupted) identity.
+                    # tripping. It is never resolved, but it must still
+                    # count as an open gap: fail closed with a
+                    # permanently-unresolvable missing gap (local name +
+                    # sentinel version) so the parent can never reach L3
+                    # on an unverified dependency.
                     click.echo(
-                        f"Skip alias dependency {dep_name}@{dep_spec} "
-                        "(alias specs are not tracked as closure gaps)",
+                        f"Alias dependency {dep_name}@{dep_spec} cannot be "
+                        "verified; recording it as an unresolvable gap",
                         err=True,
                     )
+                    missing.append(closure_model.alias_gap_key(dep_name))
                     continue
                 resolved = find_resolved_version_for_dep(
                     client, dep_name, dep_spec, doc, repo_version

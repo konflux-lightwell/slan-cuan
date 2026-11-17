@@ -92,8 +92,31 @@ def is_npm_alias_spec(spec: str) -> bool:
     would both corrupt ``node_key``/``parse_node_key`` round-tripping
     (the spec itself contains an ``@``) and mix an alias's local name
     with a different package's real identity.
+
+    Callers record such a dependency as a missing gap keyed by
+    ``node_key(dep_name, UNVERIFIABLE_ALIAS_VERSION)`` instead, so the
+    parent fails closed (stays below L3) rather than skipping it.
     """
     return spec.startswith("npm:")
+
+
+#: Sentinel "version" for the missing-gap entry recorded for an npm alias
+#: dependency. Its real target is never verified, so the gap must never
+#: clear: the sentinel contains no ``@`` (``node_key``/``parse_node_key``
+#: round-trip cleanly), is not a parseable semver version or range (so
+#: ``npm_version_satisfies`` never matches a real release against it),
+#: and ``find_index_blocker_keys_for_release`` refuses to match it at all.
+UNVERIFIABLE_ALIAS_VERSION = "unverifiable-npm-alias"
+
+
+def alias_gap_key(dep_name: str) -> str:
+    """Return the permanently-unresolvable gap key for an alias dependency.
+
+    Keyed by the dependency's LOCAL name (its ``package.json`` key), not
+    the alias's real target package, so ``validate_gap_subset``'s
+    "gap names are direct dependencies" invariant still holds.
+    """
+    return node_key(dep_name, UNVERIFIABLE_ALIAS_VERSION)
 
 
 def node_key(name: str, version: str) -> str:
@@ -452,12 +475,13 @@ def find_index_blocker_keys_for_release(
 
     A blocker key ``name@spec`` matches when ``spec`` is either the exact
     released version string, or an npm semver range that the released
-    version satisfies.
+    version satisfies. An alias-dependency gap key
+    (``UNVERIFIABLE_ALIAS_VERSION``) never matches any release.
     """
     matched = []
     for blocker_key in index.get("entries") or {}:
         bname, bspec = parse_node_key(blocker_key)
-        if bname != release_name:
+        if bname != release_name or bspec == UNVERIFIABLE_ALIAS_VERSION:
             continue
         if bspec == release_version or npm_version_satisfies(
             release_version, bspec
