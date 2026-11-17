@@ -66,10 +66,6 @@ _ARTIFACT_TITLE_ANNOTATION = {
     "org.opencontainers.image.title": "npm-closure-artifact"
 }
 
-#: Default CAS retry-round ceiling, matching the original script's
-#: ``CAS_MAX_RETRIES``. Callers (and tests) may override per-call.
-DEFAULT_CAS_MAX_RETRIES = 8
-
 
 def _strip_oci_tag_and_digest(prefix: str) -> str:
     """Strip a trailing ``:tag``/``@digest`` from an OCI image reference.
@@ -376,12 +372,24 @@ def publish_index(
     return index, digest
 
 
+def _resolve_max_retries(max_retries: int | None) -> int:
+    """Return ``max_retries``, or the shared env-sourced default if None.
+
+    Reuses ``closure_pulp.DEFAULT_CAS_MAX_RETRIES`` (read once from
+    ``CLOSURE_CAS_MAX_RETRIES``) rather than re-reading the env var here,
+    so the label CAS and both OCI CAS loops always agree.
+    """
+    if max_retries is None:
+        return closure_pulp.DEFAULT_CAS_MAX_RETRIES
+    return max_retries
+
+
 def cas_push_index(
     mutator: Callable[[dict], dict],
     *,
     compliance_image_prefix: str,
     closure_index_image: str = "",
-    max_retries: int = DEFAULT_CAS_MAX_RETRIES,
+    max_retries: int | None = None,
 ) -> tuple[dict, str]:
     """Pull-mutate-push the closure index with optimistic-concurrency retry.
 
@@ -396,7 +404,13 @@ def cas_push_index(
         click.ClickException: The push never succeeded within
             ``max_retries`` rounds.
 
+    ``max_retries`` defaults (when ``None``) to
+    ``closure_pulp.DEFAULT_CAS_MAX_RETRIES`` -- the single
+    ``CLOSURE_CAS_MAX_RETRIES``-sourced ceiling shared by every closure CAS
+    loop -- resolved at call time.
+
     """
+    max_retries = _resolve_max_retries(max_retries)
     for attempt in range(max_retries):
         index, _digest = pull_index(compliance_image_prefix, closure_index_image)
         expected = index["revision"]
@@ -429,7 +443,7 @@ def cas_publish_compliance(
     *,
     compliance_image_prefix: str,
     registry_url: str,
-    max_retries: int = DEFAULT_CAS_MAX_RETRIES,
+    max_retries: int | None = None,
 ) -> str:
     """Publish a compliance document with revision-conflict retry.
 
@@ -453,7 +467,11 @@ def cas_publish_compliance(
         click.ClickException: The published revision never verified as
             landed within ``max_retries`` rounds.
 
+    ``max_retries`` defaults (when ``None``) to
+    ``closure_pulp.DEFAULT_CAS_MAX_RETRIES``, as for ``cas_push_index``.
+
     """
+    max_retries = _resolve_max_retries(max_retries)
     name, version = doc["name"], doc["version"]
     for attempt in range(max_retries):
         existing, _ = pull_compliance_doc(

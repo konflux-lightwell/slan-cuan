@@ -520,3 +520,66 @@ class TestCasPublishCompliance:
                 registry_url="https://registry.npmjs.org",
                 max_retries=2,
             )
+
+
+class TestCasDefaultMaxRetries:
+    """Both OCI CAS loops default to closure_pulp.DEFAULT_CAS_MAX_RETRIES."""
+
+    def test_cas_push_index_default_retries_follow_closure_pulp(self):
+        """Patching the shared constant changes cas_push_index's default."""
+        pulled = ({"revision": 0, "entries": {}}, None)
+        with (
+            patch("slan_cuan.npm.closure_pulp.DEFAULT_CAS_MAX_RETRIES", 4),
+            patch("slan_cuan.npm.closure_oci.pull_index", return_value=pulled),
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index",
+                side_effect=oci.OrasError("conflict", "stderr", 1),
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep"),
+            pytest.raises(click.ClickException, match="after 4 retries"),
+        ):
+            cas_push_index(lambda idx: idx, compliance_image_prefix=PREFIX)
+        assert mock_publish_index.call_count == 4
+
+    def test_cas_publish_compliance_default_retries_follow_closure_pulp(self):
+        """Patching the shared constant changes cas_publish_compliance's too."""
+        doc = {"name": "pkg", "version": "1.0.0", "compliance_revision": 1}
+        with (
+            patch("slan_cuan.npm.closure_pulp.DEFAULT_CAS_MAX_RETRIES", 3),
+            patch(
+                "slan_cuan.npm.closure_oci.pull_compliance_doc",
+                return_value=(None, None),
+            ),
+            patch(
+                "slan_cuan.npm.closure_oci.publish_compliance_doc",
+                return_value=DIGEST,
+            ) as mock_publish_doc,
+            patch("slan_cuan.npm.closure_oci.time.sleep"),
+            pytest.raises(click.ClickException, match="Compliance CAS failed"),
+        ):
+            cas_publish_compliance(
+                Mock(),
+                doc,
+                {"latest_version_href": "/repo/versions/9/"},
+                compliance_image_prefix=PREFIX,
+                registry_url="https://registry.npmjs.org",
+            )
+        assert mock_publish_doc.call_count == 3
+
+    def test_explicit_max_retries_overrides_shared_default(self):
+        """A per-call max_retries still wins over the shared default."""
+        pulled = ({"revision": 0, "entries": {}}, None)
+        with (
+            patch("slan_cuan.npm.closure_pulp.DEFAULT_CAS_MAX_RETRIES", 7),
+            patch("slan_cuan.npm.closure_oci.pull_index", return_value=pulled),
+            patch(
+                "slan_cuan.npm.closure_oci.publish_index",
+                side_effect=oci.OrasError("conflict", "stderr", 1),
+            ) as mock_publish_index,
+            patch("slan_cuan.npm.closure_oci.time.sleep"),
+            pytest.raises(click.ClickException),
+        ):
+            cas_push_index(
+                lambda idx: idx, compliance_image_prefix=PREFIX, max_retries=2
+            )
+        assert mock_publish_index.call_count == 2

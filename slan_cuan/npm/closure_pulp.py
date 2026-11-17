@@ -57,8 +57,10 @@ _RETRY_BACKOFF_SECONDS = 0.2
 
 #: Default CAS retry-round ceiling, matching the original script's
 #: module-level ``CAS_MAX_RETRIES = int(os.environ.get(
-#: "CLOSURE_CAS_MAX_RETRIES", "8"))``. Read once at import time; callers
-#: (and tests) may still override per-call via ``max_retries``.
+#: "CLOSURE_CAS_MAX_RETRIES", "8"))``. Read once at import time and shared
+#: by every closure CAS loop (this module's label CAS and
+#: ``closure_oci``'s index/compliance CAS), each resolving it at call time
+#: when ``max_retries`` is None; callers may still override per-call.
 DEFAULT_CAS_MAX_RETRIES = int(os.environ.get("CLOSURE_CAS_MAX_RETRIES", "8"))
 
 
@@ -278,7 +280,7 @@ def sync_content_pulp_labels(
     level: str,
     compliance_digest: str,
     *,
-    max_retries: int = DEFAULT_CAS_MAX_RETRIES,
+    max_retries: int | None = None,
 ) -> None:
     """Set Pulp compliance labels using the OCI digest as an optimistic lock.
 
@@ -312,6 +314,8 @@ def sync_content_pulp_labels(
             caught up within ``max_retries`` rounds.
 
     """
+    if max_retries is None:
+        max_retries = DEFAULT_CAS_MAX_RETRIES
     desired_digest = normalize_digest(compliance_digest)
     if not desired_digest:
         return

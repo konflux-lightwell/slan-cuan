@@ -385,6 +385,26 @@ class TestDefaultCasMaxRetries:
         finally:
             importlib.reload(closure_pulp)
 
+    def test_sync_labels_default_retries_resolved_at_call_time(self):
+        """sync_content_pulp_labels reads the shared constant per call."""
+        client = Mock()
+        client.get_labels.return_value = {COMPLIANCE_DIGEST_LABEL: DIGEST}
+        with (
+            patch("slan_cuan.npm.closure_pulp.DEFAULT_CAS_MAX_RETRIES", 2),
+            patch("slan_cuan.npm.closure_pulp.time.sleep") as mock_sleep,
+            pytest.raises(click.ClickException, match="after 2 retries"),
+        ):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+            )
+        assert mock_sleep.call_count == 1
+
     def test_default_max_retries_falls_back_to_eight(self, monkeypatch):
         """Without the env var set, the default retry ceiling is 8."""
         monkeypatch.delenv("CLOSURE_CAS_MAX_RETRIES", raising=False)
