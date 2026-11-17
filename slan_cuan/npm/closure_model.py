@@ -397,8 +397,62 @@ def doc_to_compliance_json(
     return out
 
 
+#: Strictness order of compliance levels, lowest (least compliant) first.
+_LEVEL_RANK = {"L1": 1, "L2": 2, "L3": 3}
+
+
+def enforce_alias_gaps(doc: dict) -> dict:
+    """Fail closed on npm alias direct dependencies in a normalized doc.
+
+    For each direct dependency whose ``requested`` value is an alias spec
+    (``is_npm_alias_spec``) and whose ``alias_gap_key`` is in neither gap
+    list, adds that key to ``missing_gaps``. Only the exact sentinel key
+    counts as already flagged: a local-name gap with a real version (e.g.
+    ``my-dep@^1.2.0``) would be cleared by any unrelated package named
+    ``my-dep`` reaching L3, so it does not fail closed.
+
+    When the doc has any alias dependency, ``compliance_level`` is capped
+    at the level its gap lists imply (never raised), so a claimed ``L3``
+    cannot survive an alias gap. Docs without alias dependencies are
+    returned unchanged. Does not mutate the input dict.
+    """
+    alias_names = [
+        dep["name"]
+        for dep in doc.get("direct_dependencies") or []
+        if is_npm_alias_spec(dep.get("requested") or "")
+    ]
+    if not alias_names:
+        return doc
+    doc = copy.deepcopy(doc)
+    missing = set(doc.get("missing_gaps") or [])
+    pending = set(doc.get("pending_l3_gaps") or [])
+    for name in alias_names:
+        key = alias_gap_key(name)
+        if key not in missing and key not in pending:
+            missing.add(key)
+    doc["missing_gaps"] = sorted(missing)
+    doc["pending_l3_gaps"] = sorted(pending)
+    # An alias gap is now always present, so computed is L1 or L2. An
+    # unrecognized claimed level ranks above L3 and is always replaced.
+    computed = compute_level(doc)
+    claimed = doc.get("compliance_level")
+    if _LEVEL_RANK[computed] < _LEVEL_RANK.get(claimed, len(_LEVEL_RANK) + 1):
+        doc["compliance_level"] = computed
+    return doc
+
+
 def sidecar_to_doc(sidecar_json: dict, pulp_href: str = "") -> dict:
     """Normalize and validate an already-parsed sidecar compliance doc.
+
+    Also applies ``enforce_alias_gaps``: the automated ``closure update``
+    path trusts the sidecar's gap lists (produced by an external assess
+    tool) and never re-scans dependencies the way ``rebalance`` does, so
+    an alias dependency the assess tool failed to flag must still fail
+    closed here. This deliberately lives in ``sidecar_to_doc``, not
+    ``normalize_doc``: ``normalize_doc`` also backs every OCI pull, and
+    ``rebalance`` detects stale stored docs by diffing its re-derived gaps
+    against the pulled doc -- injecting on pull would mask a stale stored
+    L3 doc (and its Pulp label) from that diff.
 
     Does not mutate ``sidecar_json``.
 
@@ -411,7 +465,7 @@ def sidecar_to_doc(sidecar_json: dict, pulp_href: str = "") -> dict:
     data = dict(sidecar_json)
     if pulp_href:
         data["pulp_href"] = pulp_href
-    doc = normalize_doc(data)
+    doc = enforce_alias_gaps(normalize_doc(data))
     if not doc["name"] or not doc["version"]:
         raise click.ClickException("Sidecar missing name/version")
     validate_gap_subset(doc)

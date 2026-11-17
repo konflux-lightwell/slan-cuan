@@ -351,6 +351,51 @@ class TestUpdateCommand:
         assert result.exit_code == 0, result.output
         assert captured["index"]["entries"] == {}
 
+    def test_update_command_unflagged_alias_dependency_stays_below_l3(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A sidecar claiming L3 with an unflagged alias dep is not L3.
+
+        The automated update path trusts the sidecar and never runs
+        rebalance's dependency re-scan, so the alias fail-closed gap must
+        be injected on the shared sidecar_to_doc path.
+        """
+        sidecar = _write_sidecar(
+            tmp_path,
+            compliance_level="L3",
+            direct_dependencies=[
+                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"}
+            ],
+        )
+        alias_key = closure_model.alias_gap_key("my-dep")
+        captured: dict[str, dict] = {}
+
+        def _fake_cas_push_index(mutator, **kwargs):
+            captured["index"] = mutator(closure_model.empty_index())
+            return captured["index"], INDEX_DIGEST
+
+        mocks.cas_push_index.side_effect = _fake_cas_push_index
+
+        result = runner.invoke(
+            main,
+            [
+                "npm",
+                "closure",
+                "update",
+                "--sidecar",
+                str(sidecar),
+                *_PULP_ARGS,
+                *_OCI_ARGS,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["compliance_level"] == "L1"
+        published = mocks.cas_publish_compliance.call_args.args[1]
+        assert published["compliance_level"] == "L1"
+        assert published["missing_gaps"] == [alias_key]
+        assert captured["index"]["entries"][alias_key]["parents"] == ["pkg@1.0.0"]
+
 
 class TestSeedCommand:
     """CLI-level tests for `slan-cuan npm closure seed`."""

@@ -842,7 +842,10 @@ def rebalance(
                     # count as an open gap: fail closed with a
                     # permanently-unresolvable missing gap (local name +
                     # sentinel version) so the parent can never reach L3
-                    # on an unverified dependency.
+                    # on an unverified dependency. Not redundant with
+                    # closure_model.enforce_alias_gaps (update's sidecar
+                    # path): this loop rebuilds the gap lists from
+                    # scratch and publishes them directly.
                     click.echo(
                         f"Alias dependency {dep_name}@{dep_spec} cannot be "
                         "verified; recording it as an unresolvable gap",

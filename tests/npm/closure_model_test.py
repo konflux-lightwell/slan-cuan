@@ -517,6 +517,102 @@ class TestSidecarToDoc:
         sidecar_to_doc(sidecar, pulp_href="/href/")
         assert sidecar == {"name": "pkg", "version": "1.0.0"}
 
+    def _alias_sidecar(self, **overrides) -> dict:
+        sidecar = {
+            "name": "pkg",
+            "version": "1.0.0",
+            "compliance_level": "L3",
+            "direct_dependencies": [
+                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"},
+                {"name": "plain", "requested": "^2.0.0"},
+            ],
+            "missing_gaps": [],
+            "pending_l3_gaps": [],
+        }
+        sidecar.update(overrides)
+        return sidecar
+
+    def test_sidecar_to_doc_injects_unflagged_alias_gap(self):
+        """An alias dep the assess tool didn't flag fails closed below L3.
+
+        Core regression test for the automated ``closure update`` path,
+        which trusts the sidecar and never runs rebalance's re-scan.
+        """
+        doc = sidecar_to_doc(self._alias_sidecar())
+        assert doc["missing_gaps"] == [alias_gap_key("my-dep")]
+        assert doc["pending_l3_gaps"] == []
+        assert doc["compliance_level"] == "L1"
+        validate_gap_subset(doc)
+
+    def test_sidecar_to_doc_keeps_already_flagged_alias_gap_single(self):
+        """A sidecar that already flagged the alias gets no duplicate."""
+        sidecar = self._alias_sidecar(
+            compliance_level="L1",
+            missing_gaps=[alias_gap_key("my-dep"), "plain@^2.0.0"],
+        )
+        doc = sidecar_to_doc(sidecar)
+        assert doc["missing_gaps"] == sorted(
+            [alias_gap_key("my-dep"), "plain@^2.0.0"]
+        )
+        assert doc["pending_l3_gaps"] == []
+        assert doc["compliance_level"] == "L1"
+
+    def test_sidecar_to_doc_alias_gap_already_pending_not_duplicated(self):
+        """An alias gap already in pending_l3_gaps isn't added to missing."""
+        sidecar = self._alias_sidecar(pending_l3_gaps=[alias_gap_key("my-dep")])
+        doc = sidecar_to_doc(sidecar)
+        assert doc["missing_gaps"] == []
+        assert doc["pending_l3_gaps"] == [alias_gap_key("my-dep")]
+        # Claimed L3 is capped by the gap actually present.
+        assert doc["compliance_level"] == "L2"
+
+    def test_sidecar_to_doc_real_version_gap_does_not_cover_alias(self):
+        """A local-name gap with a real version is not a fail-closed flag.
+
+        ``my-dep@^1.2.0`` would be cleared by any unrelated package that
+        happens to be named ``my-dep`` reaching L3, so only the sentinel
+        alias key counts as the alias already being flagged.
+        """
+        sidecar = self._alias_sidecar(
+            compliance_level="L2", pending_l3_gaps=["my-dep@^1.2.0"]
+        )
+        doc = sidecar_to_doc(sidecar)
+        assert doc["missing_gaps"] == [alias_gap_key("my-dep")]
+        assert doc["pending_l3_gaps"] == ["my-dep@^1.2.0"]
+        assert doc["compliance_level"] == "L1"
+
+    def test_sidecar_to_doc_without_alias_deps_is_unchanged(self):
+        """Non-alias deps (and no deps at all) get no injected gap."""
+        plain = sidecar_to_doc(
+            {
+                "name": "pkg",
+                "version": "1.0.0",
+                "compliance_level": "L3",
+                "direct_dependencies": [
+                    {"name": "plain", "requested": "^2.0.0"},
+                    {"name": "exact", "requested": "1.2.3"},
+                ],
+            }
+        )
+        assert plain["missing_gaps"] == []
+        assert plain["compliance_level"] == "L3"
+        no_deps = sidecar_to_doc(
+            {"name": "pkg", "version": "1.0.0", "compliance_level": "L3"}
+        )
+        assert no_deps["missing_gaps"] == []
+        assert no_deps["compliance_level"] == "L3"
+
+    def test_normalize_doc_alone_does_not_inject_alias_gap(self):
+        """The pull path (normalize_doc) stays a faithful read of storage.
+
+        rebalance detects stale stored docs by diffing its re-derived gaps
+        against the pulled doc; injecting on pull would hide a stale
+        stored L3 doc from that diff, so injection lives in sidecar_to_doc.
+        """
+        doc = normalize_doc(self._alias_sidecar())
+        assert doc["missing_gaps"] == []
+        assert doc["compliance_level"] == "L3"
+
 
 class TestIndex:
     """empty_index / normalize_index / index mutation helpers."""
