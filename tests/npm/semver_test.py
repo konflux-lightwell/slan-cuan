@@ -158,6 +158,41 @@ class TestSatisfies:
         """
         assert satisfies("1.2.3-alpha.1", ">=1.2.3-0 <1.2.4") is True
 
+    def test_satisfies_prerelease_or_clause_matching_branch_allows(self):
+        """A prerelease satisfies an OR-range via whichever branch allows it.
+
+        ``^2.0.0`` doesn't share (1, 2, 3) with the tested version, so it
+        can't allow the prerelease through; but the second branch's lower
+        bound does share that tuple and carries a prerelease tag.
+        """
+        assert satisfies("1.2.3-alpha.1", "^2.0.0 || >=1.2.3-0 <1.2.4") is True
+
+    def test_satisfies_prerelease_or_clause_no_branch_allows(self):
+        """A prerelease is excluded when NO OR-branch's bound allows it.
+
+        Here the second branch's lower bound shares (1, 2, 3) with the
+        tested version but has no prerelease tag of its own, so neither
+        branch allows the prerelease through.
+        """
+        assert satisfies("1.2.3-alpha.1", "^2.0.0 || >=1.2.3 <1.2.4") is False
+
+    def test_satisfies_prerelease_hyphen_range_boundary_allows(self):
+        """A prerelease at a hyphen-range boundary that itself allows it.
+
+        ``1.2.3-0 - 2.0.0`` expands to ``>=1.2.3-0 <=2.0.0``; the lower
+        bound shares (1, 2, 3) with the tested version and carries a
+        prerelease tag, so 1.2.3-alpha.1 is allowed through.
+        """
+        assert satisfies("1.2.3-alpha.1", "1.2.3-0 - 2.0.0") is True
+
+    def test_satisfies_prerelease_hyphen_range_boundary_excludes(self):
+        """A hyphen-range boundary without a prerelease tag excludes it.
+
+        ``1.2.3 - 2.0.0`` shares (1, 2, 3) with the tested version but the
+        bound itself has no prerelease tag, so 1.2.3-alpha.1 is excluded.
+        """
+        assert satisfies("1.2.3-alpha.1", "1.2.3 - 2.0.0") is False
+
     def test_satisfies_invalid_version_returns_false(self):
         """Satisfies returns False for invalid version strings."""
         assert satisfies("not-a-version", "1.2.3") is False

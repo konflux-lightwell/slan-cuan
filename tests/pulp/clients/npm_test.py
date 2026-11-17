@@ -379,12 +379,13 @@ class TestGetArtifactSha256:
             pytest.param({"pulp_href": "/api/v3/artifacts/abc/"}, id="missing"),
             pytest.param({"sha256": None}, id="null"),
             pytest.param({"sha256": ""}, id="empty"),
+            pytest.param({"sha256": 12345}, id="non-string-int"),
         ],
     )
     def test_get_artifact_sha256_raises_on_missing_digest(
         self, body: dict[str, object]
     ) -> None:
-        """A missing/null/empty sha256 raises instead of a sentinel string."""
+        """A missing/null/empty/non-string sha256 raises, not a sentinel."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=body)
