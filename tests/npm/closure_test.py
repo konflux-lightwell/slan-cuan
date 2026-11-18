@@ -626,6 +626,52 @@ class TestRebalanceCommand:
         payload = json.loads(result.stdout)
         assert payload["compliance_updated"] == ["pkg@1.0.0"]
 
+    def test_rebalance_command_alias_plus_normal_dep_matches_old_end_state(
+        self, runner: CliRunner, mocks: SimpleNamespace
+    ) -> None:
+        """Rebalance + enforce_alias_gaps match the old inline-only end-state.
+
+        For a realistic multi-dependency doc, one alias dependency (never
+        resolved, no longer appended inline)
+        and one normal, fully-resolved-at-L3 dependency: the published
+        doc's missing_gaps must still contain exactly the alias gap key
+        (now added by ``closure_model.enforce_alias_gaps`` instead of the
+        loop's own ``.append()``), with the normal dependency contributing
+        no gap at all, and the level still capped at L1.
+        """
+        doc = self._doc(
+            direct_dependencies=[
+                {"name": "my-dep", "requested": "npm:real-pkg@^1.2.0"},
+                {"name": "normal-dep", "requested": "^2.0.0"},
+            ],
+        )
+        mocks.list_repo_packages.return_value = iter(
+            [{"name": "pkg", "version": "1.0.0", "pulp_href": "href1"}]
+        )
+        mocks.pull_compliance_doc.return_value = (doc, DIGEST)
+        mocks.find_resolved_version_for_dep.return_value = "2.0.0"
+        mocks.tl_level_for_key.return_value = "L3"
+
+        result = runner.invoke(
+            main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
+        )
+
+        assert result.exit_code == 0, result.output
+        mocks.find_resolved_version_for_dep.assert_called_once_with(
+            mocks.client, "normal-dep", "^2.0.0", doc, _REPO_VERSION_HREF
+        )
+        published = mocks.publish_compliance_doc.call_args.args[1]
+        assert published["compliance_level"] == "L1"
+        assert published["missing_gaps"] == [
+            closure_model.node_key(
+                "my-dep", closure_model.UNVERIFIABLE_ALIAS_VERSION
+            )
+        ]
+        assert published["pending_l3_gaps"] == []
+        closure_model.validate_gap_subset(published)
+        payload = json.loads(result.stdout)
+        assert payload["compliance_updated"] == ["pkg@1.0.0"]
+
 
 class TestFindResolvedVersionForDep:
     """Direct unit tests for find_resolved_version_for_dep's resolution."""

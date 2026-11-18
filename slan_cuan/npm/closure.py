@@ -842,20 +842,21 @@ def rebalance(
                     # version) is a different package than dep_name, and
                     # the raw spec string itself contains an "@", which
                     # would corrupt node_key/parse_node_key round-
-                    # tripping. It is never resolved, but it must still
-                    # count as an open gap: fail closed with a
-                    # permanently-unresolvable missing gap (local name +
-                    # sentinel version) so the parent can never reach L3
-                    # on an unverified dependency. Not redundant with
-                    # closure_model.enforce_alias_gaps (update's sidecar
-                    # path): this loop rebuilds the gap lists from
-                    # scratch and publishes them directly.
+                    # tripping -- this short-circuit exists purely to
+                    # avoid that, by never resolving or building a node
+                    # key from the raw spec. It does NOT record the gap
+                    # itself: closure_model.enforce_alias_gaps (the same
+                    # single owner the ``update`` sidecar path already
+                    # uses) adds the permanently-unresolvable missing gap
+                    # below, once, after this loop -- re-deriving alias
+                    # dependencies directly from direct_dependencies
+                    # rather than from what this loop appends to
+                    # missing/pending.
                     click.echo(
                         f"Alias dependency {dep_name}@{dep_spec} cannot be "
                         "verified; recording it as an unresolvable gap",
                         err=True,
                     )
-                    missing.append(closure_model.alias_gap_key(dep_name))
                     continue
                 resolved = find_resolved_version_for_dep(
                     client, dep_name, dep_spec, doc, repo_version
@@ -879,6 +880,11 @@ def rebalance(
             new_doc = copy.deepcopy(doc)
             new_doc["missing_gaps"] = sorted(set(missing))
             new_doc["pending_l3_gaps"] = sorted(set(pending))
+            # Single owner of "what key represents an alias gap, and how
+            # it caps the level" for both the update (sidecar) and
+            # rebalance paths -- re-derives alias dependencies straight
+            # from direct_dependencies, independent of the loop above.
+            new_doc = closure_model.enforce_alias_gaps(new_doc)
             new_doc["compliance_level"] = closure_model.compute_level(new_doc)
             if (
                 new_doc["missing_gaps"] != doc.get("missing_gaps")
