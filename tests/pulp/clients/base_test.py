@@ -1039,6 +1039,33 @@ class TestLabels:
         result = client.get_labels("/api/v3/repositories/maven/maven/uuid/")
         assert result == {}
 
+    def test_get_labels_sends_custom_headers(self) -> None:
+        """get_labels attaches custom_headers to the GET request."""
+        captured_headers: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_headers
+            captured_headers = dict(request.headers)
+            return httpx.Response(200, json={"pulp_labels": {"a": "1"}})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            custom_headers={"X-TASK-DIAGNOSTICS": "pyinstrument"},
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.get_labels("/api/v3/repositories/maven/maven/uuid/")
+
+        assert result == {"a": "1"}
+        assert captured_headers.get("x-task-diagnostics") == "pyinstrument"
+
     def test_set_label_without_cas_posts_unconditionally(self) -> None:
         """set_label without CAS posts immediately without prior GET."""
         captured_requests = []
@@ -1224,6 +1251,38 @@ class TestLabels:
         # Should have GET then POST
         assert captured_requests == ["GET", "POST"]
 
+    def test_set_label_sends_custom_headers(self) -> None:
+        """set_label attaches custom_headers to the POST request."""
+        captured_headers: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_headers
+            if "set_label/" in str(request.url):
+                captured_headers = dict(request.headers)
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            custom_headers={"X-TASK-DIAGNOSTICS": "pyinstrument"},
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        client.set_label(
+            "/api/v3/repositories/maven/maven/uuid/",
+            "k",
+            "v",
+        )
+
+        assert captured_headers.get("x-task-diagnostics") == "pyinstrument"
+
 
 class TestListContent:
     """Tests for list_content() paginated list method."""
@@ -1380,6 +1439,33 @@ class TestListContent:
 
         assert result == []
         assert len(captured_requests) == 1
+
+    def test_list_content_sends_custom_headers(self) -> None:
+        """list_content attaches custom_headers to the GET request."""
+        captured_headers: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_headers
+            captured_headers = dict(request.headers)
+            return httpx.Response(200, json={"results": []})
+
+        transport = httpx.MockTransport(handler)
+        config = PulpConfig(
+            base_url="https://pulp.example.com",
+            verify_ssl=True,
+            username="testuser",
+            password="testpass",
+            custom_headers={"X-TASK-DIAGNOSTICS": "pyinstrument"},
+        )
+        client = PulpMavenClient(config, "test-dist")
+        client._client = httpx.Client(
+            transport=transport, base_url="https://pulp.example.com"
+        )
+
+        result = client.list_content("/api/v3/content/npm/packages/")
+
+        assert result == []
+        assert captured_headers.get("x-task-diagnostics") == "pyinstrument"
 
 
 class TestOrphanCleanup:

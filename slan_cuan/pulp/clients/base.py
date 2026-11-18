@@ -663,6 +663,7 @@ class PulpClientBase:
             "GET",
             href,
             "Get labels",
+            headers=self._config.custom_headers or None,
         )
 
         response_data = parse_json_dict(response, "Get labels", PulpError)
@@ -721,6 +722,7 @@ class PulpClientBase:
             url,
             "Set label",
             json=payload,
+            headers=self._config.custom_headers or None,
         )
 
     def list_content(
@@ -756,6 +758,7 @@ class PulpClientBase:
                 list_url,
                 "Content list",
                 params=params,
+                headers=self._config.custom_headers or None,
             )
 
             response_data = parse_json_dict(response, "Content list", PulpError)
