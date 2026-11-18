@@ -62,3 +62,8 @@ Ecosystem-specific commands are grouped under their own namespace instead of the
 |------------|-------------|-------------|
 | `javascript extract` | `slan-cuan-javascript-extract` | Extract npm packages from the snapshot's component images |
 | `javascript upload` | Yes | Upload npm package tarballs to a Pulp npm repository |
+| `javascript closure update` | Yes | Apply a release sidecar: update compliance doc, index, and waiters |
+| `javascript closure seed` | No (ops-only) | Bootstrap compliance OCI documents for catalog packages missing one |
+| `javascript closure rebalance` | No (ops-only) | Rebuild the closure index, and optionally re-derive gap lists |
+| `javascript closure show` | No (ops-only) | Print a compliance document from OCI, or a local file verbatim |
+| `javascript closure show-index` | No (ops-only) | Print the global closure index from OCI |
