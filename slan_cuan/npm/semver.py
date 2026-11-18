@@ -138,6 +138,18 @@ def _caret_bounds(ver: Version) -> tuple[Version, Version]:
     return lower, upper
 
 
+def _bump_last_given(major: int, minor: int, patch: int, wild_at: int) -> Version:
+    """Bump the last explicitly-given component by 1, zero-filling the rest.
+
+    ``wild_at`` is the count of components given before the first omitted
+    / wildcard one (as returned by ``_parse_partial``): 1 means only
+    ``major`` was given, 2 means ``major.minor`` was given.
+    """
+    if wild_at <= 1:
+        return Version("%d.0.0" % (major + 1))
+    return Version("%d.%d.0" % (major, minor + 1))
+
+
 def _tilde_bounds(
     major: int, minor: int, patch: int, wild_at: int
 ) -> tuple[Version, Version]:
@@ -211,6 +223,10 @@ def _token_to_bounds(
             (">=", Version("%d.%d.0" % (major, minor))),
             ("<", Version("%d.%d.0" % (major, minor + 1))),
         ]
+    if 0 < wild_at < 3 and op == ">":
+        return [(">=", _bump_last_given(major, minor, patch, wild_at))]
+    if 0 < wild_at < 3 and op == "<=":
+        return [("<", _bump_last_given(major, minor, patch, wild_at))]
     ver = Version("%d.%d.%d" % (major, minor, patch))
     if "-" in rest.split("+", 1)[0]:
         pre = rest.split("+", 1)[0].split("-", 1)[1]
