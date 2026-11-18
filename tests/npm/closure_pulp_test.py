@@ -391,6 +391,57 @@ class TestSyncContentPulpLabels:
         )
         client.set_label.assert_called_once()
 
+    def test_sync_labels_level_write_404_abandons_gracefully(self):
+        """A 404 on the level write is treated like a vanished unit, not raised."""
+        client = Mock()
+        client.get_labels.side_effect = [
+            {},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+        ]
+
+        def _set_label(href, key, value, **kwargs):
+            if key == COMPLIANCE_LABEL:
+                raise PulpError("not found", status_code=404, response_body="")
+
+        client.set_label.side_effect = _set_label
+        sync_content_pulp_labels(
+            client,
+            CONTENT_HREF,
+            REPO_VERSION_HREF,
+            "pkg",
+            "1.0.0",
+            "L2",
+            DIGEST,
+        )
+        keys = [c.args[1] for c in client.set_label.call_args_list]
+        assert keys == [COMPLIANCE_DIGEST_LABEL, COMPLIANCE_LABEL]
+
+    def test_sync_labels_level_write_non_404_error_propagates(self):
+        """A non-404 PulpError on the level write is not swallowed."""
+        client = Mock()
+        client.get_labels.side_effect = [
+            {},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+        ]
+
+        def _set_label(href, key, value, **kwargs):
+            if key == COMPLIANCE_LABEL:
+                raise PulpError("boom", status_code=500, response_body="")
+
+        client.set_label.side_effect = _set_label
+        with pytest.raises(PulpError, match="boom"):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+            )
+
     def test_sync_labels_noop_when_content_not_found(self):
         """A missing content unit is a clean no-op, not an error."""
         client = Mock()

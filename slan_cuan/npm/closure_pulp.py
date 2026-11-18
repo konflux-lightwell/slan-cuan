@@ -250,6 +250,30 @@ def _reread_holding_digest(
     return labels.get(COMPLIANCE_LABEL) or ""
 
 
+def _write_pulp_label(
+    client: PulpNpmClient, content_href: str, key: str, value: str
+) -> None:
+    """Write a label, translating a 404 into ``_ContentGone``.
+
+    A monotonic-max write (unlike ``_claim_compliance_digest``'s equality
+    CAS), so no ``cas_digest``/``cas_label_key`` is passed -- this just
+    guards the write path the same way ``_read_pulp_labels`` already
+    guards the read path, so a concurrent content deletion abandons
+    cleanly instead of propagating an uncaught ``PulpError``.
+
+    Raises:
+        _ContentGone: The content unit no longer resolves (HTTP 404).
+        PulpError: Any other failure, re-raised unchanged.
+
+    """
+    try:
+        client.set_label(content_href, key, value)
+    except PulpError as exc:
+        if exc.status_code == 404:
+            raise _ContentGone from exc
+        raise
+
+
 def _maybe_raise_compliance_level(
     client: PulpNpmClient,
     content_href: str,
@@ -264,7 +288,7 @@ def _maybe_raise_compliance_level(
     """
     target_level = monotone_target_level(cur_level, desired_level)
     if level_rank(cur_level) < level_rank(target_level):
-        client.set_label(content_href, COMPLIANCE_LABEL, target_level)
+        _write_pulp_label(client, content_href, COMPLIANCE_LABEL, target_level)
         click.echo(
             f"Updated {key} Pulp label {COMPLIANCE_LABEL} -> {target_level} "
             f"(was {cur_level or '<unset>'})",
