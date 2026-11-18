@@ -22,7 +22,10 @@ from click.testing import CliRunner
 
 from slan_cuan.cli import main
 from slan_cuan.npm import closure_model
-from slan_cuan.npm.closure import drain_blocker_parents
+from slan_cuan.npm.closure import (
+    drain_blocker_parents,
+    find_resolved_version_for_dep,
+)
 
 _REPO_HREF = "/api/v3/repositories/npm/npm/abc/"
 _REPO_VERSION_HREF = "/api/v3/repositories/npm/npm/abc/versions/5/"
@@ -622,6 +625,79 @@ class TestRebalanceCommand:
         closure_model.validate_gap_subset(published)
         payload = json.loads(result.stdout)
         assert payload["compliance_updated"] == ["pkg@1.0.0"]
+
+
+class TestFindResolvedVersionForDep:
+    """Direct unit tests for find_resolved_version_for_dep's resolution."""
+
+    def _doc(self, **overrides) -> dict:
+        base = {
+            "name": "pkg",
+            "version": "1.0.0",
+            "compliance_level": "L3",
+            "direct_dependencies": [{"name": "dep", "requested": "^4.17.21"}],
+            "missing_gaps": [],
+            "pending_l3_gaps": [],
+        }
+        base.update(overrides)
+        return closure_model.normalize_doc(base)
+
+    def test_resolves_non_pinned_range_against_a_satisfying_repo_version(
+        self,
+    ) -> None:
+        """A semver-range spec resolves to the highest satisfying version.
+
+        Regression test: an exact-match lookup against a range spec like
+        ``^4.17.21`` would (almost) never find a byte-identical version
+        string, leaving the dependency stuck unresolved even though a
+        satisfying version genuinely exists in the repo.
+        """
+        client = MagicMock()
+        doc = self._doc()
+        rows = [
+            {"name": "dep", "version": "4.17.20"},
+            {"name": "dep", "version": "4.17.21"},
+            {"name": "dep", "version": "4.18.0"},
+        ]
+        with patch(
+            "slan_cuan.npm.closure.closure_pulp.list_versions_in_repo",
+            return_value=rows,
+        ) as list_versions:
+            resolved = find_resolved_version_for_dep(
+                client, "dep", "^4.17.21", doc, _REPO_VERSION_HREF
+            )
+
+        assert resolved == "4.18.0"
+        list_versions.assert_called_once_with(client, "dep", _REPO_VERSION_HREF)
+
+    def test_returns_none_when_no_repo_version_satisfies_the_range(self) -> None:
+        """No row satisfies the range -> None (falls through to a gap)."""
+        client = MagicMock()
+        doc = self._doc()
+        rows = [{"name": "dep", "version": "3.0.0"}]
+        with patch(
+            "slan_cuan.npm.closure.closure_pulp.list_versions_in_repo",
+            return_value=rows,
+        ):
+            resolved = find_resolved_version_for_dep(
+                client, "dep", "^4.17.21", doc, _REPO_VERSION_HREF
+            )
+
+        assert resolved is None
+
+    def test_gap_keys_are_checked_before_the_repo_lookup(self) -> None:
+        """An already-recorded gap key short-circuits the repo lookup."""
+        client = MagicMock()
+        doc = self._doc(missing_gaps=["dep@4.17.21"])
+        with patch(
+            "slan_cuan.npm.closure.closure_pulp.list_versions_in_repo"
+        ) as list_versions:
+            resolved = find_resolved_version_for_dep(
+                client, "dep", "^4.17.21", doc, _REPO_VERSION_HREF
+            )
+
+        assert resolved == "4.17.21"
+        list_versions.assert_not_called()
 
 
 def _assert_no_io(mocks: SimpleNamespace) -> None:

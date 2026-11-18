@@ -145,6 +145,20 @@ def find_content_in_repo(
     return client.find_by_name_version(name, version, repo_version_href)
 
 
+def list_versions_in_repo(
+    client: PulpNpmClient, name: str, repo_version_href: str
+) -> list[dict[str, object]]:
+    """List every Pulp content row for name within a repo version.
+
+    Thin wrapper over ``PulpNpmClient.list_versions_by_name`` (same
+    vocabulary convention as ``find_content_in_repo``), used by
+    semver-range dependency resolution -- unlike ``find_content_in_repo``,
+    this does not filter by an exact version, since a range spec is
+    virtually never byte-identical to an installed version string.
+    """
+    return client.list_versions_by_name(name, repo_version_href)
+
+
 def list_repo_packages(
     client: PulpNpmClient, repo: dict[str, object]
 ) -> Iterator[dict[str, object]]:

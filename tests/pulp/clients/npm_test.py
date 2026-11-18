@@ -350,6 +350,61 @@ class TestFindByNameVersion:
         assert "offset=100" in str(captured_requests[1].url)
 
 
+class TestListVersionsByName:
+    """Tests for list_versions_by_name()."""
+
+    def test_list_versions_by_name_returns_every_row_for_name(self) -> None:
+        """All versions for an exact name are returned, unfiltered by version."""
+        captured_params: dict[str, str] | None = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_params
+            captured_params = {k: v for k, v in request.url.params.items()}
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "pulp_href": "/api/v3/content/npm/pk/1/",
+                            "name": "my-pkg",
+                            "version": "1.0.0",
+                        },
+                        {
+                            "pulp_href": "/api/v3/content/npm/pk/2/",
+                            "name": "my-pkg",
+                            "version": "2.0.0",
+                        },
+                        {
+                            "pulp_href": "/api/v3/content/npm/pk/3/",
+                            "name": "other-pkg",
+                            "version": "9.0.0",
+                        },
+                    ]
+                },
+            )
+
+        client = _client_with_transport(handler)
+
+        result = client.list_versions_by_name("my-pkg", _REPO_VERSION_HREF)
+
+        assert [row["version"] for row in result] == ["1.0.0", "2.0.0"]
+        assert captured_params is not None
+        assert captured_params["name"] == "my-pkg"
+        assert captured_params["repository_version"] == _REPO_VERSION_HREF
+
+    def test_list_versions_by_name_returns_empty_list_when_absent(self) -> None:
+        """No rows match the name -> an empty list, not None."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"results": []})
+
+        client = _client_with_transport(handler)
+
+        result = client.list_versions_by_name("my-pkg", _REPO_VERSION_HREF)
+
+        assert result == []
+
+
 class TestGetArtifactSha256:
     """Tests for get_artifact_sha256()."""
 

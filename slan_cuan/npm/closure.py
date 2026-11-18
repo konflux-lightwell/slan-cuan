@@ -44,6 +44,7 @@ import click
 from slan_cuan.http import parse_custom_headers
 from slan_cuan.models import GlobalContext
 from slan_cuan.npm import closure_model, closure_oci, closure_pulp
+from slan_cuan.npm.semver import max_satisfying
 from slan_cuan.pulp.clients.npm import PulpNpmClient
 from slan_cuan.pulp.constants import (
     NPM_CONTENT_API_PATH_TEMPLATE,
@@ -308,18 +309,21 @@ def find_resolved_version_for_dep(
     docstring for why that branch is not ported.
 
     Checks the doc's own gap keys first (a gap already names the resolved
-    version), then looks the dependency up directly in the repo.
+    version), then resolves ``dep_spec`` against every version of
+    ``dep_name`` Pulp actually holds in the repo, via
+    ``slan_cuan.npm.semver.max_satisfying``. ``dep_spec`` is virtually
+    always an npm semver range (e.g. ``^4.17.21``), not a concrete
+    version, so an exact-match lookup (``find_content_in_repo``) would
+    almost never resolve it -- that bug is what this function exists to
+    avoid.
     """
     for key in closure_model.gap_keys(doc):
         name, version = closure_model.parse_node_key(key)
         if name == dep_name:
             return version
-    content = closure_pulp.find_content_in_repo(
-        client, dep_name, dep_spec, repo_version_href
-    )
-    if content:
-        return content.get("version")
-    return None
+    rows = closure_pulp.list_versions_in_repo(client, dep_name, repo_version_href)
+    versions = [row["version"] for row in rows if row.get("version")]
+    return max_satisfying(versions, dep_spec)
 
 
 def promote_parent(

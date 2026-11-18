@@ -158,6 +158,47 @@ class PulpNpmClient(PulpClientBase):
             )
         return matches[0]
 
+    def list_versions_by_name(
+        self, name: str, repository_version_href: str
+    ) -> list[dict[str, object]]:
+        """List every content row for an exact name within a repo version.
+
+        Unlike ``find_by_name_version``, does not filter by version at
+        all -- this is the query shape semver-range dependency resolution
+        needs: every version Pulp actually holds for ``name`` within the
+        repository version, so a caller can pick the best match itself
+        (e.g. via ``slan_cuan.npm.semver.max_satisfying``) instead of
+        requiring a byte-identical version string.
+
+        Args:
+            name: npm package name to match exactly.
+            repository_version_href: Repository version href to scope the
+                listing to.
+
+        Returns:
+            List of matching content unit dicts (possibly empty).
+
+        Raises:
+            PulpError: If the list request fails or domain is not set.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for content listing. Set --pulp-domain.",
+                status_code=0,
+                response_body="",
+            )
+
+        list_url = NPM_CONTENT_API_PATH_TEMPLATE.format(
+            domain=self._config.domain
+        )
+        rows = self.list_content(
+            list_url,
+            name=name,
+            repository_version=repository_version_href,
+        )
+        return [row for row in rows if row.get("name") == name]
+
     def get_artifact_sha256(self, artifact_href: str) -> str:
         """Fetch the sha256 digest of an artifact.
 
