@@ -25,6 +25,7 @@ import click
 from slan_cuan import oci
 from slan_cuan.npm.metadata import read_package_metadata
 from slan_cuan.pulp.clients.npm import PulpNpmClient
+from slan_cuan.pulp.exceptions import PulpError
 
 #: Cosign DSSE envelope content type (not a Sigstore Bundle).
 DEFAULT_ATTESTATION_ARTIFACT_TYPE = "application/vnd.in-toto.dsse+json"
@@ -390,9 +391,12 @@ def publish_attestation(
 
     Raises:
         click.ClickException: If the package name/version can't be read
-            from the tarball.
+            from the tarball, or if the content unit at ``content_href``
+            vanishes (HTTP 404) between the OCI push and a label write
+            (concurrent deletion race).
         slan_cuan.oci.OrasError: If the oras push fails.
-        slan_cuan.pulp.exceptions.PulpError: If a label write fails.
+        slan_cuan.pulp.exceptions.PulpError: If a label write fails for
+            any reason other than a 404.
 
     """
     del oras_options  # unused: see docstring
@@ -418,10 +422,18 @@ def publish_attestation(
         verbose=verbose,
     )
 
-    client.set_label(content_href, _LABEL_OCI_REGISTRY_BASE, registry_base)
-    client.set_label(content_href, _LABEL_ATTESTATION_OCI_DIGEST, digest)
-    client.set_label(
-        content_href, _LABEL_ATTESTATION_PREDICATE_TYPE, predicate_type
-    )
+    try:
+        client.set_label(content_href, _LABEL_OCI_REGISTRY_BASE, registry_base)
+        client.set_label(content_href, _LABEL_ATTESTATION_OCI_DIGEST, digest)
+        client.set_label(
+            content_href, _LABEL_ATTESTATION_PREDICATE_TYPE, predicate_type
+        )
+    except PulpError as exc:
+        if exc.status_code == 404:
+            raise click.ClickException(
+                f"content unit {content_href} vanished before attestation "
+                f"labels (digest {digest}) could be written"
+            ) from exc
+        raise
 
     return digest

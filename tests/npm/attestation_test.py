@@ -17,6 +17,7 @@ from slan_cuan.npm.attestation import (
     sign_package,
 )
 from slan_cuan.pulp.clients.npm import PulpNpmClient
+from slan_cuan.pulp.exceptions import PulpError
 
 _PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 _BUILD_TYPE = "https://konflux-ci.dev/NpmPackageBuild@v1"
@@ -544,3 +545,53 @@ class TestPublishAttestation:
         pulp_client.set_label.assert_any_call(
             content_href, "tl.attestation_predicate_type", _PREDICATE_TYPE
         )
+
+    def test_publish_attestation_raises_clean_error_on_404_label_write(
+        self, tmp_path: Path, pulp_client: Mock
+    ) -> None:
+        """A concurrent-deletion 404 on a label write surfaces cleanly."""
+        tgz_path = tmp_path / "pkg-1.0.0.tgz"
+        tgz_path.with_name(tgz_path.name + ".att").write_text(_valid_dsse())
+        digest = "sha256:" + "44" * 32
+        content_href = "/pulp/api/v3/content/npm/packages/abc/"
+
+        pulp_client.set_label.side_effect = PulpError(
+            "not found", status_code=404, response_body=""
+        )
+
+        with patch("slan_cuan.npm.attestation.oci.push", return_value=digest):
+            with pytest.raises(click.ClickException, match=content_href):
+                publish_attestation(
+                    pulp_client,
+                    tgz_path,
+                    content_href,
+                    attestation_image_prefix="quay.io/org/repo",
+                    predicate_type=_PREDICATE_TYPE,
+                    name="pkg",
+                    version="1.0.0",
+                )
+
+    def test_publish_attestation_reraises_non_404_pulp_error(
+        self, tmp_path: Path, pulp_client: Mock
+    ) -> None:
+        """A non-404 PulpError on a label write is re-raised unchanged."""
+        tgz_path = tmp_path / "pkg-1.0.0.tgz"
+        tgz_path.with_name(tgz_path.name + ".att").write_text(_valid_dsse())
+        digest = "sha256:" + "55" * 32
+        content_href = "/pulp/api/v3/content/npm/packages/abc/"
+
+        pulp_client.set_label.side_effect = PulpError(
+            "server error", status_code=500, response_body=""
+        )
+
+        with patch("slan_cuan.npm.attestation.oci.push", return_value=digest):
+            with pytest.raises(PulpError, match="server error"):
+                publish_attestation(
+                    pulp_client,
+                    tgz_path,
+                    content_href,
+                    attestation_image_prefix="quay.io/org/repo",
+                    predicate_type=_PREDICATE_TYPE,
+                    name="pkg",
+                    version="1.0.0",
+                )
