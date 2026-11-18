@@ -113,6 +113,7 @@ def mocks():
             name="pkg",
             version="1.0.0",
         )
+        client.get_labels.return_value = {}
 
         yield SimpleNamespace(
             client=client,
@@ -329,6 +330,93 @@ class TestUploadCommand:
         mocks.client.set_label.assert_called_once_with(
             existing_href, COMPLIANCE_LABEL_KEY, "L2"
         )
+
+    def test_upload_skip_path_does_not_downgrade_compliance_label(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A sidecar level lower than Pulp's current level must not downgrade it.
+
+        Pulp already holds L3 (e.g. previously raised by ``npm closure
+        update``'s CAS protocol); this re-upload's sidecar says a stale L1.
+        The identical-content skip path must never write the label
+        downward.
+        """
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        (files_dir / "pkg-1.0.0.tl-compliance.json").write_text(
+            json.dumps({"compliance_level": "L1"})
+        )
+        mocks.read_metadata.return_value = ("pkg", "1.0.0")
+        existing_href = "/api/v3/content/npm/packages/existing/"
+        mocks.client.find_by_name_version.return_value = {
+            "pulp_href": existing_href,
+            "artifact": "/api/v3/artifacts/abc/",
+        }
+        mocks.client.get_artifact_sha256.return_value = "localsha"
+        mocks.client.get_labels.return_value = {COMPLIANCE_LABEL_KEY: "L3"}
+
+        result = runner.invoke(main, [*_BASE_ARGS, "--files-dir", str(files_dir)])
+
+        assert result.exit_code == 0, result.output
+        mocks.client.set_label.assert_not_called()
+
+    def test_upload_skip_path_raises_compliance_label_when_current_lower(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """A sidecar level higher than Pulp's current level does get applied."""
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        (files_dir / "pkg-1.0.0.tl-compliance.json").write_text(
+            json.dumps({"compliance_level": "L3"})
+        )
+        mocks.read_metadata.return_value = ("pkg", "1.0.0")
+        existing_href = "/api/v3/content/npm/packages/existing/"
+        mocks.client.find_by_name_version.return_value = {
+            "pulp_href": existing_href,
+            "artifact": "/api/v3/artifacts/abc/",
+        }
+        mocks.client.get_artifact_sha256.return_value = "localsha"
+        mocks.client.get_labels.return_value = {COMPLIANCE_LABEL_KEY: "L1"}
+
+        result = runner.invoke(main, [*_BASE_ARGS, "--files-dir", str(files_dir)])
+
+        assert result.exit_code == 0, result.output
+        mocks.client.set_label.assert_called_once_with(
+            existing_href, COMPLIANCE_LABEL_KEY, "L3"
+        )
+
+    def test_upload_skip_path_content_gone_during_label_write_is_warning(
+        self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace
+    ) -> None:
+        """Content deleted concurrently during the label write warns, not fails.
+
+        The content unit disappearing between our own sha256 check and the
+        compliance label write is a narrow race; the upload itself already
+        succeeded (identical content was confirmed present), so this must
+        not fail the file.
+        """
+        files_dir = tmp_path / "files"
+        _touch_tgz(files_dir, "pkg-1.0.0.tgz")
+        (files_dir / "pkg-1.0.0.tl-compliance.json").write_text(
+            json.dumps({"compliance_level": "L3"})
+        )
+        mocks.read_metadata.return_value = ("pkg", "1.0.0")
+        existing_href = "/api/v3/content/npm/packages/existing/"
+        mocks.client.find_by_name_version.return_value = {
+            "pulp_href": existing_href,
+            "artifact": "/api/v3/artifacts/abc/",
+        }
+        mocks.client.get_artifact_sha256.return_value = "localsha"
+        mocks.client.get_labels.return_value = {COMPLIANCE_LABEL_KEY: "L1"}
+        mocks.client.set_label.side_effect = PulpError(
+            "not found", status_code=404, response_body=""
+        )
+
+        result = runner.invoke(main, [*_BASE_ARGS, "--files-dir", str(files_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert "Skipped - already in Pulp (1)" in result.output
+        assert "vanished" in result.output
 
     def test_upload_publishes_attestation_when_prefix_set(
         self, runner: CliRunner, tmp_path: Path, mocks: SimpleNamespace

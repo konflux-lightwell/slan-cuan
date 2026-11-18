@@ -17,8 +17,12 @@ import click
 
 from slan_cuan.http import parse_custom_headers
 from slan_cuan.models import GlobalContext
+from slan_cuan.npm import closure_pulp
 from slan_cuan.npm.attestation import publish_attestation, sign_package
-from slan_cuan.npm.closure_model import assert_not_python_wheels_repository
+from slan_cuan.npm.closure_model import (
+    assert_not_python_wheels_repository,
+    node_key,
+)
 from slan_cuan.npm.metadata import read_package_metadata
 from slan_cuan.oci import OrasError
 from slan_cuan.pulp import FILE_REPO_API_PATH_TEMPLATE, PulpConfig, PulpError
@@ -207,6 +211,46 @@ def _upload_sidecar_best_effort(
         click.echo(f"WARNING: could not upload compliance sidecar {sidecar}")
 
 
+def _apply_compliance_label_sticky(
+    client: PulpNpmClient,
+    content_href: str,
+    name: str,
+    version: str,
+    desired_level: str,
+) -> None:
+    """Raise the Pulp compliance label on existing content, never downgrade.
+
+    Used on the identical-content skip path, where the content unit already
+    exists and may already carry a higher sticky level than this upload
+    run's sidecar claims (e.g. previously raised to L3 by ``npm closure
+    update``'s CAS protocol while this re-upload's sidecar still says a
+    stale/placeholder L1). Delegates the read-current/rank-compare/
+    conditional-write to ``closure_pulp``'s existing sticky-max machinery
+    so this path enforces the same "never write compliance_level downward"
+    invariant as the rest of the compliance-label CAS protocol.
+
+    If the content unit is deleted concurrently (observed as a 404 while
+    reading or writing the label), the label update is abandoned with a
+    warning rather than failing the file: the upload itself already
+    succeeded (identical content is confirmed present in Pulp), and
+    `upload`'s per-artifact flow has no larger retry loop to resume into,
+    so a disappearing content unit for this narrow race is treated the
+    same "best effort, warn and continue" way as the sidecar upload below.
+    """
+    key = node_key(name, version)
+    try:
+        cur_labels = closure_pulp._read_pulp_labels(client, content_href)
+        cur_level = cur_labels.get(closure_pulp.COMPLIANCE_LABEL) or ""
+        closure_pulp._maybe_raise_compliance_level(
+            client, content_href, cur_level, desired_level, key
+        )
+    except closure_pulp._ContentGone:
+        click.echo(
+            f"WARNING: {key} content unit vanished before compliance label "
+            "update; skipping"
+        )
+
+
 def _publish_attestation_if_present(
     client: PulpNpmClient,
     tgz_path: Path,
@@ -344,8 +388,8 @@ def _process_one_inner(
                 "in Pulp"
             )
             if compliance_level:
-                client.set_label(
-                    content_href, COMPLIANCE_LABEL_KEY, compliance_level
+                _apply_compliance_label_sticky(
+                    client, content_href, name, version, compliance_level
                 )
             if not _publish_attestation_if_present(
                 client,
