@@ -658,7 +658,12 @@ class TestRebalanceCommand:
 
         assert result.exit_code == 0, result.output
         mocks.find_resolved_version_for_dep.assert_called_once_with(
-            mocks.client, "normal-dep", "^2.0.0", doc, _REPO_VERSION_HREF
+            mocks.client,
+            "normal-dep",
+            "^2.0.0",
+            doc,
+            _REPO_VERSION_HREF,
+            available_versions={"pkg": ["1.0.0"]},
         )
         published = mocks.publish_compliance_doc.call_args.args[1]
         assert published["compliance_level"] == "L1"
@@ -671,6 +676,113 @@ class TestRebalanceCommand:
         closure_model.validate_gap_subset(published)
         payload = json.loads(result.stdout)
         assert payload["compliance_updated"] == ["pkg@1.0.0"]
+
+
+class TestRebalanceBatchedDependencyResolution:
+    """Rebalance must resolve every dependency from one batched repo query.
+
+    Regression test for the N+1 Pulp query bug: before this fix,
+    ``find_resolved_version_for_dep`` issued one fresh
+    ``closure_pulp.list_versions_in_repo`` Pulp query per dependency per
+    package -- O(packages x dependencies) queries for a single rebalance
+    pass. Rebalance must instead fetch the repo's full content listing
+    once (the same ``list_repo_packages`` call its outer loop already
+    makes) and resolve every dependency in-memory against it, leaving
+    ``list_versions_in_repo`` untouched.
+
+    Unlike ``TestRebalanceCommand``, this does not use the ``mocks``
+    fixture: that fixture replaces ``find_resolved_version_for_dep``
+    wholesale, which would hide the very per-dependency Pulp call this
+    test exists to count.
+    """
+
+    def _doc(self, name: str, deps: list[dict]) -> dict:
+        base = {
+            "name": name,
+            "version": "1.0.0",
+            "compliance_level": "L3",
+            "direct_dependencies": deps,
+            "missing_gaps": [],
+            "pending_l3_gaps": [],
+        }
+        return closure_model.normalize_doc(base)
+
+    def test_rebalance_resolves_many_dependencies_with_one_repo_content_query(
+        self, runner: CliRunner
+    ) -> None:
+        """2 packages x (2+1) deps -> zero per-dependency Pulp queries."""
+        repo_rows = [
+            {"name": "pkg-a", "version": "1.0.0", "pulp_href": "href-a"},
+            {"name": "pkg-b", "version": "1.0.0", "pulp_href": "href-b"},
+            {"name": "dep-1", "version": "1.2.0", "pulp_href": "href-d1"},
+            {"name": "dep-2", "version": "2.0.0", "pulp_href": "href-d2"},
+        ]
+        docs = {
+            "pkg-a@1.0.0": self._doc(
+                "pkg-a",
+                [
+                    {"name": "dep-1", "requested": "^1.0.0"},
+                    {"name": "dep-2", "requested": "^2.0.0"},
+                ],
+            ),
+            "pkg-b@1.0.0": self._doc(
+                "pkg-b", [{"name": "dep-1", "requested": "^1.0.0"}]
+            ),
+        }
+
+        def _fake_pull_compliance_doc(name, version, *_args, **_kwargs):
+            return docs.get(closure_model.node_key(name, version)), DIGEST
+
+        with ExitStack() as stack:
+            client = MagicMock()
+            client_cls = stack.enter_context(
+                patch("slan_cuan.npm.closure.PulpNpmClient")
+            )
+            client_cls.return_value.__enter__.return_value = client
+            stack.enter_context(
+                patch(
+                    "slan_cuan.npm.closure._resolve_repo",
+                    return_value=dict(_REPO),
+                )
+            )
+            list_repo_packages = stack.enter_context(
+                patch(
+                    "slan_cuan.npm.closure.closure_pulp.list_repo_packages",
+                    side_effect=lambda *a, **k: iter(repo_rows),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "slan_cuan.npm.closure.closure_oci.pull_compliance_doc",
+                    side_effect=_fake_pull_compliance_doc,
+                )
+            )
+            list_versions_in_repo = stack.enter_context(
+                patch("slan_cuan.npm.closure.closure_pulp.list_versions_in_repo")
+            )
+            stack.enter_context(
+                patch("slan_cuan.npm.closure.tl_level_for_key", return_value="L3")
+            )
+            stack.enter_context(
+                patch(
+                    "slan_cuan.npm.closure.closure_oci.publish_compliance_doc",
+                    return_value=DIGEST,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "slan_cuan.npm.closure.closure_oci.cas_push_index",
+                    return_value=({"revision": 1}, INDEX_DIGEST),
+                )
+            )
+
+            result = runner.invoke(
+                main, ["npm", "closure", "rebalance", *_PULP_ARGS, *_OCI_ARGS]
+            )
+
+        assert result.exit_code == 0, result.output
+        list_repo_packages.assert_called_once()
+        list_versions_in_repo.assert_not_called()
 
 
 class TestFindResolvedVersionForDep:
@@ -743,6 +855,56 @@ class TestFindResolvedVersionForDep:
             )
 
         assert resolved == "4.17.21"
+        list_versions.assert_not_called()
+
+    def test_available_versions_resolves_in_memory_without_touching_pulp(
+        self,
+    ) -> None:
+        """An ``available_versions`` dict skips the Pulp lookup entirely.
+
+        Passes a client that would raise if any method were called on it,
+        proving the batched (rebalance) resolution path never falls back
+        to a per-dependency Pulp query.
+        """
+        client = MagicMock()
+        client.side_effect = AssertionError(
+            "available_versions path must not touch the Pulp client"
+        )
+        doc = self._doc()
+        available_versions = {"dep": ["4.17.20", "4.17.21", "4.18.0"]}
+        with patch(
+            "slan_cuan.npm.closure.closure_pulp.list_versions_in_repo"
+        ) as list_versions:
+            resolved = find_resolved_version_for_dep(
+                client,
+                "dep",
+                "^4.17.21",
+                doc,
+                _REPO_VERSION_HREF,
+                available_versions=available_versions,
+            )
+
+        assert resolved == "4.18.0"
+        list_versions.assert_not_called()
+        client.assert_not_called()
+
+    def test_available_versions_missing_dep_name_resolves_to_none(self) -> None:
+        """A dep name absent from ``available_versions`` resolves to None."""
+        client = MagicMock()
+        doc = self._doc()
+        with patch(
+            "slan_cuan.npm.closure.closure_pulp.list_versions_in_repo"
+        ) as list_versions:
+            resolved = find_resolved_version_for_dep(
+                client,
+                "dep",
+                "^4.17.21",
+                doc,
+                _REPO_VERSION_HREF,
+                available_versions={},
+            )
+
+        assert resolved is None
         list_versions.assert_not_called()
 
 

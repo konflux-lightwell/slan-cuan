@@ -301,6 +301,8 @@ def find_resolved_version_for_dep(
     dep_spec: str,
     doc: dict,
     repo_version_href: str,
+    *,
+    available_versions: dict[str, list[str]] | None = None,
 ) -> str | None:
     """Resolve a direct dependency's spec to a concrete version, if known.
 
@@ -316,13 +318,27 @@ def find_resolved_version_for_dep(
     version, so an exact-match lookup (``find_content_in_repo``) would
     almost never resolve it -- that bug is what this function exists to
     avoid.
+
+    ``available_versions``, when given, is a ``dep name -> every known
+    version string in the repo`` map built once by a caller that already
+    iterates every package in the repository version (``rebalance``'s
+    outer loop) -- resolution then happens purely in-memory, with no Pulp
+    call at all, avoiding one ``closure_pulp.list_versions_in_repo`` query
+    per dependency per package. Callers resolving a single package in
+    isolation (no repo-wide listing to batch against) should leave this
+    ``None``, which preserves the original per-call Pulp query.
     """
     for key in closure_model.gap_keys(doc):
         name, version = closure_model.parse_node_key(key)
         if name == dep_name:
             return version
-    rows = closure_pulp.list_versions_in_repo(client, dep_name, repo_version_href)
-    versions = [row["version"] for row in rows if row.get("version")]
+    if available_versions is not None:
+        versions = list(available_versions.get(dep_name) or [])
+    else:
+        rows = closure_pulp.list_versions_in_repo(
+            client, dep_name, repo_version_href
+        )
+        versions = [row["version"] for row in rows if row.get("version")]
     return max_satisfying(versions, dep_spec)
 
 
@@ -814,7 +830,20 @@ def rebalance(
 
     with PulpNpmClient(config, pulp_repository) as client:
         repo = _resolve_repo(client, config, pulp_repository)
-        for row in closure_pulp.list_repo_packages(client, repo):
+        # Materialize list_repo_packages's single full-repo-content query
+        # once: it already yields every package's name + version in this
+        # repo version, which is exactly what per-dependency semver
+        # resolution below needs. Reusing it here (rather than issuing a
+        # second query) is what keeps the inner dependency-resolution loop
+        # from calling Pulp once per dependency per package.
+        repo_rows = list(closure_pulp.list_repo_packages(client, repo))
+        available_versions: dict[str, list[str]] = {}
+        for row in repo_rows:
+            dep_name = row.get("name") or ""
+            dep_version = row.get("version") or ""
+            if dep_name and dep_version:
+                available_versions.setdefault(dep_name, []).append(dep_version)
+        for row in repo_rows:
             name, version = row["name"], row["version"]
             key = closure_model.node_key(name, version)
             doc, _ = closure_oci.pull_compliance_doc(
@@ -859,7 +888,12 @@ def rebalance(
                     )
                     continue
                 resolved = find_resolved_version_for_dep(
-                    client, dep_name, dep_spec, doc, repo_version
+                    client,
+                    dep_name,
+                    dep_spec,
+                    doc,
+                    repo_version,
+                    available_versions=available_versions,
                 )
                 if not resolved:
                     missing.append(closure_model.node_key(dep_name, dep_spec))
