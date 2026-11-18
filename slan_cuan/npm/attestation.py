@@ -201,6 +201,28 @@ def _resolve_sign_mode(
     return None
 
 
+def _cosign_supports_use_signing_config() -> bool:
+    """Probe whether the installed cosign understands ``--use-signing-config``.
+
+    Port of the bash original's defensive probe:
+    ``cosign attest-blob --help 2>&1 | grep -q -- '--use-signing-config'``.
+    Newer cosign versions default to a "signing config" mode that then
+    requires ``--bundle``, which would silently break the classic
+    DSSE-via-``--output-signature`` output this module relies on (a prior
+    incident this probe exists to prevent). When the flag exists,
+    ``sign_package`` adds ``--use-signing-config=false`` to keep writing
+    classic DSSE envelopes.
+    """
+    result = subprocess.run(
+        ["cosign", "attest-blob", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined_output = (result.stdout or "") + (result.stderr or "")
+    return "--use-signing-config" in combined_output
+
+
 def sign_package(
     tgz_path: Path,
     *,
@@ -268,6 +290,12 @@ def sign_package(
         predicate_file.write_text(json.dumps(predicate))
         dsse_file = Path(tmp_dir) / "dsse.json"
 
+        cosign_bundle_args = (
+            ["--use-signing-config=false"]
+            if _cosign_supports_use_signing_config()
+            else []
+        )
+
         cmd = [
             "cosign",
             "attest-blob",
@@ -277,6 +305,7 @@ def sign_package(
             *key_args,
             "--yes",
             *rekor_args,
+            *cosign_bundle_args,
             f"--output-signature={dsse_file}",
         ]
         result = subprocess.run(

@@ -38,9 +38,16 @@ def _output_signature_path(cmd: list[str]) -> Path:
 
 
 def _cosign_success(dsse_content: str) -> Mock:
-    """Return a subprocess.run side_effect writing dsse_content, exit 0."""
+    """Return a subprocess.run side_effect writing dsse_content, exit 0.
+
+    Handles both the ``--use-signing-config`` help-flag probe (returns
+    empty output, i.e. "flag not supported" — today's real cosign
+    behavior) and the actual ``attest-blob`` signing call.
+    """
 
     def _run(cmd: list[str], **kwargs: object) -> Mock:
+        if "--help" in cmd:
+            return Mock(returncode=0, stdout="", stderr="")
         _output_signature_path(cmd).write_text(dsse_content)
         return Mock(returncode=0, stdout="", stderr="")
 
@@ -220,6 +227,8 @@ class TestSignPackage:
         captured_predicate: dict = {}
 
         def _run(cmd: list[str], **kwargs: object) -> Mock:
+            if "--help" in cmd:
+                return Mock(returncode=0, stdout="", stderr="")
             captured_env.update(kwargs.get("env") or {})
             predicate_arg = next(a for a in cmd if a.startswith("--predicate="))
             captured_predicate.update(
@@ -352,6 +361,75 @@ class TestSignPackage:
                     release_time=None,
                     require_attestations=False,
                 )
+
+    def test_sign_package_adds_use_signing_config_flag_when_supported(
+        self, tmp_path: Path
+    ) -> None:
+        """Help output containing the flag -> --use-signing-config=false added."""
+        secret_dir = tmp_path / "secret"
+        secret_dir.mkdir()
+        (secret_dir / "cosign.key").write_text("fake-key")
+        tgz_path = tmp_path / "pkg-1.0.0.tgz"
+        tgz_path.write_bytes(b"fake-tarball")
+
+        def _run(cmd: list[str], **kwargs: object) -> Mock:
+            if "--help" in cmd:
+                return Mock(
+                    returncode=0, stdout="...--use-signing-config...", stderr=""
+                )
+            _output_signature_path(cmd).write_text(_valid_dsse())
+            return Mock(returncode=0, stdout="", stderr="")
+
+        with patch(
+            "slan_cuan.npm.attestation.subprocess.run", side_effect=_run
+        ) as mock_run:
+            sign_package(
+                tgz_path,
+                predicate_type=_PREDICATE_TYPE,
+                build_type=_BUILD_TYPE,
+                builder_id=_BUILDER_ID,
+                cosign_key_path=None,
+                cosign_secret_dir=secret_dir,
+                release_time=None,
+                require_attestations=False,
+            )
+
+        assert mock_run.call_count == 2
+        help_cmd, sign_cmd = (c.args[0] for c in mock_run.call_args_list)
+        assert "--help" in help_cmd
+        assert "--use-signing-config=false" in sign_cmd
+        assert sign_cmd.index("--use-signing-config=false") < sign_cmd.index(
+            next(a for a in sign_cmd if a.startswith("--output-signature="))
+        )
+
+    def test_sign_package_omits_use_signing_config_flag_when_unsupported(
+        self, tmp_path: Path
+    ) -> None:
+        """Help output without the flag -> flag omitted (today's real cosign)."""
+        secret_dir = tmp_path / "secret"
+        secret_dir.mkdir()
+        (secret_dir / "cosign.key").write_text("fake-key")
+        tgz_path = tmp_path / "pkg-1.0.0.tgz"
+        tgz_path.write_bytes(b"fake-tarball")
+
+        with patch(
+            "slan_cuan.npm.attestation.subprocess.run",
+            side_effect=_cosign_success(_valid_dsse()),
+        ) as mock_run:
+            sign_package(
+                tgz_path,
+                predicate_type=_PREDICATE_TYPE,
+                build_type=_BUILD_TYPE,
+                builder_id=_BUILDER_ID,
+                cosign_key_path=None,
+                cosign_secret_dir=secret_dir,
+                release_time=None,
+                require_attestations=False,
+            )
+
+        assert mock_run.call_count == 2
+        sign_cmd = mock_run.call_args_list[-1].args[0]
+        assert "--use-signing-config=false" not in sign_cmd
 
 
 @pytest.fixture
