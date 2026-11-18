@@ -200,10 +200,17 @@ def _token_to_bounds(
         lower, upper = _caret_bounds(ver)
         return [(">=", lower), ("<", upper)]
     if token.startswith("~"):
-        major, minor, patch, wild_at = _parse_partial(token[1:])
+        partial = token[1:]
+        pre = None
+        core = partial
+        if "-" in partial.split("+", 1)[0]:
+            core, pre_s = partial.split("+", 1)[0].split("-", 1)
+            pre = tuple(pre_s.split("."))
+        major, minor, patch, wild_at = _parse_partial(core)
         if wild_at == 0:
             return [("*", None)]
         lower, upper = _tilde_bounds(major, minor, patch, wild_at)
+        lower.prerelease = pre
         return [(">=", lower), ("<", upper)]
     m = re.match(r"^(>=|<=|>|<|=)?\s*(.+)$", token)
     if not m:

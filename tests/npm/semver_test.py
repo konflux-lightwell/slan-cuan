@@ -218,6 +218,12 @@ class TestSatisfies:
         assert satisfies("2.0.5", "1.2.3 - 2.0") is True
         assert satisfies("2.1.0", "1.2.3 - 2.0") is False
 
+    def test_satisfies_tilde_range_preserves_explicit_prerelease(self):
+        """Tilde ranges keep an explicit prerelease tag on the lower bound."""
+        assert satisfies("1.2.3-beta.1", "~1.2.3-beta.1") is True
+        assert satisfies("1.2.3-beta.0", "~1.2.3-beta.1") is False
+        assert satisfies("1.2.4", "~1.2.3-beta.1") is True
+
     def test_satisfies_invalid_version_returns_false(self):
         """Satisfies returns False for invalid version strings."""
         assert satisfies("not-a-version", "1.2.3") is False
