@@ -417,7 +417,9 @@ def cas_push_index(
 
     """
     max_retries = _resolve_max_retries(max_retries)
-    for attempt in range(max_retries):
+    result: dict[str, tuple[dict, str]] = {}
+
+    def _round(_attempt: int) -> tuple[bool, str]:
         index, _digest = pull_index(compliance_image_prefix, closure_index_image)
         expected = index["revision"]
         updated = mutator(copy.deepcopy(index))
@@ -430,28 +432,22 @@ def cas_push_index(
                 expected_revision=expected,
             )
         except oci.OrasError as exc:
-            reason = str(exc)
-        else:
-            current, current_digest = pull_index(
-                compliance_image_prefix, closure_index_image
-            )
-            if _index_push_verified(pushed, digest, current, current_digest):
-                return pushed, digest
-            reason = (
-                f"pushed revision {pushed['revision']} ({digest}) was not "
-                f"live on re-pull (found revision {current['revision']}, "
-                f"{current_digest}); a concurrent writer likely overwrote it"
-            )
-        if attempt + 1 >= max_retries:
-            raise click.ClickException(
-                f"Index CAS failed after {max_retries} retries: {reason}"
-            )
-        click.echo(
-            f"Index CAS retry {attempt + 1}/{max_retries}: {reason}",
-            err=True,
+            return False, str(exc)
+        current, current_digest = pull_index(
+            compliance_image_prefix, closure_index_image
         )
-        time.sleep(0.2 * (attempt + 1))
-    raise click.ClickException(f"Index CAS failed after {max_retries} retries")
+        if _index_push_verified(pushed, digest, current, current_digest):
+            result["value"] = (pushed, digest)
+            return True, ""
+        reason = (
+            f"pushed revision {pushed['revision']} ({digest}) was not "
+            f"live on re-pull (found revision {current['revision']}, "
+            f"{current_digest}); a concurrent writer likely overwrote it"
+        )
+        return False, reason
+
+    closure_pulp.run_cas_rounds(max_retries, _round, retry_label="Index CAS")
+    return result["value"]
 
 
 def _index_push_verified(
@@ -523,7 +519,9 @@ def cas_publish_compliance(
     """
     max_retries = _resolve_max_retries(max_retries)
     name, version = doc["name"], doc["version"]
-    for attempt in range(max_retries):
+    result: dict[str, str] = {}
+
+    def _round(_attempt: int) -> tuple[bool, str]:
         existing, _ = pull_compliance_doc(
             name, version, compliance_image_prefix, doc.get("pulp_href") or ""
         )
@@ -551,15 +549,9 @@ def cas_publish_compliance(
         if verify and int(verify.get("compliance_revision") or 0) >= int(
             doc.get("compliance_revision") or 0
         ):
-            return digest
-        if attempt + 1 >= max_retries:
-            raise click.ClickException(
-                f"Compliance CAS failed for {name}@{version}"
-            )
-        click.echo(
-            f"Compliance CAS retry {attempt + 1}/{max_retries} "
-            f"for {name}@{version}",
-            err=True,
-        )
-        time.sleep(0.2 * (attempt + 1))
-    raise click.ClickException(f"Compliance CAS failed for {name}@{version}")
+            result["digest"] = digest
+            return True, ""
+        return False, f"{name}@{version}"
+
+    closure_pulp.run_cas_rounds(max_retries, _round, retry_label="Compliance CAS")
+    return result["digest"]

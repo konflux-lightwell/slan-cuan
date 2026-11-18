@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import click
 
@@ -62,6 +62,38 @@ _RETRY_BACKOFF_SECONDS = 0.2
 #: ``closure_oci``'s index/compliance CAS), each resolving it at call time
 #: when ``max_retries`` is None; callers may still override per-call.
 DEFAULT_CAS_MAX_RETRIES = int(os.environ.get("CLOSURE_CAS_MAX_RETRIES", "8"))
+
+
+def run_cas_rounds(
+    max_retries: int,
+    round_fn: Callable[[int], tuple[bool, str]],
+    *,
+    retry_label: str,
+) -> None:
+    """Run ``round_fn`` up to ``max_retries`` times with linear backoff.
+
+    ``round_fn(attempt)`` returns ``(succeeded, reason)``; ``reason``
+    appears in the retry-echo or the final failure message. Returns on
+    first success; raises ``click.ClickException`` if every round fails.
+
+    Shared by every closure CAS loop (this module's label-sync round loop,
+    and ``closure_oci``'s index-push and compliance-publish loops) so the
+    retry/backoff/failure skeleton -- previously hand-rolled three times --
+    lives in exactly one place.
+    """
+    for attempt in range(max_retries):
+        ok, reason = round_fn(attempt)
+        if ok:
+            return
+        if attempt + 1 >= max_retries:
+            raise click.ClickException(
+                f"{retry_label} failed after {max_retries} retries: {reason}"
+            )
+        click.echo(
+            f"{retry_label} retry {attempt + 1}/{max_retries}: {reason}",
+            err=True,
+        )
+        time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
 
 
 class _ContentGone(Exception):
@@ -373,7 +405,8 @@ def sync_content_pulp_labels(
     # stale value to overwrite.
     holding = False
 
-    for attempt in range(max_retries):
+    def _round(attempt: int) -> tuple[bool, str]:
+        nonlocal holding
         try:
             labels = _read_pulp_labels(client, content_href)
             if holding:
@@ -386,7 +419,7 @@ def sync_content_pulp_labels(
             if _labels_already_satisfied(
                 cur_digest, cur_level, desired_digest, desired_level
             ):
-                return
+                return True, ""
 
             if cur_digest != desired_digest:
                 _claim_compliance_digest(
@@ -395,7 +428,7 @@ def sync_content_pulp_labels(
             holding = True
 
             if not desired_level:
-                return
+                return True, ""
 
             cur_level = _reread_holding_digest(
                 client, content_href, desired_digest, key, "before level write"
@@ -407,26 +440,21 @@ def sync_content_pulp_labels(
             if _final_labels_ok(
                 client, content_href, desired_digest, desired_level, key
             ):
-                return
+                return True, ""
+            return False, (
+                f"{key}: level not yet >= {desired_level} "
+                f"(wanted digest {desired_digest})"
+            )
         except _ContentGone:
+            # A missing content unit is a legitimate early stop, not a
+            # retry-worthy failure -- abandon this sync cleanly instead of
+            # propagating through run_cas_rounds as a failed round.
             click.echo(
                 f"Pulp label sync for {key} abandoned: content unit no "
                 "longer found (likely destroyed mid-sync, e.g. by an "
                 "upload replace); no labels written this round",
                 err=True,
             )
-            return
+            return True, ""
 
-        if attempt + 1 >= max_retries:
-            break
-        click.echo(
-            f"Pulp label CAS retry {attempt + 1}/{max_retries} for {key} "
-            f"(level not yet >= {desired_level})",
-            err=True,
-        )
-        time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
-
-    raise click.ClickException(
-        f"Pulp label CAS failed for {key} after {max_retries} retries "
-        f"(wanted digest {desired_digest} level {desired_level or '<none>'})"
-    )
+    run_cas_rounds(max_retries, _round, retry_label="Pulp label CAS")

@@ -392,7 +392,7 @@ class TestSyncContentPulpLabels:
         client.set_label.assert_called_once()
 
     def test_sync_labels_level_write_404_abandons_gracefully(self):
-        """A 404 on the level write is treated like a vanished unit, not raised."""
+        """A 404 on the level write is treated like a vanished unit."""
         client = Mock()
         client.get_labels.side_effect = [
             {},
