@@ -1,0 +1,328 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-npm-upload
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Deploy
+    tekton.dev/displayName: "slan-cuan: Upload npm Packages to Pulp"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,npm,pulp,publish"
+spec:
+  description: >-
+    Upload npm package tarballs to a Pulp npm repository using
+    `slan-cuan npm upload`. Sets tl.compliance_level from adjacent
+    *.tl-compliance.json sidecars when present. When
+    ATTESTATION_IMAGE_PREFIX (or COMPLIANCE_IMAGE_PREFIX) is set, signs
+    adjacent .tgz with cosign, pushes attestation OCI to the registry, and
+    sets tl.oci_registry_base / tl.attestation_oci_digest /
+    tl.attestation_predicate_type. Idempotent: skips packages already
+    present with matching sha256. Same name/version with different content
+    fails unless ALLOW_CONTENT_REPLACE=true (then remove -> destroy
+    holding versions -> orphan-cleanup that content href -> re-upload).
+    On skip, still applies compliance and attestation labels so reruns can
+    attach metadata. Requires at least one .tgz under FILES_DIR.
+
+    Replaces the bash-script-based upload-npm-pulp Task (`npm-release-upload`
+    + `npm-pulp-upload` in the old slan-cuan image). Adds the full Pulp
+    connection option block (cert auth, task timeouts, custom headers)
+    shared with slan-cuan-publish's Maven upload, which the old bash
+    scripts never supported (TBR basic auth only). Pulp credentials are
+    injected from SERVICE_ACCOUNT_SECRET_NAME's username/password keys via
+    secretKeyRef (same single secret the old Task already mounted as a
+    volume, just read as env vars now instead of files) rather than two
+    separate secret-name params the way slan-cuan-publish.yaml does for
+    Maven -- there is only one secret here, so there is nothing to
+    disambiguate. Cosign signing material is still mounted as a directory
+    (COSIGN_SECRET_NAME at /etc/cosign-secret, passed as
+    --cosign-secret-dir) rather than per-key secretKeyRef, since
+    `sign_package` reads individual files out of that directory itself.
+    trustedArtifactsDebug/DEBUG is dropped, matching the precedent set by
+    slan-cuan-npm-extract.yaml (python's equivalent Task also lacks it).
+  params:
+    - name: SERVICE_ACCOUNT_SECRET_NAME
+      type: string
+      description: >-
+        Secret with Pulp username/password keys (same as Python wheel release)
+      default: rhtl-pulp-credentials-secret
+    - name: COSIGN_SECRET_NAME
+      type: string
+      description: >-
+        Secret with cosign.key or SIGN_KEY + AWS_* for package attestations.
+        Attestation is skipped when signing material is absent unless
+        REQUIRE_ATTESTATIONS=true.
+      default: konflux-cosign-signing-production
+    - name: REQUIRE_ATTESTATIONS
+      type: string
+      description: When true, fail if signing material or .att files are missing
+      default: "false"
+    - name: ALLOW_CONTENT_REPLACE
+      type: string
+      description: >
+        When true, replace same name@version in Pulp when the local tarball
+        sha256 differs (targeted orphan cleanup of that content unit only)
+      default: "false"
+    - name: PULP_URL
+      type: string
+      description: Pulp instance base URL (e.g. https://pulp.example.com).
+    - name: PULP_DOMAIN
+      type: string
+      description: The domain to use for Pulp operations
+    - name: PULP_REPOSITORY
+      type: string
+      description: The Pulp npm repository to upload to
+    - name: PULP_FILE_REPOSITORY
+      type: string
+      description: >
+        Optional Pulp file repository for adjacent *.tl-compliance.json uploads.
+        When empty, sidecar file uploads are skipped (compliance labels still apply)
+      default: ""
+    - name: COMPLIANCE_IMAGE_PREFIX
+      type: string
+      description: >
+        Registry repository prefix used for attestation OCI (and shared
+        tl.oci_registry_base). Empty skips sign + attestation publish.
+      default: ""
+    - name: ATTESTATION_IMAGE_PREFIX
+      type: string
+      description: >
+        Optional override for attestation OCI repo. Defaults to
+        COMPLIANCE_IMAGE_PREFIX when empty.
+      default: ""
+    - name: INSECURE
+      type: string
+      description: Disable TLS verification (true/false).
+      default: "false"
+    - name: PULP_AUTH_TYPE
+      type: string
+      description: Pulp authentication method (tbr or cert).
+      default: "tbr"
+    - name: PULP_CERT_SECRET
+      type: string
+      description: >-
+        K8s Secret name containing client certificate for entitlement cert
+        auth (keys: tls.crt, tls.key). Only used when PULP_AUTH_TYPE=cert.
+      default: ""
+    - name: PULP_CLIENT_CERT_PATH
+      type: string
+      description: Path to the client certificate file inside the mounted secret.
+      default: ""
+    - name: PULP_CLIENT_KEY_PATH
+      type: string
+      description: Path to the client key file inside the mounted secret.
+      default: ""
+    - name: PULP_TASK_TIMEOUT
+      type: string
+      description: Maximum time in seconds to wait for asynchronous Pulp tasks.
+      default: "2700"
+    - name: PULP_MAX_TOTAL_TASK_TIMEOUT
+      type: string
+      description: >-
+        Absolute maximum time in seconds across all Pulp task state and
+        blocker timeout resets. Defaults to twice PULP_TASK_TIMEOUT.
+      default: ""
+    - name: PULP_CUSTOM_HEADERS
+      type: string
+      description: |
+        Custom HTTP headers to send on repository modify requests
+        (CRLF/newline-delimited 'Key: Value' lines or JSON object).
+      default: ""
+    - name: sourceDataArtifact
+      type: string
+      description: Trusted Artifact containing extracted npm packages
+    - name: dataDir
+      type: string
+      description: The location where data will be stored
+      default: /var/workdir/content
+    - name: filesDir
+      type: string
+      description: The relative path within dataDir where package files are located
+      default: files
+    - name: ociArtifactExpiresAfter
+      type: string
+      description: Expiration date for the trusted artifacts created
+      default: "1d"
+    - name: orasOptions
+      description: oras options to pass to Trusted Artifacts calls
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: "trusted-ca"
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: "ca-bundle.crt"
+    - name: catalogGitUrl
+      type: string
+      description: >-
+        The url to the git repo where the release-service-catalog tasks and
+        stepactions to be used are stored
+      default: https://github.com/konflux-lightwell/release-service-catalog.git
+    - name: catalogGitRevision
+      type: string
+      description: The revision in the catalogGitUrl repo to be used
+      default: main
+    - name: ociStorage
+      type: string
+      description: The OCI repository where the Trusted Artifacts are stored
+  results:
+    - description: Produced trusted data artifact
+      name: sourceDataArtifact
+      type: string
+  volumes:
+    - name: cosign-secret
+      secret:
+        secretName: $(params.COSIGN_SECRET_NAME)
+        optional: true
+    - name: client-cert
+      secret:
+        secretName: $(params.PULP_CERT_SECRET)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        optional: true
+  stepTemplate:
+    securityContext:
+      runAsUser: 1001
+    env:
+      # Writable HOME so Tekton creds-init can copy SA dockerconfig secrets
+      # for registry auth (attestation OCI publish).
+      - name: HOME
+        value: /var/workdir
+    volumeMounts:
+      - name: workdir
+        mountPath: /var/workdir
+      - name: trusted-ca
+        mountPath: /mnt/trusted-ca
+        readOnly: true
+  steps:
+    - name: use-trusted-artifact
+      computeResources:
+        limits:
+          memory: 64Mi
+        requests:
+          memory: 64Mi
+          cpu: 10m
+      ref:
+        resolver: "git"
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: $(params.dataDir)
+        - name: sourceDataArtifact
+          value: $(params.sourceDataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: upload
+      image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
+      args:
+        - npm
+        - upload
+      env:
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_URL
+          value: $(params.PULP_URL)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_DOMAIN
+          value: $(params.PULP_DOMAIN)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_REPOSITORY
+          value: $(params.PULP_REPOSITORY)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_FILE_REPOSITORY
+          value: $(params.PULP_FILE_REPOSITORY)
+        - name: SLAN_CUAN_NPM_UPLOAD_COMPLIANCE_IMAGE_PREFIX
+          value: $(params.COMPLIANCE_IMAGE_PREFIX)
+        - name: SLAN_CUAN_NPM_UPLOAD_ATTESTATION_IMAGE_PREFIX
+          value: $(params.ATTESTATION_IMAGE_PREFIX)
+        - name: SLAN_CUAN_NPM_UPLOAD_REQUIRE_ATTESTATIONS
+          value: $(params.REQUIRE_ATTESTATIONS)
+        - name: SLAN_CUAN_NPM_UPLOAD_ALLOW_CONTENT_REPLACE
+          value: $(params.ALLOW_CONTENT_REPLACE)
+        - name: SLAN_CUAN_NPM_UPLOAD_FILES_DIR
+          value: $(params.dataDir)/$(params.filesDir)
+        - name: SLAN_CUAN_NPM_UPLOAD_INSECURE
+          value: $(params.INSECURE)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_AUTH_TYPE
+          value: $(params.PULP_AUTH_TYPE)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_CLIENT_CERT
+          value: $(params.PULP_CLIENT_CERT_PATH)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_CLIENT_KEY
+          value: $(params.PULP_CLIENT_KEY_PATH)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_TASK_TIMEOUT
+          value: $(params.PULP_TASK_TIMEOUT)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_MAX_TOTAL_TASK_TIMEOUT
+          value: $(params.PULP_MAX_TOTAL_TASK_TIMEOUT)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_CUSTOM_HEADERS
+          value: $(params.PULP_CUSTOM_HEADERS)
+        - name: SLAN_CUAN_NPM_UPLOAD_COSIGN_SECRET_DIR
+          value: /etc/cosign-secret
+        - name: SLAN_CUAN_NPM_UPLOAD_ORAS_OPTIONS
+          value: $(params.orasOptions)
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: $(params.SERVICE_ACCOUNT_SECRET_NAME)
+              key: username
+              optional: true
+        - name: SLAN_CUAN_NPM_UPLOAD_PULP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: $(params.SERVICE_ACCOUNT_SECRET_NAME)
+              key: password
+              optional: true
+        - name: SLAN_CUAN_TEKTON_RESULTS_DIR
+          value: /tekton/results
+      volumeMounts:
+        - name: cosign-secret
+          mountPath: "/etc/cosign-secret"
+          readOnly: true
+        - name: client-cert
+          mountPath: "/certs/client"
+          readOnly: true
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          memory: 512Mi
+          cpu: 100m
+    - name: create-trusted-artifact
+      computeResources:
+        limits:
+          memory: 128Mi
+        requests:
+          memory: 128Mi
+          cpu: 250m
+      ref:
+        resolver: "git"
+        params:
+          - name: url
+            value: "$(params.catalogGitUrl)"
+          - name: revision
+            value: "$(params.catalogGitRevision)"
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: $(params.dataDir)
+        - name: sourceDataArtifact
+          value: $(results.sourceDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
