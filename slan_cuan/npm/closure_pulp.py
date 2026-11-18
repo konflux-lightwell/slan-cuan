@@ -192,14 +192,37 @@ def _assert_digest_or_race(
 def _claim_compliance_digest(
     client: PulpNpmClient, content_href: str, desired_digest: str, key: str
 ) -> None:
-    """Write the digest label and verify the claim stuck.
+    """Write the digest label via Pulp's CAS primitive and verify it stuck.
+
+    Passes ``cas_digest``/``cas_label_key`` through to
+    ``client.set_label`` so Pulp rejects the write up front when a foreign
+    digest is already present, instead of writing unconditionally and only
+    detecting the race on a later re-read. The post-write re-read/assert
+    below still runs afterwards: ``set_label``'s own CAS check is a
+    client-side read-then-write, not a single atomic server operation, so
+    a writer can still slip in between its internal check and its POST.
 
     Raises:
-        _ContentGone: Content vanished before the claim could be verified.
-        click.ClickException: Another writer's digest won the race.
+        _ContentGone: Content vanished before/at the CAS write (HTTP 404).
+        click.ClickException: Another writer's digest won the CAS race, or
+            any other Pulp error writing the digest label.
 
     """
-    client.set_label(content_href, COMPLIANCE_DIGEST_LABEL, desired_digest)
+    try:
+        client.set_label(
+            content_href,
+            COMPLIANCE_DIGEST_LABEL,
+            desired_digest,
+            cas_digest=desired_digest,
+            cas_label_key=COMPLIANCE_DIGEST_LABEL,
+        )
+    except PulpError as exc:
+        if exc.status_code == 404:
+            raise _ContentGone from exc
+        raise click.ClickException(
+            f"Pulp label CAS write failed for {key} "
+            f"({COMPLIANCE_DIGEST_LABEL} -> {desired_digest}): {exc}"
+        ) from exc
     click.echo(
         f"Updated {key} Pulp label {COMPLIANCE_DIGEST_LABEL} -> {desired_digest}",
         err=True,

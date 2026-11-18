@@ -331,6 +331,66 @@ class TestSyncContentPulpLabels:
         keys = {c.args[1] for c in client.set_label.call_args_list}
         assert keys == {COMPLIANCE_LABEL}
 
+    def test_sync_labels_claim_passes_cas_params_to_set_label(self):
+        """The digest claim routes through set_label's real CAS primitive."""
+        client = Mock()
+        client.get_labels.side_effect = [
+            {},
+            {COMPLIANCE_DIGEST_LABEL: DIGEST},
+        ]
+        sync_content_pulp_labels(
+            client,
+            CONTENT_HREF,
+            REPO_VERSION_HREF,
+            "pkg",
+            "1.0.0",
+            "",
+            DIGEST,
+        )
+        client.set_label.assert_called_once_with(
+            CONTENT_HREF,
+            COMPLIANCE_DIGEST_LABEL,
+            DIGEST,
+            cas_digest=DIGEST,
+            cas_label_key=COMPLIANCE_DIGEST_LABEL,
+        )
+
+    def test_sync_labels_claim_cas_rejection_raises_clickexception(self):
+        """A CAS rejection from set_label surfaces as a clean ClickException."""
+        client = Mock()
+        client.get_labels.return_value = {}
+        client.set_label.side_effect = PulpError(
+            "CAS check failed", status_code=0, response_body=""
+        )
+        with pytest.raises(click.ClickException, match="pkg@1.0.0"):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "",
+                DIGEST,
+            )
+
+    def test_sync_labels_claim_write_404_abandons_gracefully(self):
+        """A 404 on the digest-claim write is treated like a vanished unit."""
+        client = Mock()
+        client.get_labels.return_value = {}
+        client.set_label.side_effect = PulpError(
+            "not found", status_code=404, response_body=""
+        )
+        sync_content_pulp_labels(
+            client,
+            CONTENT_HREF,
+            REPO_VERSION_HREF,
+            "pkg",
+            "1.0.0",
+            "",
+            DIGEST,
+        )
+        client.set_label.assert_called_once()
+
     def test_sync_labels_noop_when_content_not_found(self):
         """A missing content unit is a clean no-op, not an error."""
         client = Mock()
