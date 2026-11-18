@@ -118,7 +118,11 @@ def _resolve_oras_digest(image_ref: str) -> str:
     this module, not a shared primitive (see module docstring).
 
     Raises:
-        click.ClickException: If ``oras resolve`` exits non-zero.
+        oci.OrasError: If ``oras resolve`` exits non-zero. Classified via
+            ``oci._classify_oras_error`` -- the same auth/not-found/
+            network/generic classification ``oci.pull`` uses -- so
+            ``_is_oras_not_found`` can tell a not-found resolve apart
+            from a hard failure the same way it already does for pulls.
 
     """
     proc = subprocess.run(
@@ -128,9 +132,14 @@ def _resolve_oras_digest(image_ref: str) -> str:
         check=False,
     )
     if proc.returncode != 0:
-        raise click.ClickException(
-            f"oras resolve failed for {image_ref}: "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
+        stderr = proc.stderr.strip()
+        raise oci._classify_oras_error(
+            stderr or proc.stdout.strip(),
+            proc.returncode,
+            ref=image_ref,
+            command="resolve",
+            not_found_message=f"Image not found: {image_ref}",
+            network_message=f"Network error resolving {image_ref}",
         )
     resolved = proc.stdout.strip()
     if "@" in resolved:
@@ -139,26 +148,36 @@ def _resolve_oras_digest(image_ref: str) -> str:
 
 
 #: Registry ``NAME_UNKNOWN`` (a missing *repository*, not tag), which
-#: ``oci.pull`` deliberately leaves in its generic "oras pull failed"
-#: bucket. For the closure index/sidecars a never-created repo is the same
-#: "not seeded yet" state as a missing tag.
+#: ``oci.pull``/``_resolve_oras_digest`` deliberately leave in their generic
+#: "oras <command> failed" bucket. For the closure index/sidecars a
+#: never-created repo is the same "not seeded yet" state as a missing tag.
 _ORAS_REPO_UNKNOWN_MARKERS = ("name unknown", "NAME_UNKNOWN")
+
+#: Generic-failure message prefixes ``_classify_oras_error`` can produce for
+#: the two oras subcommands this module drives directly (pull, resolve) --
+#: used by ``_is_oras_not_found`` to spot the ``NAME_UNKNOWN`` case, which
+#: ``_classify_oras_error`` doesn't itself label not-found.
+_ORAS_GENERIC_FAILURE_PREFIXES = ("oras pull failed", "oras resolve failed")
 
 
 def _is_oras_not_found(exc: oci.OrasError) -> bool:
-    """Return True only when an ``oras pull`` failure means "not found".
+    """Return True only when an oras pull/resolve failure means "not found".
 
-    Relies on ``oci.pull``'s own classification (``exc.message``): it
-    labels a 404/manifest-unknown reply, or real oras's trailing
-    ``"<ref>: not found"``, as ``"Image not found: ..."`` -- after auth,
-    and before network, so an auth failure never counts as not-found and
-    a ref embedding "timeout"/"connection" can't be mislabelled. The one
-    local extension is a missing repository (``NAME_UNKNOWN``), which only
-    ever appears in ``oci.pull``'s generic ``"oras pull failed"`` message.
+    Relies on ``oci.pull``/``_resolve_oras_digest``'s own classification
+    (``exc.message``): both label a 404/manifest-unknown reply, or real
+    oras's trailing ``"<ref>: not found"``, as ``"Image not found: ..."``
+    -- after auth, and before network, so an auth failure never counts as
+    not-found and a ref embedding "timeout"/"connection" can't be
+    mislabelled. The one local extension is a missing repository
+    (``NAME_UNKNOWN``), which only ever appears in their generic
+    ``"oras pull failed"``/``"oras resolve failed"`` message.
     """
     if exc.message.startswith("Image not found"):
         return True
-    if not exc.message.startswith("oras pull failed"):
+    if not any(
+        exc.message.startswith(prefix)
+        for prefix in _ORAS_GENERIC_FAILURE_PREFIXES
+    ):
         return False
     return any(m in (exc.stderr or "") for m in _ORAS_REPO_UNKNOWN_MARKERS)
 
@@ -169,11 +188,18 @@ def pull_json_artifact(
     auth_file: Path | None = None,
     verbose: bool = False,
 ) -> tuple[dict | None, str | None]:
-    """Pull an OCI artifact and parse its one JSON sidecar file.
+    """Resolve, then pull-by-digest, an OCI artifact; parse its JSON sidecar.
 
-    Pulls ``image_ref`` to a temporary directory via ``oci.pull``, finds
-    the single file in it whose name ends with ``filename_suffix``,
-    parses it as JSON, and resolves the image's digest.
+    Resolves ``image_ref`` to its current digest FIRST, then pulls that
+    exact immutable ``repo@digest`` reference (never the mutable tag) to a
+    temporary directory via ``oci.pull``, finds the single file in it whose
+    name ends with ``filename_suffix``, and parses it as JSON. Resolving
+    before pulling, and pulling the resolved digest rather than the
+    mutable tag, guarantees the returned ``(data, digest)`` pair describes
+    the same immutable content regardless of any writer racing a new
+    revision in between -- a concurrent writer can still win the race (our
+    resolve loses to theirs, or vice versa), but whichever digest we
+    resolve is the one we pull, so the pair is always self-consistent.
 
     Returns:
         ``(parsed_json, digest)``, or ``(None, None)`` when the image/
@@ -181,17 +207,27 @@ def pull_json_artifact(
         no matching file is found in the pulled artifact.
 
     Raises:
-        click.ClickException: The pull failed for any reason other than
-            "not found" (auth, network, unclassified). Treating those as
-            "not seeded" would let ``cas_push_index`` overwrite a real,
-            populated index with an empty-plus-one-mutation one.
+        click.ClickException: The resolve or the pull failed for any
+            reason other than "not found" (auth, network, unclassified).
+            Treating those as "not seeded" would let ``cas_push_index``
+            overwrite a real, populated index with an empty-plus-one-
+            mutation one.
 
     """
+    try:
+        digest = _resolve_oras_digest(image_ref)
+    except oci.OrasError as exc:
+        if _is_oras_not_found(exc):
+            return None, None
+        raise click.ClickException(
+            f"Failed to resolve {image_ref}: {exc.message}"
+        ) from exc
+    pinned_ref = f"{_strip_oci_tag_and_digest(image_ref)}@{digest}"
     with tempfile.TemporaryDirectory(prefix="npm-oras-pull.") as tmp:
         tmp_path = Path(tmp)
         try:
             oci.pull(
-                parse_image_ref(image_ref),
+                parse_image_ref(pinned_ref),
                 tmp_path,
                 auth_file=auth_file,
                 verbose=verbose,
@@ -213,7 +249,6 @@ def pull_json_artifact(
         if match is None:
             return None, None
         data = json.loads(match.read_text(encoding="utf-8"))
-        digest = _resolve_oras_digest(image_ref)
         return data, digest
 
 

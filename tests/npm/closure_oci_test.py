@@ -78,7 +78,22 @@ class TestClosureIndexImageRef:
 
 
 class TestPullJsonArtifact:
-    """pull_json_artifact -- pull, find-by-suffix, parse, resolve digest."""
+    """pull_json_artifact -- resolve digest first, pull pinned, find+parse."""
+
+    @staticmethod
+    def _resolve_ok(digest: str = DIGEST):
+        """Patch ``_resolve_oras_digest`` to succeed, for pull-path tests.
+
+        Decouples the pull-path tests below (which exercise the PULL
+        call's not-found/hard-error classification) from the resolve
+        step, which always runs first now -- see
+        ``TestResolveThenPull``/``TestPullJsonArtifactResolveNotFound``
+        for tests of the resolve step itself.
+        """
+        return patch(
+            "slan_cuan.npm.closure_oci._resolve_oras_digest",
+            return_value=digest,
+        )
 
     @pytest.mark.parametrize(
         ("message", "stderr"),
@@ -97,16 +112,24 @@ class TestPullJsonArtifact:
     def test_pull_json_artifact_returns_none_when_image_not_found(
         self, message, stderr
     ):
-        """A not-found oci.pull (image not seeded yet) yields (None, None)."""
-        with patch(
-            "slan_cuan.npm.closure_oci.oci.pull",
-            side_effect=oci.OrasError(message, stderr, 1),
+        """A not-found oci.pull (image not seeded yet) yields (None, None).
+
+        Resolve succeeds (so the pull step, pinned to that digest, is
+        actually reached) and then the pull itself fails not-found.
+        """
+        with (
+            self._resolve_ok(),
+            patch(
+                "slan_cuan.npm.closure_oci.oci.pull",
+                side_effect=oci.OrasError(message, stderr, 1),
+            ),
         ):
             result = pull_json_artifact(PREFIX, ".tl-compliance.json")
         assert result == (None, None)
 
-    #: Verbatim stderr from real ``oras pull`` (oras 1.3.0) against Quay
-    #: for a tag that does not exist -- no 404/MANIFEST_UNKNOWN markers.
+    #: Verbatim stderr from real ``oras pull``/``oras resolve`` (oras 1.3.0)
+    #: against Quay for a tag that does not exist -- no 404/MANIFEST_UNKNOWN
+    #: markers.
     REAL_ORAS_MISSING_TAG_STDERR = (
         "Error response from registry: "
         "quay.io/prometheus/busybox:lwlp4134-nonexistent-tag: not found"
@@ -118,6 +141,8 @@ class TestPullJsonArtifact:
 
         Exercises ``oci.pull``'s own stderr classification end to end,
         rather than hand-picking the ``OrasError.message`` it would produce.
+        Combine with ``_resolve_ok`` so the (separately tested) resolve
+        step doesn't also hit this same patched subprocess.
         """
         return patch(
             "slan_cuan.oci.subprocess.run",
@@ -140,7 +165,7 @@ class TestPullJsonArtifact:
         self, stderr
     ):
         """Real oras not-found output, via real ``oci.pull``, -> (None, None)."""
-        with self._oras_fails(stderr):
+        with self._resolve_ok(), self._oras_fails(stderr):
             result = pull_json_artifact(PREFIX, ".tl-compliance.json")
         assert result == (None, None)
 
@@ -164,6 +189,7 @@ class TestPullJsonArtifact:
     ):
         """Auth/network/unanchored-"not found", via real ``oci.pull``, raise."""
         with (
+            self._resolve_ok(),
             self._oras_fails(stderr),
             pytest.raises(click.ClickException, match=expected),
         ):
@@ -198,6 +224,7 @@ class TestPullJsonArtifact:
     ):
         """Auth/network/unclassified failures raise, never "not seeded"."""
         with (
+            self._resolve_ok(),
             patch(
                 "slan_cuan.npm.closure_oci.oci.pull",
                 side_effect=oci.OrasError(message, stderr, 1),
@@ -209,6 +236,7 @@ class TestPullJsonArtifact:
     def test_cas_push_index_does_not_push_after_transient_pull_error(self):
         """A network blip pulling the index must not push an empty index."""
         with (
+            self._resolve_ok(),
             patch(
                 "slan_cuan.npm.closure_oci.oci.pull",
                 side_effect=oci.OrasError(
@@ -258,15 +286,98 @@ class TestPullJsonArtifact:
             check=False,
         )
 
+    def test_pull_json_artifact_pulls_pinned_digest_not_mutable_tag(self):
+        """The pull call is pinned to the resolved digest, not the tag.
+
+        Guards the atomicity fix: between resolve and pull, a concurrent
+        writer could push a new revision onto the mutable tag -- pulling
+        ``repo@digest`` instead means the parsed JSON always matches the
+        digest this call returns, regardless of any such race.
+        """
+        payload = {"name": "lodash", "version": "4.17.21"}
+
+        def _fake_pull(image, output_dir, auth_file=None, verbose=False):
+            (Path(output_dir) / "x.tl-compliance.json").write_text(
+                json.dumps(payload)
+            )
+
+        with (
+            self._resolve_ok(),
+            patch(
+                "slan_cuan.npm.closure_oci.oci.pull", side_effect=_fake_pull
+            ) as mock_pull,
+        ):
+            data, digest = pull_json_artifact(PREFIX, ".tl-compliance.json")
+        assert data == payload
+        assert digest == DIGEST
+        pulled_ref = mock_pull.call_args.args[0]
+        assert str(pulled_ref) == f"quay.io/org/tl-compliance@{DIGEST}"
+        assert ":latest" not in str(pulled_ref)
+
     def test_pull_json_artifact_returns_none_when_no_suffix_match(self):
         """A pull that succeeds but has no matching file yields (None, None)."""
 
         def _fake_pull(image, output_dir, auth_file=None, verbose=False):
             (Path(output_dir) / "unrelated.json").write_text("{}")
 
-        with patch("slan_cuan.npm.closure_oci.oci.pull", side_effect=_fake_pull):
+        with (
+            self._resolve_ok(),
+            patch("slan_cuan.npm.closure_oci.oci.pull", side_effect=_fake_pull),
+        ):
             result = pull_json_artifact(PREFIX, ".tl-compliance.json")
         assert result == (None, None)
+
+
+class TestPullJsonArtifactResolveNotFound:
+    """pull_json_artifact -- a not-found *resolve* also yields (None, None).
+
+    Distinct from the pull-fails-not-found tests above: here the resolve
+    step itself (which now runs first) is what reports not-found, and
+    oci.pull must never even be attempted.
+    """
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "Error: 404 Not Found",
+            "Error: GET ...: MANIFEST_UNKNOWN: manifest unknown",
+            TestPullJsonArtifact.REAL_ORAS_MISSING_TAG_STDERR,
+            "Error: NAME_UNKNOWN: repository name not known to registry",
+        ],
+    )
+    def test_resolve_not_found_returns_none_without_pulling(self, stderr):
+        """A not-found ``oras resolve`` -> (None, None), no pull attempted."""
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.subprocess.run",
+                return_value=Mock(returncode=1, stderr=stderr, stdout=""),
+            ),
+            patch("slan_cuan.npm.closure_oci.oci.pull") as mock_pull,
+        ):
+            result = pull_json_artifact(PREFIX, ".tl-compliance.json")
+        assert result == (None, None)
+        mock_pull.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("stderr", "expected"),
+        [
+            ("Error: 401 Unauthorized", "Authentication failed"),
+            ("Error: dial tcp: connection refused", "Network error resolving"),
+            ("boom", "Failed to resolve"),
+        ],
+    )
+    def test_resolve_hard_error_raises_without_pulling(self, stderr, expected):
+        """An auth/network/unclassified resolve failure raises, not None."""
+        with (
+            patch(
+                "slan_cuan.npm.closure_oci.subprocess.run",
+                return_value=Mock(returncode=1, stderr=stderr, stdout=""),
+            ),
+            patch("slan_cuan.npm.closure_oci.oci.pull") as mock_pull,
+            pytest.raises(click.ClickException, match=expected),
+        ):
+            pull_json_artifact(PREFIX, ".tl-compliance.json")
+        mock_pull.assert_not_called()
 
 
 class TestPullComplianceDoc:
