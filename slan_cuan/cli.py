@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from slan_cuan.models import GlobalContext
+from slan_cuan.npm.cli import npm_cli
 from slan_cuan.python.cli import python_cli
 from slan_cuan.tasks import (
     extract,
@@ -64,6 +65,7 @@ main.add_command(generate_security_metadata_from_snapshot)
 main.add_command(extract)
 main.add_command(inject_sboms)
 main.add_command(python_cli)
+main.add_command(npm_cli)
 main.add_command(publish)
 main.add_command(sign)
 main.add_command(register)
