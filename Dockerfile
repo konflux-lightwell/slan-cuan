@@ -69,11 +69,8 @@ ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 # Embed Tekton Task definitions
 COPY tekton/tasks/ /tekton/tasks/
 
-# Cosign binary for generate-and-sign-npm-attestations
+# Cosign binary for npm package attestation signing
 COPY --from=cosign-bin /ko-app/cosign /usr/local/bin/cosign
-
-# npm-to-Pulp release scripts
-COPY scripts/npm/ /usr/local/bin/
 
 # Run the CLI
 ENTRYPOINT ["slan-cuan", "--verbose" ]
