@@ -61,3 +61,4 @@ Ecosystem-specific commands are grouped under their own namespace instead of the
 | Subcommand | Tekton Task | Description |
 |------------|-------------|-------------|
 | `npm extract` | Yes | Extract npm packages from the snapshot's component images |
+| `npm upload` | Yes | Upload npm package tarballs to a Pulp npm repository |

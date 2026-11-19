@@ -5,6 +5,7 @@ from __future__ import annotations
 import click
 
 from slan_cuan.npm.extract import extract
+from slan_cuan.npm.upload import upload
 
 
 @click.group("npm")
@@ -13,3 +14,4 @@ def npm_cli() -> None:
 
 
 npm_cli.add_command(extract)
+npm_cli.add_command(upload)
