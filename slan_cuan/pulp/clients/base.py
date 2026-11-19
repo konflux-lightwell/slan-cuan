@@ -475,16 +475,85 @@ class PulpClientBase:
         )
         return poller.poll()
 
+    def orphan_cleanup(
+        self,
+        content_hrefs: list[str],
+        *,
+        protection_time: int = 0,
+    ) -> None:
+        """Delete the given content units from the domain if they are orphans.
+
+        A content unit is an orphan when no repository version references
+        it. This starts Pulp's orphan cleanup task, limited to
+        ``content_hrefs``, and blocks until the task finishes. Listed
+        units that are still in a repository version are left alone.
+
+        The cleanup is always limited to explicit hrefs, never run
+        domain-wide, because a domain can hold content from several
+        ecosystems and a domain-wide cleanup would delete their orphans
+        too.
+
+        Args:
+            content_hrefs: List of content unit pulp_href values to clean
+                up.
+            protection_time: Orphan protection time in seconds (default 0).
+
+        Raises:
+            PulpError: If the cleanup request fails or task polling fails.
+
+        """
+        if self._config.domain is None:
+            raise PulpError(
+                "Domain is required for orphan cleanup. "
+                "Set --pulp-domain or use legacy deploy endpoint.",
+                status_code=0,
+                response_body="",
+            )
+
+        url = f"/api/pulp/{self._config.domain}/api/v3/orphans/cleanup/"
+        payload = {
+            "content_hrefs": content_hrefs,
+            "orphan_protection_time": protection_time,
+        }
+
+        response = self._request(
+            "POST",
+            url,
+            "Orphan cleanup",
+            json=payload,
+            headers=self._config.custom_headers or None,
+        )
+
+        try:
+            response_data = parse_json_dict(response, "Cleanup", PulpError)
+            task_href = str(response_data["task"])
+            if self._config.verbose:
+                click.echo(f"[{utc_timestamp()}]  Pulp task queued: {task_href}")
+        except (ValueError, KeyError) as e:
+            raise PulpError(
+                f"Failed to parse cleanup response: {e}",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from e
+
+        self.poll_task(task_href)
+
     def modify_repository(
         self,
         repository_href: str,
         content_unit_hrefs: list[str],
+        *,
+        remove_content_unit_hrefs: list[str] | None = None,
     ) -> ModifyResult:
-        """Add content units to a repository in a single version.
+        """Add (and optionally remove) content units in a single version.
 
         Args:
             repository_href: The pulp_href of the repository.
             content_unit_hrefs: List of content unit pulp_href values to add.
+            remove_content_unit_hrefs: Optional list of content unit
+                pulp_href values to remove in the same modify call (mirrors
+                the bash scripts' ``remove_content_units`` payload field,
+                used by the npm upload replace-on-digest-mismatch path).
 
         Returns:
             ModifyResult with task details and repository version.
@@ -494,7 +563,11 @@ class PulpClientBase:
 
         """
         url = f"{repository_href}modify/"
-        payload = {"add_content_units": content_unit_hrefs}
+        payload: dict[str, list[str]] = {}
+        if content_unit_hrefs:
+            payload["add_content_units"] = content_unit_hrefs
+        if remove_content_unit_hrefs:
+            payload["remove_content_units"] = remove_content_unit_hrefs
 
         response = self._request(
             "POST",
@@ -577,6 +650,175 @@ class PulpClientBase:
                 status_code=response.status_code,
                 response_body=response.text,
             ) from e
+
+    def get_labels(self, href: str) -> dict[str, str]:
+        """Get labels attached to a Pulp resource.
+
+        Args:
+            href: The pulp_href of the resource.
+
+        Returns:
+            A dict mapping label keys to values. Empty dict if no labels.
+
+        Raises:
+            PulpError: If the GET request fails.
+
+        """
+        response = self._request(
+            "GET",
+            href,
+            "Get labels",
+            headers=self._config.custom_headers or None,
+        )
+
+        response_data = parse_json_dict(response, "Get labels", PulpError)
+        labels = response_data.get("pulp_labels", {})
+        if not isinstance(labels, dict):
+            return {}
+        return labels
+
+    def set_label(
+        self,
+        href: str,
+        key: str,
+        value: str,
+        *,
+        cas_digest: str | None = None,
+        cas_label_key: str = "",
+    ) -> None:
+        """Set a label on a Pulp resource with optional compare-and-swap (CAS).
+
+        When cas_digest is provided, first checks that the current value of
+        cas_label_key either does not exist or matches cas_digest. If the
+        current value is non-empty and does not match, raises PulpError without
+        making the write.
+
+        Args:
+            href: The pulp_href of the resource.
+            key: The label key to set.
+            value: The label value to set.
+            cas_digest: Optional expected current value for CAS check. If the
+                cas_label_key's current value is non-empty and does not equal
+                this, PulpError is raised.
+            cas_label_key: The label key to check for CAS (if cas_digest given).
+
+        Raises:
+            PulpError: If the request fails or CAS check fails.
+
+        """
+        # CAS check: if cas_digest is provided, validate current value first
+        if cas_digest is not None:
+            current_labels = self.get_labels(href)
+            current_value = current_labels.get(cas_label_key, "")
+            if current_value and current_value != cas_digest:
+                raise PulpError(
+                    f"CAS check failed for label '{cas_label_key}': "
+                    f"expected '{cas_digest}', found '{current_value}'",
+                    status_code=0,
+                    response_body="",
+                )
+
+        # Write the label
+        url = f"{href}set_label/"
+        payload = {"key": key, "value": value}
+
+        self._request(
+            "POST",
+            url,
+            "Set label",
+            json=payload,
+            headers=self._config.custom_headers or None,
+        )
+
+    def set_labels(self, href: str, labels: dict[str, str]) -> None:
+        """Set multiple labels on a Pulp resource in a single write.
+
+        Pulp's ``set_label/`` action only accepts one key/value pair per
+        call. The resource's ``pulp_labels`` field itself accepts a full
+        dict, so this reads the current labels, merges in the given ones,
+        and writes the merged dict back with one PATCH -- two requests
+        total instead of one ``set_label`` POST per key.
+
+        This read-modify-write is not atomic: a label written by a
+        concurrent caller between the GET and the PATCH here is clobbered.
+        Only use this for keys that are exclusively owned by one writer at
+        this point in the flow. For labels that may be written
+        concurrently or need compare-and-swap, use ``set_label`` instead,
+        whose ``set_label/`` action is a server-side atomic upsert of a
+        single key.
+
+        Args:
+            href: The pulp_href of the resource.
+            labels: Mapping of label keys to values to set.
+
+        Raises:
+            PulpError: If the GET or PATCH request fails.
+
+        """
+        if not labels:
+            return
+
+        current_labels = self.get_labels(href)
+        merged_labels = {**current_labels, **labels}
+
+        self._request(
+            "PATCH",
+            href,
+            "Set labels",
+            json={"pulp_labels": merged_labels},
+            headers=self._config.custom_headers or None,
+        )
+
+    def list_content(
+        self, list_url: str, **filters: str
+    ) -> list[dict[str, object]]:
+        """List Pulp content with full pagination support.
+
+        Fetches all pages of results from a Pulp list endpoint, appending
+        results until a page returns fewer than page_size items. Filters
+        are passed as query parameters alongside limit and offset.
+
+        Args:
+            list_url: The full endpoint URL (e.g.
+                "/api/v3/content/npm/packages/").
+            **filters: Optional keyword filters to pass as query params
+                (e.g., name="my-package", version="1.0.0").
+
+        Returns:
+            Concatenated list of all result items from all pages.
+
+        Raises:
+            PulpError: If any request fails.
+
+        """
+        page_size = 100
+        offset = 0
+        all_results: list[dict[str, object]] = []
+
+        while True:
+            params = {**filters, "limit": page_size, "offset": offset}
+            response = self._request(
+                "GET",
+                list_url,
+                "Content list",
+                params=params,
+                headers=self._config.custom_headers or None,
+            )
+
+            response_data = parse_json_dict(response, "Content list", PulpError)
+            page_results = response_data.get("results", [])
+            if not isinstance(page_results, list):
+                page_results = []
+
+            all_results.extend(page_results)
+
+            # Stop pagination if this page has fewer than page_size items
+            if len(page_results) < page_size:
+                break
+
+            offset += page_size
+
+        return all_results
 
     def close(self) -> None:
         """Close the HTTP client."""
