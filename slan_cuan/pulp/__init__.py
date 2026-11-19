@@ -30,6 +30,19 @@ from slan_cuan.pulp.tasks import (
     PulpTaskPoller,
 )
 
+# Pulp CLI wrapper — additive, no REST change.
+try:
+    from slan_cuan.pulp.cli import (  # noqa: F401
+        PULP_BIN,
+        modify_file_repository,
+        modify_python_repository,
+        run_hosted_pulp,
+        upload_file_content,
+        upload_python_content,
+    )
+except ImportError:  # pragma: no cover — cli optional in some envs
+    pass
+
 __all__ = [
     "AUTH_TYPE_CERT",
     "AUTH_TYPE_TBR",
@@ -47,6 +60,7 @@ __all__ = [
     "MAVEN_DISTRIBUTION_API_PATH_TEMPLATE",
     "MavenDistribution",
     "ModifyResult",
+    "PULP_BIN",
     "PulpClientBase",
     "PulpConfig",
     "PulpError",
@@ -54,6 +68,11 @@ __all__ = [
     "PulpMavenClient",
     "PulpTaskPoller",
     "REPO_API_PATH_TEMPLATE",
+    "modify_file_repository",
+    "modify_python_repository",
+    "run_hosted_pulp",
+    "upload_file_content",
+    "upload_python_content",
     "TASK_CANCEL_TIMEOUT_SECONDS",
     "TASK_POLL_TIMEOUT_SECONDS",
 ]
