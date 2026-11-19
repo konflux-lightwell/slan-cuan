@@ -435,7 +435,7 @@ class TestSignPackage:
 
 @pytest.fixture
 def pulp_client() -> Mock:
-    """Return a stub PulpNpmClient for asserting set_label calls."""
+    """Return a stub PulpNpmClient for asserting set_labels calls."""
     return Mock(spec=PulpNpmClient)
 
 
@@ -517,7 +517,7 @@ class TestPublishAttestation:
     def test_publish_attestation_sets_three_pulp_labels(
         self, tmp_path: Path, pulp_client: Mock
     ) -> None:
-        """set_label is called exactly 3 times with the expected values."""
+        """set_labels is called once with all three expected labels."""
         tgz_path = tmp_path / "pkg-1.0.0.tgz"
         tgz_path.with_name(tgz_path.name + ".att").write_text(_valid_dsse())
         digest = "sha256:" + "33" * 32
@@ -537,15 +537,13 @@ class TestPublishAttestation:
             )
 
         assert result == digest
-        assert pulp_client.set_label.call_count == 3
-        pulp_client.set_label.assert_any_call(
-            content_href, "tl.oci_registry_base", "quay.io/org/repo"
-        )
-        pulp_client.set_label.assert_any_call(
-            content_href, "tl.attestation_oci_digest", digest
-        )
-        pulp_client.set_label.assert_any_call(
-            content_href, "tl.attestation_predicate_type", _PREDICATE_TYPE
+        pulp_client.set_labels.assert_called_once_with(
+            content_href,
+            {
+                "tl.oci_registry_base": "quay.io/org/repo",
+                "tl.attestation_oci_digest": digest,
+                "tl.attestation_predicate_type": _PREDICATE_TYPE,
+            },
         )
 
     def test_publish_attestation_raises_clean_error_on_404_label_write(
@@ -557,7 +555,7 @@ class TestPublishAttestation:
         digest = "sha256:" + "44" * 32
         content_href = "/pulp/api/v3/content/npm/packages/abc/"
 
-        pulp_client.set_label.side_effect = PulpError(
+        pulp_client.set_labels.side_effect = PulpError(
             "not found", status_code=404, response_body=""
         )
 
@@ -584,7 +582,7 @@ class TestPublishAttestation:
         digest = "sha256:" + "55" * 32
         content_href = "/pulp/api/v3/content/npm/packages/abc/"
 
-        pulp_client.set_label.side_effect = PulpError(
+        pulp_client.set_labels.side_effect = PulpError(
             "server error", status_code=500, response_body=""
         )
 
