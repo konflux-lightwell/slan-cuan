@@ -423,10 +423,13 @@ def publish_attestation(
     )
 
     try:
-        client.set_label(content_href, _LABEL_OCI_REGISTRY_BASE, registry_base)
-        client.set_label(content_href, _LABEL_ATTESTATION_OCI_DIGEST, digest)
-        client.set_label(
-            content_href, _LABEL_ATTESTATION_PREDICATE_TYPE, predicate_type
+        client.set_labels(
+            content_href,
+            {
+                _LABEL_OCI_REGISTRY_BASE: registry_base,
+                _LABEL_ATTESTATION_OCI_DIGEST: digest,
+                _LABEL_ATTESTATION_PREDICATE_TYPE: predicate_type,
+            },
         )
     except PulpError as exc:
         if exc.status_code == 404:
