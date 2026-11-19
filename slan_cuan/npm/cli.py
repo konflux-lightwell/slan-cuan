@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from slan_cuan.npm.closure import closure_cli
 from slan_cuan.npm.extract import extract
 from slan_cuan.npm.upload import upload
 
@@ -15,3 +16,4 @@ def npm_cli() -> None:
 
 npm_cli.add_command(extract)
 npm_cli.add_command(upload)
+npm_cli.add_command(closure_cli)
