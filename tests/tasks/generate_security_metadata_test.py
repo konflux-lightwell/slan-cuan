@@ -15,6 +15,37 @@ from slan_cuan.tasks.generate_security_metadata import (
 )
 
 
+def _primary_module_name(index_data: dict) -> str:
+    if "primaryGav" in index_data:
+        group, artifact, _ = index_data["primaryGav"].split(":")
+        return f"{group}:{artifact}"
+    from packageurl import PackageURL
+
+    purl = PackageURL.from_string(index_data["primaryPurl"])
+    return f"{purl.namespace}:{purl.name}" if purl.namespace else purl.name
+
+
+@pytest.fixture(autouse=True)
+def primary_placement():
+    """Place every vulnerability on the primary module, without network calls.
+
+    fath-cuan's resolve_module_vulns() looks the vulnerabilities up on
+    osv.dev/OSIDB; the generate tests use this stand-in (the behaviour for a
+    build whose fixes are all in the primary module) unless they patch
+    resolve_module_vulns themselves.
+    """
+
+    def _place(index_data: dict, osidb_client=None) -> dict[str, list[str]]:
+        vulns = list(index_data.get("vulns") or [])
+        return {_primary_module_name(index_data): vulns} if vulns else {}
+
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.resolve_module_vulns",
+        side_effect=_place,
+    ) as mock_place:
+        yield mock_place
+
+
 @pytest.fixture
 def ctx() -> GlobalContext:
     """Default non-verbose, non-dry-run context."""
@@ -224,7 +255,12 @@ def test_generate_security_metadata_passes_index_data_to_process_osv(
     result = _invoke(runner, index_dir, output_dir, ctx, workdir=workdir)
 
     assert result.exit_code == 0, result.output
-    mock_process_osv.assert_called_once_with(index_data, osidb_client=None)
+    mock_process_osv.assert_called_once_with(
+        index_data,
+        osidb_client=None,
+        module_vulns=None,
+        repository_url="https://packages.redhat.com/lightwell/java/validated/",
+    )
 
 
 @patch("slan_cuan.tasks.generate_security_metadata.process_osv")
@@ -490,7 +526,12 @@ def test_empty_vulnerabilities_skip_osidb_with_valid_keytab(
     assert "No vulnerabilities found in index" in result.output
     mock_get_token.assert_not_called()
     mock_osidb_client_cls.assert_not_called()
-    mock_process_osv.assert_called_once_with(index_data, osidb_client=None)
+    mock_process_osv.assert_called_once_with(
+        index_data,
+        osidb_client=None,
+        module_vulns=None,
+        repository_url="https://packages.redhat.com/lightwell/java/validated/",
+    )
 
 
 @patch("fath_cuan.osidb.OsidbClient")
@@ -1818,15 +1859,23 @@ def _vex_doc(*cve_ids: str) -> dict:
 
 
 def _run_vex(tmp_path: Path, per_cve: list, multi_cve: dict | None) -> Path:
-    from fath_cuan.converters.vex import VEXResult
+    from fath_cuan.converters.vex import ModuleVEX, VEXResult
 
     from slan_cuan.tasks.generate_security_metadata import (
         _generate_vex_from_index,
     )
 
+    module = ModuleVEX(
+        purl="pkg:maven/org.example/lib@1.0.0.rhlw-00001",
+        per_cve=per_cve,
+        multi_cve=multi_cve,
+        timestamp="2026-10-30T20:34:00Z",
+    )
     with patch(
         "slan_cuan.tasks.generate_security_metadata.process_vex",
-        return_value=VEXResult(per_cve=per_cve, multi_cve=multi_cve),
+        return_value=VEXResult(
+            per_cve=per_cve, multi_cve=multi_cve, modules=[module]
+        ),
     ):
         _generate_vex_from_index({}, tmp_path, None, {}, "2026-10-30T20:34:00Z")
     return tmp_path
@@ -2267,3 +2316,189 @@ def test_legacy_index_conversion_keyerror_warns_and_skips_vex(
     assert result.exit_code == 0, result.output
     assert "could not be converted to a build-index ('gavs')" in result.output
     assert vex == {}
+
+
+# ---------------------------------------------------------------------------
+# LWLP-5917: one OSV advisory, one SBOM and one VEX per module with a fix
+# ---------------------------------------------------------------------------
+
+_LOGBACK_INDEX = {
+    "buildId": "BSO7LXV6QPQAA",
+    "created": "2026-11-13T18:59:33+00:00",
+    "primaryGav": "ch.qos.logback:logback-classic:1.5.9.rhlw-00034",
+    "gavs": [
+        "ch.qos.logback:logback-classic:1.5.9.rhlw-00034",
+        "ch.qos.logback:logback-access:1.5.9.rhlw-00034",
+        "ch.qos.logback:logback-core:1.5.9.rhlw-00034",
+        "ch.qos.logback:logback-parent:1.5.9.rhlw-00034",
+    ],
+    "vulns": [
+        "CVE-2024-12798",
+        "CVE-2024-12801",
+        "CVE-2026-10532",
+        "CVE-2026-19880",
+    ],
+}
+
+_LOGBACK_PLACEMENT = {
+    "ch.qos.logback:logback-classic": ["CVE-2026-19880"],
+    "ch.qos.logback:logback-core": [
+        "CVE-2024-12798",
+        "CVE-2024-12801",
+        "CVE-2026-10532",
+    ],
+}
+
+
+def _logback_upstream(vuln_id: str) -> dict | None:
+    if vuln_id == "CVE-2026-19880":
+        return None
+    return {
+        "affected": [
+            {
+                "package": {
+                    "ecosystem": "Maven",
+                    "name": "ch.qos.logback:logback-core",
+                }
+            }
+        ]
+    }
+
+
+def _run_logback(
+    ctx: GlobalContext, tmp_path: Path, placement: dict
+) -> tuple[Path, str]:
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (index_dir / "gav-index.json").write_text(json.dumps(_LOGBACK_INDEX))
+    workdir = tmp_path / "workdir"
+    _create_extract_result(workdir)
+    output_dir = workdir / "security_metadata"
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.resolve_module_vulns",
+            return_value=placement,
+        ),
+        patch(
+            "fath_cuan.converters.osv._fetch_upstream_osv",
+            side_effect=_logback_upstream,
+        ),
+        patch("fath_cuan.converters.osv._fetch_nvd", return_value=None),
+        patch(
+            "fath_cuan.converters.vex._fetch_upstream_osv",
+            side_effect=_logback_upstream,
+        ),
+        patch("fath_cuan.converters.vex._fetch_nvd", return_value=None),
+        patch(
+            "fath_cuan.converters.osv._fetch_lightwell_advisories",
+            return_value=[],
+        ),
+    ):
+        result = _invoke(CliRunner(), index_dir, output_dir, ctx, workdir=workdir)
+    assert result.exit_code == 0, result.output
+    return output_dir, result.output
+
+
+def test_multi_module_build_one_record_set_per_module(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """Logback 1.5.9.rhlw-00034: advisory, SBOM and VEX for each fixed module."""
+    out, _ = _run_logback(ctx, tmp_path, _LOGBACK_PLACEMENT)
+
+    osv = {p.name: json.loads(p.read_text()) for p in out.glob("RHLW-*.json")}
+    by_package = {r["affected"][0]["package"]["name"]: r for r in osv.values()}
+    assert set(by_package) == set(_LOGBACK_PLACEMENT)
+    assert (
+        by_package["ch.qos.logback:logback-classic"]["id"]
+        == "RHLW-2026-33400e52ea4f277c"
+    )
+    for name, record in by_package.items():
+        assert len(record["affected"]) == 1
+        assert [
+            u for u in record["upstream"] if u.startswith("CVE-")
+        ] == _LOGBACK_PLACEMENT[name]
+
+    sboms = sorted(
+        p.relative_to(out / "enriched-sboms").as_posix()
+        for p in (out / "enriched-sboms").rglob("*.bom.json")
+    )
+    assert sboms == [
+        "ch/qos/logback/logback-classic/1.5.9.rhlw-00034/logback-classic-1.5.9.rhlw-00034.bom.json",
+        "ch/qos/logback/logback-core/1.5.9.rhlw-00034/logback-core-1.5.9.rhlw-00034.bom.json",
+    ]
+    core_sbom = json.loads((out / "enriched-sboms" / sboms[1]).read_text())
+    patched = [
+        r["id"]
+        for p in core_sbom["components"][0]["pedigree"]["patches"]
+        for r in p["resolves"]
+    ]
+    assert patched == _LOGBACK_PLACEMENT["ch.qos.logback:logback-core"]
+
+    vex = {p.name: json.loads(p.read_text()) for p in out.glob("*.bom.json")}
+    assert sorted(vex) == [
+        "2026-11-13T18:59:34Z.bom.json",
+        "CVE-2026-19880-2026-11-13T18:59:33Z.bom.json",
+    ]
+    classic = vex["CVE-2026-19880-2026-11-13T18:59:33Z.bom.json"]
+    core = vex["2026-11-13T18:59:34Z.bom.json"]
+    assert classic["metadata"]["component"]["name"] == "logback-classic"
+    assert core["metadata"]["component"]["name"] == "logback-core"
+    assert core["metadata"]["timestamp"] == "2026-11-13T18:59:34Z"
+    assert [v["id"] for v in core["vulnerabilities"]] == _LOGBACK_PLACEMENT[
+        "ch.qos.logback:logback-core"
+    ]
+    # A module never names another module's upstream fix (no sibling fallback).
+    assert "logback-core" not in classic["vulnerabilities"][0]["recommendation"]
+    assert all(
+        v["recommendation"].startswith("Update to logback-core 1.5.9.rhlw-00034 ")
+        for v in core["vulnerabilities"]
+    )
+    assert classic["vulnerabilities"][0]["recommendation"].startswith(
+        "Update to logback-classic 1.5.9.rhlw-00034 "
+    )
+
+
+def test_unplaced_vulnerabilities_are_reported(
+    ctx: GlobalContext, tmp_path: Path
+) -> None:
+    """A CVE whose upstream packages this build did not produce is not claimed."""
+    placement = {"ch.qos.logback:logback-core": ["CVE-2024-12798"]}
+    out, output = _run_logback(ctx, tmp_path, placement)
+
+    assert "WARNING: not placed on any module of this build" in output
+    assert "CVE-2024-12801, CVE-2026-10532, CVE-2026-19880" in output
+
+    assert [p.name for p in out.glob("RHLW-*.json")] != []
+    for record in (json.loads(p.read_text()) for p in out.glob("RHLW-*.json")):
+        assert [u for u in record["upstream"] if u.startswith("CVE-")] == [
+            "CVE-2024-12798"
+        ]
+
+
+def test_vex_file_is_never_overwritten(tmp_path: Path) -> None:
+    """Two modules must never write the same VEX filename."""
+    import click
+    from fath_cuan.converters.vex import ModuleVEX, VEXResult
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _generate_vex_from_index,
+    )
+
+    same_ts = "2026-11-13T18:59:33Z"
+    modules = [
+        ModuleVEX(
+            purl=f"pkg:maven/g/{a}@1",
+            per_cve=[],
+            timestamp=same_ts,
+            multi_cve=_vex_doc("CVE-2024-1", "CVE-2024-2"),
+        )
+        for a in ("a", "b")
+    ]
+    with (
+        patch(
+            "slan_cuan.tasks.generate_security_metadata.process_vex",
+            return_value=VEXResult(per_cve=[], multi_cve=None, modules=modules),
+        ),
+        pytest.raises(click.ClickException, match="refusing to overwrite"),
+    ):
+        _generate_vex_from_index({}, tmp_path, None, {}, same_ts)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from dataclasses import replace
@@ -15,6 +16,12 @@ import click
 
 from slan_cuan.http import parse_custom_headers
 from slan_cuan.java.github_osv import GitHubOsvClient, GitHubOsvError
+from slan_cuan.java.osv_update import (
+    OSV_CONTENT_LABEL,
+    osv_content_sha256,
+    publication_time,
+    write_with_modified,
+)
 from slan_cuan.models import (
     EXTRACT_RESULT_FILENAME,
     PUBLISH_RESULT_FILENAME,
@@ -941,23 +948,116 @@ def _publish_file_records(
     repository_href: str,
     files: tuple[Path, ...],
     purpose: str,
+    no_overwrite: bool = False,
+    labels: dict[str, str] | None = None,
 ) -> int:
-    """Upload files; the repository-backed distribution auto-publishes them."""
+    """Upload files; the repository-backed distribution auto-publishes them.
+
+    With *no_overwrite* (VEX), a file whose name already exists in the
+    repository is never replaced (LWLP-5917). Pulp keeps one file per
+    relative path, so an upload under an existing name would silently
+    replace another build's document, and Sonatype's bucket refuses
+    overwrites. The existing file is kept when it has the same content or
+    was published for the same build (*labels* ``source_image``: a re-run
+    of this release; VEX documents carry random IDs, so a re-run never
+    reproduces the bytes). Any other existing file stops the release.
+    """
     uploaded = 0
+    source_image = (labels or {}).get("source_image")
     try:
         for file_path in files:
             sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            if no_overwrite:
+                existing = file_client.get_content(
+                    repository_href, file_path.name
+                )
+                if existing is not None:
+                    existing_labels = existing.get("pulp_labels") or {}
+                    same_build = bool(source_image) and (
+                        isinstance(existing_labels, dict)
+                        and existing_labels.get("source_image") == source_image
+                    )
+                    if existing.get("sha256") == sha256 or same_build:
+                        click.echo(
+                            f"{purpose} {file_path.name} is already published "
+                            f"for this build; keeping the published file."
+                        )
+                        continue
+                    raise click.ClickException(
+                        f"{purpose} {file_path.name} already exists in the "
+                        f"repository for another build; refusing to overwrite it."
+                    )
             file_client.upload_content(
                 file_path=file_path,
                 relative_path=file_path.name,
                 sha256=sha256,
                 repository_href=repository_href,
+                **({"labels": labels} if labels else {}),
             )
             uploaded += 1
     except PulpError as e:
         raise click.ClickException(
             f"Required {purpose} upload did not complete."
         ) from e
+    return uploaded
+
+
+def _publish_osv_records(
+    file_client: PulpFileClient,
+    repository_href: str,
+    files: tuple[Path, ...],
+    labels: dict[str, str],
+    modified_on_change: str,
+) -> int:
+    """Upload OSV advisories; an unchanged existing advisory is kept.
+
+    A re-release produces the same advisory IDs (LWLP-5917). An advisory
+    already in the repository is kept when its content, ignoring
+    ``modified``, is the same: by its ``osv_content_sha256`` label, or, for
+    advisories uploaded before the label existed, by its bytes. A changed
+    advisory is uploaded with ``modified`` set to *modified_on_change*, so
+    osv.dev picks the update up. Every upload carries the content label.
+    """
+    uploaded = 0
+    try:
+        with tempfile.TemporaryDirectory(prefix="slan-cuan-osv-") as tmp:
+            for file_path in files:
+                data = file_path.read_bytes()
+                record = json.loads(data)
+                content = osv_content_sha256(record)
+                upload_path = file_path
+                existing = file_client.get_content(
+                    repository_href, file_path.name
+                )
+                if existing is not None:
+                    existing_labels = existing.get("pulp_labels") or {}
+                    unchanged = (
+                        isinstance(existing_labels, dict)
+                        and existing_labels.get(OSV_CONTENT_LABEL) == content
+                    ) or existing.get("sha256") == hashlib.sha256(
+                        data
+                    ).hexdigest()
+                    if unchanged:
+                        click.echo(
+                            f"OSV {file_path.name} is unchanged; keeping it."
+                        )
+                        continue
+                    upload_path = Path(tmp) / file_path.name
+                    write_with_modified(record, modified_on_change, upload_path)
+                    click.echo(
+                        f"OSV {file_path.name} changed; publishing it with "
+                        f"modified {modified_on_change}."
+                    )
+                file_client.upload_content(
+                    file_path=upload_path,
+                    relative_path=file_path.name,
+                    sha256=hashlib.sha256(upload_path.read_bytes()).hexdigest(),
+                    repository_href=repository_href,
+                    labels={**labels, OSV_CONTENT_LABEL: content},
+                )
+                uploaded += 1
+    except PulpError as e:
+        raise click.ClickException("Required OSV upload did not complete.") from e
     return uploaded
 
 
@@ -1063,6 +1163,7 @@ def _upload_to_pulp(
     requires_vex_repository: bool,
     file_skipped: int,
     upload_workers: int,
+    osv_modified: str | None = None,
     repository_href: str | None = None,
 ) -> tuple[PublishResult, int, int, int, int]:
     """Upload artifacts to Pulp."""
@@ -1141,18 +1242,29 @@ def _upload_to_pulp(
                 click.echo(f"  -> repository version: {repository_version}")
 
         if file_client and file_repo_href and pulp_file_repository:
-            file_uploaded = _publish_file_records(
-                file_client,
-                file_repo_href,
-                uploadable_metadata,
-                "OSV",
-            )
+            if osv_modified is not None:
+                file_uploaded = _publish_osv_records(
+                    file_client,
+                    file_repo_href,
+                    uploadable_metadata,
+                    pulp_labels,
+                    osv_modified,
+                )
+            else:
+                file_uploaded = _publish_file_records(
+                    file_client,
+                    file_repo_href,
+                    uploadable_metadata,
+                    "OSV",
+                )
         if vex_client and vex_repo_href and pulp_vex_repository:
             vex_uploaded = _publish_file_records(
                 vex_client,
                 vex_repo_href,
                 uploadable_vex,
                 "VEX",
+                no_overwrite=True,
+                labels=pulp_labels,
             )
 
     if file_uploaded:
@@ -1679,6 +1791,9 @@ def publish(
             "source_image": str(extract_result.image),
         }
         click.echo(f"Pulp labels: {json.dumps(pulp_labels)}")
+        # One publication time for OSV advisories whose content changed on a
+        # re-release, the same in Pulp and on GitHub (LWLP-5917).
+        osv_modified = publication_time()
 
         (
             publish_result,
@@ -1702,6 +1817,7 @@ def publish(
             file_skipped=file_skipped,
             upload_workers=upload_workers,
             repository_href=repository_href,
+            osv_modified=osv_modified,
         )
 
         github_osv_uploaded = 0
@@ -1713,7 +1829,9 @@ def publish(
             )
             try:
                 github_osv_commit = gh_client.publish(
-                    github_records, commit_message
+                    github_records,
+                    commit_message,
+                    modified_on_change=osv_modified,
                 )
             except GitHubOsvError as e:
                 raise click.ClickException(

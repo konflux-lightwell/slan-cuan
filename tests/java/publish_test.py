@@ -76,6 +76,8 @@ def _make_ctx_mock() -> Mock:
     m = Mock()
     m.__enter__ = Mock(return_value=m)
     m.__exit__ = Mock(return_value=False)
+    # VEX publication checks the target filename first; free by default.
+    m.get_content = Mock(return_value=None)
     return m
 
 
@@ -5345,3 +5347,221 @@ def test_publish_lw_id_in_legacy_record_still_embargoes_the_build(
 
     assert "treating the build as embargoed" in result.output
     mock_gh_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LWLP-5917: a VEX file is never overwritten in the VEX repository
+# ---------------------------------------------------------------------------
+
+_THIS_BUILD = {"source_image": "quay.io/light-castle/secure-pnc@sha256:aaaa"}
+
+
+def _vex_file(
+    tmp_path: Path, name: str = "2026-11-13T18:59:34Z.bom.json"
+) -> Path:
+    path = tmp_path / name
+    path.write_text(
+        '{"bomFormat": "CycloneDX", "vulnerabilities": [{"id": "CVE-1"}]}'
+    )
+    return path
+
+
+def _publish_vex(client: Mock, path: Path) -> int:
+    from slan_cuan.java.publish import _publish_file_records
+
+    return _publish_file_records(
+        client, "/repo/", (path,), "VEX", no_overwrite=True, labels=_THIS_BUILD
+    )
+
+
+def test_vex_publish_uploads_new_file_with_build_label(tmp_path: Path) -> None:
+    """A free VEX filename is uploaded, labelled with the build image."""
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+
+    assert _publish_vex(client, path) == 1
+    client.get_content.assert_called_once_with("/repo/", path.name)
+    assert client.upload_content.call_args.kwargs["labels"] == _THIS_BUILD
+
+
+def test_vex_publish_keeps_identical_existing_file(tmp_path: Path) -> None:
+    """The same bytes already published: nothing uploaded."""
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "pulp_labels": {},
+    }
+
+    assert _publish_vex(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+def test_vex_publish_keeps_file_of_same_build_on_rerun(tmp_path: Path) -> None:
+    """A re-run of the same release keeps the published VEX.
+
+    VEX documents carry random serial numbers and bom-refs, so the
+    regenerated file never has the same bytes.
+    """
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "11" * 32,
+        "pulp_labels": _THIS_BUILD,
+    }
+
+    assert _publish_vex(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [{"source_image": "quay.io/light-castle/secure-pnc@sha256:bbbb"}, {}],
+)
+def test_vex_publish_refuses_file_of_another_build(
+    tmp_path: Path, labels: dict[str, str]
+) -> None:
+    """Another (or unknown) build's VEX under the same name stops the release."""
+    import click
+
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {"sha256": "00" * 32, "pulp_labels": labels}
+
+    with pytest.raises(click.ClickException, match="refusing to overwrite"):
+        _publish_vex(client, path)
+    client.upload_content.assert_not_called()
+
+
+def test_osv_publish_does_not_check_existing_files(tmp_path: Path) -> None:
+    """OSV advisories are updated in place (same ID, new modified time)."""
+    from slan_cuan.java.publish import _publish_file_records
+
+    path = tmp_path / "RHLW-2026-33400e52ea4f277c.json"
+    path.write_text("{}")
+    client = _make_ctx_mock()
+
+    assert _publish_file_records(client, "/repo/", (path,), "OSV") == 1
+    client.get_content.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LWLP-5917: OSV re-publication in Pulp bumps modified only on change
+# ---------------------------------------------------------------------------
+
+_OSV_LABELS = {"source_image": "quay.io/light-castle/secure-pnc@sha256:aaaa"}
+_NOW = "2026-11-20T12:00:00Z"
+
+
+def _osv_file(tmp_path: Path, upstream: list[str]) -> Path:
+    path = tmp_path / "RHLW-2026-33400e52ea4f277c.json"
+    path.write_text(
+        json.dumps(
+            {
+                "id": "RHLW-2026-33400e52ea4f277c",
+                "published": "2026-11-13T18:59:33Z",
+                "modified": "2026-11-13T18:59:33Z",
+                "upstream": upstream,
+            },
+            indent=2,
+        )
+    )
+    return path
+
+
+def _capture_uploads(client: Mock) -> list[dict]:
+    uploads: list[dict] = []
+
+    def _upload(**kwargs):
+        uploads.append(
+            {
+                **kwargs,
+                "record": json.loads(Path(kwargs["file_path"]).read_text()),
+            }
+        )
+        return _FILE_CONTENT_UNIT
+
+    client.upload_content.side_effect = _upload
+    return uploads
+
+
+def _publish_osv(client: Mock, path: Path) -> int:
+    from slan_cuan.java.publish import _publish_osv_records
+
+    return _publish_osv_records(client, "/osv/", (path,), _OSV_LABELS, _NOW)
+
+
+def test_osv_new_advisory_uploaded_as_generated_with_content_label(
+    tmp_path: Path,
+) -> None:
+    """A new advisory is uploaded as generated, with the content label."""
+    from slan_cuan.java.osv_update import osv_content_sha256
+
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    uploads = _capture_uploads(client)
+
+    assert _publish_osv(client, path) == 1
+    assert uploads[0]["record"]["modified"] == "2026-11-13T18:59:33Z"
+    assert uploads[0]["labels"] == {
+        **_OSV_LABELS,
+        "osv_content_sha256": osv_content_sha256(json.loads(path.read_text())),
+    }
+
+
+def test_osv_unchanged_advisory_kept_by_label(tmp_path: Path) -> None:
+    """The content label matches: the published advisory is kept."""
+    from slan_cuan.java.osv_update import osv_content_sha256
+
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "00" * 32,  # an earlier publication with a bumped modified
+        "pulp_labels": {
+            "osv_content_sha256": osv_content_sha256(json.loads(path.read_text()))
+        },
+    }
+
+    assert _publish_osv(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+def test_osv_unchanged_unlabelled_advisory_kept_by_bytes(tmp_path: Path) -> None:
+    """An advisory uploaded before the label existed is compared by its bytes."""
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "pulp_labels": {},
+    }
+
+    assert _publish_osv(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+def test_osv_changed_advisory_uploaded_with_bumped_modified(
+    tmp_path: Path,
+) -> None:
+    """Logback 1.5.9 re-release: the corrected advisory gets modified = now."""
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "11" * 32,
+        "pulp_labels": {"osv_content_sha256": "old"},
+    }
+    uploads = _capture_uploads(client)
+
+    assert _publish_osv(client, path) == 1
+    record = uploads[0]["record"]
+    assert record["modified"] == _NOW
+    assert record["published"] == "2026-11-13T18:59:33Z"
+    assert record["upstream"] == ["CVE-2026-19880"]
+    assert uploads[0]["relative_path"] == path.name
+    assert (
+        uploads[0]["sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                {**json.loads(path.read_text()), "modified": _NOW}, indent=2
+            ).encode()
+        ).hexdigest()
+    )
