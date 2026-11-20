@@ -5578,3 +5578,125 @@ def test_osv_publish_does_not_check_existing_files(tmp_path: Path) -> None:
 
     assert _publish_file_records(client, "/repo/", (path,), "OSV") == 1
     client.get_content.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LWLP-5917: OSV re-publication in Pulp bumps modified only on change
+# ---------------------------------------------------------------------------
+
+_OSV_LABELS = {"source_image": "quay.io/light-castle/secure-pnc@sha256:aaaa"}
+_NOW = "2026-11-20T12:00:00Z"
+
+
+def _osv_file(tmp_path: Path, upstream: list[str]) -> Path:
+    path = tmp_path / "RHLW-2026-33400e52ea4f277c.json"
+    path.write_text(
+        json.dumps(
+            {
+                "id": "RHLW-2026-33400e52ea4f277c",
+                "published": "2026-11-13T18:59:33Z",
+                "modified": "2026-11-13T18:59:33Z",
+                "upstream": upstream,
+            },
+            indent=2,
+        )
+    )
+    return path
+
+
+def _capture_uploads(client: Mock) -> list[dict]:
+    uploads: list[dict] = []
+
+    def _upload(**kwargs):
+        uploads.append(
+            {
+                **kwargs,
+                "record": json.loads(Path(kwargs["file_path"]).read_text()),
+            }
+        )
+        return _FILE_CONTENT_UNIT
+
+    client.upload_content.side_effect = _upload
+    return uploads
+
+
+def _publish_osv(client: Mock, path: Path) -> int:
+    from slan_cuan.java.publish import _publish_osv_records
+
+    return _publish_osv_records(client, "/osv/", (path,), _OSV_LABELS, _NOW)
+
+
+def test_osv_new_advisory_uploaded_as_generated_with_content_label(
+    tmp_path: Path,
+) -> None:
+    """A new advisory is uploaded as generated, with the content label."""
+    from slan_cuan.java.osv_update import osv_content_sha256
+
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    uploads = _capture_uploads(client)
+
+    assert _publish_osv(client, path) == 1
+    assert uploads[0]["record"]["modified"] == "2026-11-13T18:59:33Z"
+    assert uploads[0]["labels"] == {
+        **_OSV_LABELS,
+        "osv_content_sha256": osv_content_sha256(json.loads(path.read_text())),
+    }
+
+
+def test_osv_unchanged_advisory_kept_by_label(tmp_path: Path) -> None:
+    """The content label matches: the published advisory is kept."""
+    from slan_cuan.java.osv_update import osv_content_sha256
+
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "00" * 32,  # an earlier publication with a bumped modified
+        "pulp_labels": {
+            "osv_content_sha256": osv_content_sha256(json.loads(path.read_text()))
+        },
+    }
+
+    assert _publish_osv(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+def test_osv_unchanged_unlabelled_advisory_kept_by_bytes(tmp_path: Path) -> None:
+    """An advisory uploaded before the label existed is compared by its bytes."""
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "pulp_labels": {},
+    }
+
+    assert _publish_osv(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+def test_osv_changed_advisory_uploaded_with_bumped_modified(
+    tmp_path: Path,
+) -> None:
+    """Logback 1.5.9 re-release: the corrected advisory gets modified = now."""
+    path = _osv_file(tmp_path, ["CVE-2026-19880"])
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "11" * 32,
+        "pulp_labels": {"osv_content_sha256": "old"},
+    }
+    uploads = _capture_uploads(client)
+
+    assert _publish_osv(client, path) == 1
+    record = uploads[0]["record"]
+    assert record["modified"] == _NOW
+    assert record["published"] == "2026-11-13T18:59:33Z"
+    assert record["upstream"] == ["CVE-2026-19880"]
+    assert uploads[0]["relative_path"] == path.name
+    assert (
+        uploads[0]["sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                {**json.loads(path.read_text()), "modified": _NOW}, indent=2
+            ).encode()
+        ).hexdigest()
+    )
