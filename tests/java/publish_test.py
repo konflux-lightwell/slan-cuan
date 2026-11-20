@@ -76,6 +76,8 @@ def _make_ctx_mock() -> Mock:
     m = Mock()
     m.__enter__ = Mock(return_value=m)
     m.__exit__ = Mock(return_value=False)
+    # VEX publication checks the target filename first; free by default.
+    m.get_content = Mock(return_value=None)
     return m
 
 
@@ -5480,3 +5482,99 @@ def test_publish_lw_id_in_legacy_record_still_embargoes_the_build(
 
     assert "treating the build as embargoed" in result.output
     mock_gh_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LWLP-5917: a VEX file is never overwritten in the VEX repository
+# ---------------------------------------------------------------------------
+
+_THIS_BUILD = {"source_image": "quay.io/light-castle/secure-pnc@sha256:aaaa"}
+
+
+def _vex_file(
+    tmp_path: Path, name: str = "2026-11-13T18:59:34Z.bom.json"
+) -> Path:
+    path = tmp_path / name
+    path.write_text(
+        '{"bomFormat": "CycloneDX", "vulnerabilities": [{"id": "CVE-1"}]}'
+    )
+    return path
+
+
+def _publish_vex(client: Mock, path: Path) -> int:
+    from slan_cuan.java.publish import _publish_file_records
+
+    return _publish_file_records(
+        client, "/repo/", (path,), "VEX", no_overwrite=True, labels=_THIS_BUILD
+    )
+
+
+def test_vex_publish_uploads_new_file_with_build_label(tmp_path: Path) -> None:
+    """A free VEX filename is uploaded, labelled with the build image."""
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+
+    assert _publish_vex(client, path) == 1
+    client.get_content.assert_called_once_with("/repo/", path.name)
+    assert client.upload_content.call_args.kwargs["labels"] == _THIS_BUILD
+
+
+def test_vex_publish_keeps_identical_existing_file(tmp_path: Path) -> None:
+    """The same bytes already published: nothing uploaded."""
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "pulp_labels": {},
+    }
+
+    assert _publish_vex(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+def test_vex_publish_keeps_file_of_same_build_on_rerun(tmp_path: Path) -> None:
+    """A re-run of the same release keeps the published VEX.
+
+    VEX documents carry random serial numbers and bom-refs, so the
+    regenerated file never has the same bytes.
+    """
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "11" * 32,
+        "pulp_labels": _THIS_BUILD,
+    }
+
+    assert _publish_vex(client, path) == 0
+    client.upload_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [{"source_image": "quay.io/light-castle/secure-pnc@sha256:bbbb"}, {}],
+)
+def test_vex_publish_refuses_file_of_another_build(
+    tmp_path: Path, labels: dict[str, str]
+) -> None:
+    """Another (or unknown) build's VEX under the same name stops the release."""
+    import click
+
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {"sha256": "00" * 32, "pulp_labels": labels}
+
+    with pytest.raises(click.ClickException, match="refusing to overwrite"):
+        _publish_vex(client, path)
+    client.upload_content.assert_not_called()
+
+
+def test_osv_publish_does_not_check_existing_files(tmp_path: Path) -> None:
+    """OSV advisories are updated in place (same ID, new modified time)."""
+    from slan_cuan.java.publish import _publish_file_records
+
+    path = tmp_path / "RHLW-2026-33400e52ea4f277c.json"
+    path.write_text("{}")
+    client = _make_ctx_mock()
+
+    assert _publish_file_records(client, "/repo/", (path,), "OSV") == 1
+    client.get_content.assert_not_called()

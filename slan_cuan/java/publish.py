@@ -941,17 +941,51 @@ def _publish_file_records(
     repository_href: str,
     files: tuple[Path, ...],
     purpose: str,
+    no_overwrite: bool = False,
+    labels: dict[str, str] | None = None,
 ) -> int:
-    """Upload files; the repository-backed distribution auto-publishes them."""
+    """Upload files; the repository-backed distribution auto-publishes them.
+
+    With *no_overwrite* (VEX), a file whose name already exists in the
+    repository is never replaced (LWLP-5917). Pulp keeps one file per
+    relative path, so an upload under an existing name would silently
+    replace another build's document, and Sonatype's bucket refuses
+    overwrites. The existing file is kept when it has the same content or
+    was published for the same build (*labels* ``source_image``: a re-run
+    of this release; VEX documents carry random IDs, so a re-run never
+    reproduces the bytes). Any other existing file stops the release.
+    """
     uploaded = 0
+    source_image = (labels or {}).get("source_image")
     try:
         for file_path in files:
             sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            if no_overwrite:
+                existing = file_client.get_content(
+                    repository_href, file_path.name
+                )
+                if existing is not None:
+                    existing_labels = existing.get("pulp_labels") or {}
+                    same_build = bool(source_image) and (
+                        isinstance(existing_labels, dict)
+                        and existing_labels.get("source_image") == source_image
+                    )
+                    if existing.get("sha256") == sha256 or same_build:
+                        click.echo(
+                            f"{purpose} {file_path.name} is already published "
+                            f"for this build; keeping the published file."
+                        )
+                        continue
+                    raise click.ClickException(
+                        f"{purpose} {file_path.name} already exists in the "
+                        f"repository for another build; refusing to overwrite it."
+                    )
             file_client.upload_content(
                 file_path=file_path,
                 relative_path=file_path.name,
                 sha256=sha256,
                 repository_href=repository_href,
+                **({"labels": labels} if labels else {}),
             )
             uploaded += 1
     except PulpError as e:
@@ -1166,6 +1200,8 @@ def _upload_to_pulp(
                 vex_repo_href,
                 uploadable_vex,
                 "VEX",
+                no_overwrite=True,
+                labels=pulp_labels,
             )
 
     if file_uploaded:
