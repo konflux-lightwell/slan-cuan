@@ -19,9 +19,12 @@ index with no generated OSV files does not require a File repository.
 
 Security metadata may only contain OSV records and VEX documents. Any other
 CycloneDX document (an SBOM, including one with `"vulnerabilities": []` or
-with `components[]`) fails validation before anything is uploaded: SBOMs are
-injected next to the artifact in the Maven repository (`enriched-sboms/`),
-never published to the OSV or VEX File repository.
+with `components[]`) fails validation before anything is uploaded. SBOMs go
+next to their artifact in the Maven repository, at
+`<group path>/<artifactId>/<version>/<artifactId>-<version>.bom.json`
+(`generate-security-metadata` writes them to `enriched-sboms/`, and
+`inject-sboms` puts them into the build output before signing). They are never
+published to the OSV or VEX File repository.
 
 ## Embargo And Predisclosure Routing
 
