@@ -156,6 +156,14 @@ Generated OSV/VEX records are published to two destinations:
 
   VEX naming an `LW-` ID makes the whole build embargoed, so its VEX
   repository must be served by a predisclosure distribution (gate above).
+
+  A VEX file is **never overwritten** (the Pulp File repository keeps one file
+  per name, and Sonatype's bucket refuses overwrites). Each VEX upload carries
+  the build's `source_image` label. When the VEX repository already has a file
+  with the same name, it is kept if it has the same content or was published
+  for the same build (a re-run: VEX documents carry random IDs, so a re-run
+  never reproduces the bytes). Any other existing file (another build's, or
+  one without a build label and with different content) stops the run.
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under
@@ -198,10 +206,10 @@ record count are recorded in `publish-result.json`
 distinguishes an in-sync no-op (configured, 0 uploaded) from a run where
 GitHub publication was never enabled.
 
-**Concurrency.** Records are written one file per CVE ID, so concurrent
-releases produce net-new, disjoint files. If a competing release pushes first,
-this run's shallow clone becomes stale and its push is rejected
-non-fast-forward; the client then re-clones from fresh HEAD and replays the
+**Concurrency.** Records are written one file per advisory (one advisory per
+module with a fix), so concurrent releases produce net-new, disjoint files. If
+a competing release pushes first, this run's shallow clone becomes stale and
+its push is rejected non-fast-forward; the client then re-clones from fresh HEAD and replays the
 copy/commit/push (it never rebases), with exponential backoff and jitter
 between attempts. Git network operations are bounded by a per-command timeout.
 
@@ -210,14 +218,28 @@ credentials or a protected branch — the command fails the run (non-zero exit)
 rather than letting the pipeline go green on a partial publish. This is safe
 because the whole command is cleanly retriable: Pulp Maven content is
 content-addressed (a re-upload reuses the existing content unit and re-adding it
-to the repository is a no-op), the OSV/VEX File upload is keyed by sha256, and
-the GitHub push is idempotent (in-sync → no commit). Re-running `publish` after
-a GitHub failure therefore converges without duplicating anything.
+to the repository is a no-op), OSV advisories and VEX documents already
+published for the build are kept (see below), and the GitHub push is idempotent
+(in-sync → no commit). Re-running `publish` after a GitHub failure therefore
+converges without duplicating anything.
 
-**Re-publication semantics.** Records with a name already present are
-overwritten (last-writer-wins). For deterministic record generation this never
-changes bytes; if it does, the command logs a warning naming each changed
-record before overwriting it.
+**Re-publication semantics.** A re-release produces the same advisory IDs
+(derived from the module and its version), and fath-cuan sets `modified` to the
+build time. Before an OSV advisory is published over an existing one, each
+destination compares its content, ignoring `modified`:
+
+- **unchanged:** the published advisory is kept (no upload, no commit);
+- **changed:** it is published with `modified` set to the time of the run, the
+  same value in Pulp and on GitHub, so osv.dev and other consumers pick the
+  update up. `published` is kept.
+
+GitHub compares with the record in the clone. The Pulp content API returns
+labels but not files, so each Pulp OSV upload carries an `osv_content_sha256`
+label (the content hash without `modified`); advisories uploaded before the
+label existed are compared by their bytes. A first publication keeps the build
+time. Advisories that a re-release no longer produces are not withdrawn
+automatically: withdrawal (OSV `withdrawn`) is a manual step. VEX documents are
+never overwritten (see the VEX repository above).
 
 The token is supplied to git via a `GIT_ASKPASS` helper and never appears on a
 command line (so it is not exposed through `/proc/<pid>/cmdline`).
