@@ -171,7 +171,9 @@ Generated OSV/VEX records are published to two destinations:
   bytes or the same content label: a re-run). Any other existing file stops
   the run, including this build's own VEX with different content (a corrected
   re-run) and files published before the content label existed: withdraw the
-  published file first (LWLP-6161), then re-run the release.
+  published file first (LWLP-6161), then re-run the release. When the change
+  isn't intended, an enrichment source answered differently (e.g. NVD was
+  rate-limited in one of the runs): re-run later instead.
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under

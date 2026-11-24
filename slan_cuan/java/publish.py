@@ -1002,8 +1002,10 @@ def _vex_upload_needed(
     if source_image and labels.get("source_image") == source_image:
         raise click.ClickException(
             f"VEX {file_path.name} is already published for this build with "
-            f"different content; refusing to overwrite it. Withdraw the "
-            f"published file first (LWLP-6161), then re-run the release."
+            f"different content; refusing to overwrite it. If the change is "
+            f"intended (a corrected VEX), withdraw the published file first "
+            f"(LWLP-6161), then re-run the release. Otherwise an enrichment "
+            f"source (e.g. NVD) answered differently this time: re-run later."
         )
     raise click.ClickException(
         f"VEX {file_path.name} already exists in the repository with "
