@@ -246,8 +246,10 @@ destination compares its content, ignoring `modified`:
 GitHub compares with the record in the clone. The Pulp content API returns
 labels but not files, so each Pulp OSV upload carries an `osv_content_sha256`
 label (the content hash without `modified`); advisories uploaded before the
-label existed are compared by their bytes. A first publication keeps the build
-time. Advisories that a re-release no longer produces are not withdrawn
+label existed are compared by their bytes. Such an advisory can therefore get a
+new `modified` in Pulp while GitHub, which compares content, keeps it: once,
+until the re-uploaded advisory carries the label. A first publication keeps the
+build time. Advisories that a re-release no longer produces are not withdrawn
 automatically: withdrawal (OSV `withdrawn`) is a manual step. VEX documents are
 never overwritten (see the VEX repository above).
 

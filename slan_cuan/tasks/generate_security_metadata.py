@@ -722,6 +722,10 @@ def _generate_vex_from_index(
     )
 
     written = 0
+    # Names written by this run: two modules must never share a filename. A
+    # file left in the output directory by an earlier run is overwritten, as
+    # the OSV files are.
+    written_names: set[str] = set()
     for module in vex_result.modules:
         module_ts = module.timestamp or timestamp
         # Exactly one VEX document per module (agreed Sonatype format): a
@@ -745,11 +749,13 @@ def _generate_vex_from_index(
                 f"document; refusing to publish them as separate files."
             )
         path = output_dir / filename
-        if path.exists():
+        if filename in written_names:
             raise click.ClickException(
-                f"VEX file {filename} already exists; refusing to overwrite it "
-                f"with the VEX for {module.purl}."
+                f"VEX file {filename} was already written by this run for "
+                f"another module; refusing to overwrite it with the VEX for "
+                f"{module.purl}."
             )
+        written_names.add(filename)
         statements = len((document or {}).get("vulnerabilities") or [])
         click.echo(
             f"Writing VEX for {module.purl} ({statements} statement(s)) to {path}"

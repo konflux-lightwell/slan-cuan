@@ -366,6 +366,21 @@ def _advisory(
     return path
 
 
+@pytest.mark.parametrize("existing", ["[]", "null", "not json"])
+def test_place_record_overwrites_an_existing_file_that_is_not_an_object(
+    tmp_path: Path, existing: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An existing record that isn't a JSON object is replaced, no traceback."""
+    src, dest = tmp_path / "new.json", tmp_path / "old.json"
+    _advisory(src, ["CVE-2026-19880"])
+    dest.write_text(existing)
+
+    GitHubOsvClient._place_record(src, dest, "2026-11-21T12:00:00Z")
+
+    assert dest.read_text() == src.read_text()
+    assert "is unreadable; overwriting it" in capsys.readouterr().err
+
+
 def test_republish_keeps_unchanged_record(
     origin_and_client: tuple[Path, GitHubOsvClient],
     tmp_path: Path,

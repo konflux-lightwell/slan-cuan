@@ -240,6 +240,8 @@ class GitHubOsvClient:
         try:
             new = json.loads(src.read_text())
             old = json.loads(dest.read_text())
+            if not isinstance(new, dict) or not isinstance(old, dict):
+                raise ValueError("not a JSON object")
         except (OSError, ValueError):
             click.echo(
                 f"GitHub OSV: existing {dest.name} is unreadable; overwriting it",

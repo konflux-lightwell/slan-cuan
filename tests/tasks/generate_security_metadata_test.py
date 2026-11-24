@@ -2542,6 +2542,34 @@ def test_real_placement_without_osidb(ctx: GlobalContext, tmp_path: Path) -> Non
     }
 
 
+def test_vex_file_from_an_earlier_run_is_overwritten(tmp_path: Path) -> None:
+    """A leftover file in the output directory doesn't block a local re-run."""
+    from fath_cuan.converters.vex import ModuleVEX, VEXResult
+
+    from slan_cuan.tasks.generate_security_metadata import (
+        _generate_vex_from_index,
+    )
+
+    ts = "2026-11-13T18:59:33Z"
+    leftover = tmp_path / f"{ts}.bom.json"
+    leftover.write_text('{"old": true}')
+    module = ModuleVEX(
+        purl="pkg:maven/g/a@1",
+        per_cve=[],
+        timestamp=ts,
+        multi_cve=_vex_doc("CVE-2024-1", "CVE-2024-2"),
+    )
+    with patch(
+        "slan_cuan.tasks.generate_security_metadata.process_vex",
+        return_value=VEXResult(per_cve=[], multi_cve=None, modules=[module]),
+    ):
+        _generate_vex_from_index({}, tmp_path, None, {}, ts)
+
+    assert json.loads(leftover.read_text()) == _vex_doc(
+        "CVE-2024-1", "CVE-2024-2"
+    )
+
+
 def test_vex_file_is_never_overwritten(tmp_path: Path) -> None:
     """Two modules must never write the same VEX filename."""
     import click
