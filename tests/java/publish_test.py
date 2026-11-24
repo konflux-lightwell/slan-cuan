@@ -2898,6 +2898,60 @@ def test_publish_uploads_vex_to_separate_repository(
 
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_vex_conflict_stops_before_any_upload(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """A VEX that can't be published stops the release before any upload."""
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    _add_vex_document(artifact_dir)
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+    mock_osv = _make_ctx_mock()
+    mock_vex = _make_ctx_mock()
+    _setup_file_client(mock_osv)
+    _setup_file_client(mock_vex)
+    mock_vex.get_content.return_value = {"sha256": "00" * 32, "pulp_labels": {}}
+    mock_file_cls.side_effect = [mock_osv, mock_vex]
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "publish",
+            "--pulp-url",
+            "https://pulp.example.com",
+            "--pulp-repository",
+            "test-repo",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-domain",
+            "lightwell",
+            "--pulp-username",
+            "testuser",
+            "--pulp-password",
+            "testpass",
+            "--pulp-file-repository",
+            "osv/java/remediated",
+            "--pulp-vex-repository",
+            "vex-java-backport",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "refusing to overwrite" in result.output
+    mock_maven.upload_content.assert_not_called()
+    mock_maven.modify_repository.assert_not_called()
+    mock_osv.upload_content.assert_not_called()
+    mock_vex.upload_content.assert_not_called()
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_skip_associate_still_publishes_osv_and_vex(
     mock_maven_cls: Mock,
     mock_file_cls: Mock,
@@ -5510,13 +5564,39 @@ def _publish_vex(client: Mock, path: Path) -> int:
 
 
 def test_vex_publish_uploads_new_file_with_build_label(tmp_path: Path) -> None:
-    """A free VEX filename is uploaded, labelled with the build image."""
+    """A free VEX filename is uploaded, labelled with the build and content."""
+    from slan_cuan.java.publish import vex_content_sha256
+
     path = _vex_file(tmp_path)
     client = _make_ctx_mock()
 
     assert _publish_vex(client, path) == 1
     client.get_content.assert_called_once_with("/repo/", path.name)
-    assert client.upload_content.call_args.kwargs["labels"] == _THIS_BUILD
+    assert client.upload_content.call_args.kwargs["labels"] == {
+        **_THIS_BUILD,
+        "vex_content_sha256": vex_content_sha256(json.loads(path.read_text())),
+    }
+
+
+def test_vex_content_sha256_ignores_random_ids() -> None:
+    """The random serialNumber and bom-ref values are not content."""
+    from slan_cuan.java.publish import vex_content_sha256
+
+    def doc(serial: str, ref: str, state: str = "resolved") -> dict:
+        return {
+            "bomFormat": "CycloneDX",
+            "serialNumber": serial,
+            "vulnerabilities": [
+                {"bom-ref": ref, "id": "CVE-1", "analysis": {"state": state}}
+            ],
+        }
+
+    assert vex_content_sha256(doc("urn:uuid:1", "a")) == vex_content_sha256(
+        doc("urn:uuid:2", "b")
+    )
+    assert vex_content_sha256(doc("urn:uuid:1", "a")) != vex_content_sha256(
+        doc("urn:uuid:1", "a", state="not_affected")
+    )
 
 
 def test_vex_publish_keeps_identical_existing_file(tmp_path: Path) -> None:
@@ -5532,21 +5612,69 @@ def test_vex_publish_keeps_identical_existing_file(tmp_path: Path) -> None:
     client.upload_content.assert_not_called()
 
 
-def test_vex_publish_keeps_file_of_same_build_on_rerun(tmp_path: Path) -> None:
+def test_vex_publish_keeps_same_content_on_rerun(tmp_path: Path) -> None:
     """A re-run of the same release keeps the published VEX.
 
     VEX documents carry random serial numbers and bom-refs, so the
-    regenerated file never has the same bytes.
+    regenerated file never has the same bytes; the content label matches.
     """
+    from slan_cuan.java.publish import vex_content_sha256
+
     path = _vex_file(tmp_path)
     client = _make_ctx_mock()
     client.get_content.return_value = {
         "sha256": "11" * 32,
-        "pulp_labels": _THIS_BUILD,
+        "pulp_labels": {
+            **_THIS_BUILD,
+            "vex_content_sha256": vex_content_sha256(
+                json.loads(path.read_text())
+            ),
+        },
     }
 
     assert _publish_vex(client, path) == 0
     client.upload_content.assert_not_called()
+
+
+@pytest.mark.parametrize("content_label", [{"vex_content_sha256": "22" * 32}, {}])
+def test_vex_publish_refuses_changed_file_of_same_build(
+    tmp_path: Path, content_label: dict[str, str]
+) -> None:
+    """A corrected re-run never silently keeps the old VEX: it stops."""
+    import click
+
+    path = _vex_file(tmp_path)
+    client = _make_ctx_mock()
+    client.get_content.return_value = {
+        "sha256": "11" * 32,
+        "pulp_labels": {**_THIS_BUILD, **content_label},
+    }
+
+    with pytest.raises(
+        click.ClickException, match="for this build with different content"
+    ):
+        _publish_vex(client, path)
+    client.upload_content.assert_not_called()
+
+
+def test_verify_vex_uploads_returns_only_files_to_upload(
+    tmp_path: Path,
+) -> None:
+    """The pre-upload check keeps identical files and returns the new ones."""
+    from slan_cuan.java.publish import _verify_vex_uploads
+
+    kept = _vex_file(tmp_path, "2026-11-13T18:59:33Z.bom.json")
+    new = _vex_file(tmp_path, "2026-11-13T18:59:34Z.bom.json")
+    client = _make_ctx_mock()
+    client.get_content.side_effect = lambda _href, name: (
+        {"sha256": hashlib.sha256(kept.read_bytes()).hexdigest()}
+        if name == kept.name
+        else None
+    )
+
+    assert _verify_vex_uploads(
+        client, "/repo/", (kept, new), _THIS_BUILD["source_image"]
+    ) == (new,)
 
 
 @pytest.mark.parametrize(

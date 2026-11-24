@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from click.testing import CliRunner
+from fath_cuan.workflow import resolve_module_vulns as real_resolve_module_vulns
 
 from slan_cuan.models import EXTRACT_RESULT_FILENAME, ExtractResult, GlobalContext
 from slan_cuan.tasks.generate_security_metadata import (
@@ -2351,7 +2352,8 @@ _LOGBACK_PLACEMENT = {
 
 
 def _logback_upstream(vuln_id: str) -> dict | None:
-    if vuln_id == "CVE-2026-19880":
+    # CVE-2026-19880 and LW- IDs have no osv.dev package data.
+    if vuln_id == "CVE-2026-19880" or not vuln_id.startswith("CVE-"):
         return None
     return {
         "affected": [
@@ -2366,18 +2368,28 @@ def _logback_upstream(vuln_id: str) -> dict | None:
 
 
 def _run_logback(
-    ctx: GlobalContext, tmp_path: Path, placement: dict
+    ctx: GlobalContext,
+    tmp_path: Path,
+    placement: dict | None,
+    index: dict = _LOGBACK_INDEX,
+    expect_ok: bool = True,
 ) -> tuple[Path, str]:
+    """Generate for the logback build; *placement* None runs fath-cuan's own."""
     index_dir = tmp_path / "index"
     index_dir.mkdir()
-    (index_dir / "gav-index.json").write_text(json.dumps(_LOGBACK_INDEX))
+    (index_dir / "gav-index.json").write_text(json.dumps(index))
     workdir = tmp_path / "workdir"
     _create_extract_result(workdir)
     output_dir = workdir / "security_metadata"
+    placing = (
+        {"side_effect": real_resolve_module_vulns}
+        if placement is None
+        else {"return_value": placement}
+    )
     with (
         patch(
             "slan_cuan.tasks.generate_security_metadata.resolve_module_vulns",
-            return_value=placement,
+            **placing,
         ),
         patch(
             "fath_cuan.converters.osv._fetch_upstream_osv",
@@ -2395,7 +2407,10 @@ def _run_logback(
         ),
     ):
         result = _invoke(CliRunner(), index_dir, output_dir, ctx, workdir=workdir)
-    assert result.exit_code == 0, result.output
+    if expect_ok:
+        assert result.exit_code == 0, result.output
+    else:
+        assert result.exit_code != 0, result.output
     return output_dir, result.output
 
 
@@ -2458,21 +2473,73 @@ def test_multi_module_build_one_record_set_per_module(
     )
 
 
-def test_unplaced_vulnerabilities_are_reported(
-    ctx: GlobalContext, tmp_path: Path
+@pytest.mark.parametrize(
+    ("placement", "unplaced"),
+    [
+        (
+            {"ch.qos.logback:logback-core": ["CVE-2024-12798"]},
+            "CVE-2024-12801, CVE-2026-10532, CVE-2026-19880",
+        ),
+        ({}, "CVE-2024-12798, CVE-2024-12801, CVE-2026-10532, CVE-2026-19880"),
+    ],
+    ids=["some-unplaced", "nothing-placed"],
+)
+def test_unplaced_vulnerabilities_fail_the_run(
+    ctx: GlobalContext, tmp_path: Path, placement: dict, unplaced: str
 ) -> None:
-    """A CVE whose upstream packages this build did not produce is not claimed."""
-    placement = {"ch.qos.logback:logback-core": ["CVE-2024-12798"]}
-    out, output = _run_logback(ctx, tmp_path, placement)
+    """A vulnerability no module of this build fixes stops the run.
 
-    assert "WARNING: not placed on any module of this build" in output
-    assert "CVE-2024-12801, CVE-2026-10532, CVE-2026-19880" in output
+    No OSV or VEX would name it, and publish refuses a release whose OSV
+    doesn't cover every GAV index vulnerability: fail early, with the IDs.
+    """
+    out, output = _run_logback(ctx, tmp_path, placement, expect_ok=False)
 
-    assert [p.name for p in out.glob("RHLW-*.json")] != []
-    for record in (json.loads(p.read_text()) for p in out.glob("RHLW-*.json")):
-        assert [u for u in record["upstream"] if u.startswith("CVE-")] == [
-            "CVE-2024-12798"
+    assert "Not placed on any module of this build" in output
+    assert unplaced in output
+    assert list(out.glob("RHLW-*.json")) == []
+
+
+def test_real_placement_without_osidb(ctx: GlobalContext, tmp_path: Path) -> None:
+    """fath-cuan's own placement, no OSIDB keytab (osv.dev mocked).
+
+    CVEs with osv.dev package data go to the module it names; a CVE without
+    it and an LW- ID (osv.dev has no LW- records) fall back to the primary
+    module, because OSIDB is the only other source.
+    """
+    vulns = [*_LOGBACK_INDEX["vulns"], "LW-2026-0023"]
+    index = {**_LOGBACK_INDEX, "vulns": vulns}
+    out, output = _run_logback(ctx, tmp_path, None, index=index)
+
+    assert "No OSIDB keytab file found, skipping OSIDB fetching." in output
+    assert (
+        "Fixes in ch.qos.logback:logback-classic: CVE-2026-19880, LW-2026-0023"
+    ) in output
+    assert (
+        "Fixes in ch.qos.logback:logback-core: "
+        "CVE-2024-12798, CVE-2024-12801, CVE-2026-10532"
+    ) in output
+    upstream_by_module = {
+        r["affected"][0]["package"]["name"]: r["upstream"]
+        for r in (json.loads(p.read_text()) for p in out.glob("RHLW-*.json"))
+    }
+    assert upstream_by_module == {
+        "ch.qos.logback:logback-classic": ["CVE-2026-19880", "LW-2026-0023"],
+        "ch.qos.logback:logback-core": [
+            "CVE-2024-12798",
+            "CVE-2024-12801",
+            "CVE-2026-10532",
+        ],
+    }
+    vex_ids_by_module = {
+        d["metadata"]["component"]["name"]: [
+            v["id"] for v in d["vulnerabilities"]
         ]
+        for d in (json.loads(p.read_text()) for p in out.glob("*.bom.json"))
+    }
+    assert vex_ids_by_module == {
+        "logback-classic": ["CVE-2026-19880", "LW-2026-0023"],
+        "logback-core": ["CVE-2024-12798", "CVE-2024-12801", "CVE-2026-10532"],
+    }
 
 
 def test_vex_file_is_never_overwritten(tmp_path: Path) -> None:

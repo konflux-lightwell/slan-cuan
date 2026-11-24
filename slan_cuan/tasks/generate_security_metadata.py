@@ -1021,8 +1021,8 @@ def generate_security_metadata(
     # that placement for the OSV advisories, the enriched SBOMs and the VEX:
     # one advisory, one SBOM and one VEX per module that has a fix
     # (LWLP-5917).
-    # None for a clean build; a dict (possibly empty, when no vulnerability
-    # could be placed on a module of this build) otherwise.
+    # None for a clean build; otherwise a dict that places every
+    # vulnerability (an unplaced one fails the run below).
     module_vulns: dict[str, list[str]] | None = None
     if vulns:
         module_vulns = resolve_module_vulns(index_data, osidb_client=osidb_client)
@@ -1032,11 +1032,14 @@ def generate_security_metadata(
             set(vulns) - {v for ids in module_vulns.values() for v in ids}
         )
         if unplaced:
-            click.echo(
-                f"WARNING: not placed on any module of this build "
-                f"(upstream names only modules it did not build): "
-                f"{', '.join(unplaced)}",
-                err=True,
+            # Fail here, with the IDs: no OSV or VEX would name them, and
+            # publish refuses a release whose OSV doesn't cover every GAV
+            # index vulnerability. Also covers "nothing placed at all".
+            raise click.ClickException(
+                f"Not placed on any module of this build (upstream names "
+                f"only modules it did not build): {', '.join(unplaced)}. "
+                f"No OSV or VEX would claim these fixes; check the build's "
+                f"vulnerability list."
             )
 
     osv_records = process_osv(

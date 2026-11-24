@@ -161,12 +161,17 @@ Generated OSV/VEX records are published to two destinations:
   repository must be served by a predisclosure distribution (gate above).
 
   A VEX file is **never overwritten** (the Pulp File repository keeps one file
-  per name, and Sonatype's bucket refuses overwrites). Each VEX upload carries
-  the build's `source_image` label. When the VEX repository already has a file
-  with the same name, it is kept if it has the same content or was published
-  for the same build (a re-run: VEX documents carry random IDs, so a re-run
-  never reproduces the bytes). Any other existing file (another build's, or
-  one without a build label and with different content) stops the run.
+  per name, and Sonatype's bucket refuses overwrites). Every VEX name is
+  checked **before anything is uploaded**, so a VEX that can't be published
+  stops the release before the artifacts and OSV advisories are public. Each
+  VEX upload carries the build's `source_image` label and a
+  `vex_content_sha256` label: the hash of the document without its random
+  `serialNumber` and `bom-ref` values. When the VEX repository already has a
+  file with the same name, it is kept if it has the same content (the same
+  bytes or the same content label: a re-run). Any other existing file stops
+  the run, including this build's own VEX with different content (a corrected
+  re-run) and files published before the content label existed: withdraw the
+  published file first (LWLP-6161), then re-run the release.
 - **GitHub repository** (`--github-osv-repo`, optional) — when set together
   with `--github-osv-token`, records are committed and pushed to the OSV git
   repository (e.g. `project-lightwell/lightwell-osv`) under

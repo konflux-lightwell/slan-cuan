@@ -943,6 +943,100 @@ def _resolve_file_repository(
     return file_client, file_repo_href
 
 
+# Pulp label carrying the content hash of a VEX document without its random
+# IDs; the Pulp content API returns labels but not file contents.
+VEX_CONTENT_LABEL = "vex_content_sha256"
+
+
+def vex_content_sha256(record: dict[str, Any]) -> str:
+    """Hash a VEX document's content, ignoring its random IDs and key order.
+
+    fath-cuan gives every document a random ``serialNumber`` and every
+    vulnerability a random ``bom-ref``, so a re-run of the same build never
+    reproduces the bytes. Everything else is derived from the build.
+    """
+    content = {k: v for k, v in record.items() if k != "serialNumber"}
+    vulnerabilities = content.get("vulnerabilities")
+    if isinstance(vulnerabilities, list):
+        content["vulnerabilities"] = [
+            {k: v for k, v in vuln.items() if k != "bom-ref"}
+            if isinstance(vuln, dict)
+            else vuln
+            for vuln in vulnerabilities
+        ]
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _vex_upload_needed(
+    client: PulpFileClient,
+    repository_href: str,
+    file_path: Path,
+    source_image: str | None,
+) -> bool:
+    """Return True to upload a VEX file, False to keep the published copy.
+
+    A VEX file is never overwritten (LWLP-5917): the Pulp File repository
+    keeps one file per name, so an upload under an existing name would
+    replace the published document, and Sonatype's bucket refuses
+    overwrites. A published file with the same content (the same bytes, or
+    the same ``vex_content_sha256`` label) is kept: a re-run of the release.
+    Any other published file stops the release, including this build's own
+    file with different content (a corrected re-run): withdraw the published
+    file first (LWLP-6161), then re-run.
+    """
+    existing = client.get_content(repository_href, file_path.name)
+    if existing is None:
+        return True
+    data = file_path.read_bytes()
+    labels = existing.get("pulp_labels")
+    labels = labels if isinstance(labels, dict) else {}
+    if existing.get("sha256") == hashlib.sha256(data).hexdigest() or labels.get(
+        VEX_CONTENT_LABEL
+    ) == vex_content_sha256(json.loads(data)):
+        click.echo(
+            f"VEX {file_path.name} is already published with the same "
+            f"content; keeping the published file."
+        )
+        return False
+    if source_image and labels.get("source_image") == source_image:
+        raise click.ClickException(
+            f"VEX {file_path.name} is already published for this build with "
+            f"different content; refusing to overwrite it. Withdraw the "
+            f"published file first (LWLP-6161), then re-run the release."
+        )
+    raise click.ClickException(
+        f"VEX {file_path.name} already exists in the repository with "
+        f"different content (another build, or published before VEX content "
+        f"labels); refusing to overwrite it. If it is this build's outdated "
+        f"VEX, withdraw it first (LWLP-6161), then re-run the release."
+    )
+
+
+def _verify_vex_uploads(
+    client: PulpFileClient,
+    repository_href: str,
+    files: tuple[Path, ...],
+    source_image: str | None,
+) -> tuple[Path, ...]:
+    """Check every VEX name before any upload; return the files to upload.
+
+    Runs before the Maven artifacts and OSV advisories are uploaded, so a
+    VEX that can't be published stops the release before any of it is
+    public (see :func:`_vex_upload_needed`).
+    """
+    try:
+        return tuple(
+            f
+            for f in files
+            if _vex_upload_needed(client, repository_href, f, source_image)
+        )
+    except PulpError as e:
+        raise click.ClickException(
+            "Unable to check the published VEX files before upload."
+        ) from e
+
+
 def _publish_file_records(
     file_client: PulpFileClient,
     repository_href: str,
@@ -954,45 +1048,34 @@ def _publish_file_records(
     """Upload files; the repository-backed distribution auto-publishes them.
 
     With *no_overwrite* (VEX), a file whose name already exists in the
-    repository is never replaced (LWLP-5917). Pulp keeps one file per
-    relative path, so an upload under an existing name would silently
-    replace another build's document, and Sonatype's bucket refuses
-    overwrites. The existing file is kept when it has the same content or
-    was published for the same build (*labels* ``source_image``: a re-run
-    of this release; VEX documents carry random IDs, so a re-run never
-    reproduces the bytes). Any other existing file stops the release.
+    repository is never replaced (LWLP-5917): see :func:`_vex_upload_needed`.
+    The names were already checked before anything was uploaded
+    (:func:`_verify_vex_uploads`); checking again here keeps the rule when
+    another release uploads in between. Each VEX upload carries the
+    ``vex_content_sha256`` label besides *labels*.
     """
     uploaded = 0
     source_image = (labels or {}).get("source_image")
     try:
         for file_path in files:
-            sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            data = file_path.read_bytes()
+            sha256 = hashlib.sha256(data).hexdigest()
+            file_labels = labels
             if no_overwrite:
-                existing = file_client.get_content(
-                    repository_href, file_path.name
-                )
-                if existing is not None:
-                    existing_labels = existing.get("pulp_labels") or {}
-                    same_build = bool(source_image) and (
-                        isinstance(existing_labels, dict)
-                        and existing_labels.get("source_image") == source_image
-                    )
-                    if existing.get("sha256") == sha256 or same_build:
-                        click.echo(
-                            f"{purpose} {file_path.name} is already published "
-                            f"for this build; keeping the published file."
-                        )
-                        continue
-                    raise click.ClickException(
-                        f"{purpose} {file_path.name} already exists in the "
-                        f"repository for another build; refusing to overwrite it."
-                    )
+                if not _vex_upload_needed(
+                    file_client, repository_href, file_path, source_image
+                ):
+                    continue
+                file_labels = {
+                    **(labels or {}),
+                    VEX_CONTENT_LABEL: vex_content_sha256(json.loads(data)),
+                }
             file_client.upload_content(
                 file_path=file_path,
                 relative_path=file_path.name,
                 sha256=sha256,
                 repository_href=repository_href,
-                **({"labels": labels} if labels else {}),
+                **({"labels": file_labels} if file_labels else {}),
             )
             uploaded += 1
     except PulpError as e:
@@ -1195,6 +1278,14 @@ def _upload_to_pulp(
             assert pulp_vex_repository is not None
             vex_client, vex_repo_href = _resolve_file_repository(
                 clients, config, pulp_vex_repository, "VEX"
+            )
+            # Before any upload: a VEX that can't be published must stop the
+            # release before the artifacts and OSV advisories are public.
+            uploadable_vex = _verify_vex_uploads(
+                vex_client,
+                vex_repo_href,
+                uploadable_vex,
+                pulp_labels.get("source_image"),
             )
 
         client = clients.enter_context(PulpMavenClient(config, pulp_repository))
