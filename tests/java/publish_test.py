@@ -2896,6 +2896,67 @@ def test_publish_uploads_vex_to_separate_repository(
 
 @patch("slan_cuan.java.publish.PulpFileClient")
 @patch("slan_cuan.java.publish.PulpMavenClient")
+def test_publish_skip_associate_still_publishes_osv_and_vex(
+    mock_maven_cls: Mock,
+    mock_file_cls: Mock,
+    tmp_path: Path,
+) -> None:
+    """--skip-associate skips only the Maven modify; OSV/VEX still get published.
+
+    File records upload straight into their (autopublish) repository, so the
+    check is that each upload still targets the repository href.
+    """
+    artifact_dir = create_test_artifact_dir(
+        tmp_path, include_security_metadata=True
+    )
+    vex_path = _add_vex_document(artifact_dir)
+
+    mock_maven = _make_ctx_mock()
+    mock_maven_cls.return_value = mock_maven
+    _setup_client_mock(mock_maven)
+
+    mock_osv = _make_ctx_mock()
+    mock_vex = _make_ctx_mock()
+    _setup_file_client(mock_osv)
+    _setup_file_client(mock_vex)
+    mock_osv.resolve_repository.return_value = "/osv-repo/"
+    mock_vex.resolve_repository.return_value = "/vex-repo/"
+    mock_osv.get_distribution_repository.return_value = "/osv-repo/"
+    mock_vex.get_distribution_repository.return_value = "/vex-repo/"
+    mock_file_cls.side_effect = [mock_osv, mock_vex]
+
+    result = CliRunner().invoke(
+        main,
+        [
+            *_BASIC_PUBLISH_ARGS,
+            "--artifact-dir",
+            str(artifact_dir),
+            "--pulp-file-repository",
+            "osv/java/remediated",
+            "--pulp-vex-repository",
+            "vex-java-backport",
+            "--skip-associate",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_maven.modify_repository.assert_not_called()
+    assert "Skipping association:" in result.output
+    assert "Security metadata: 1 file(s) uploaded" in result.output
+    assert "VEX metadata: 1 file(s) uploaded" in result.output
+    assert mock_osv.upload_content.call_args.kwargs["repository_href"] == (
+        "/osv-repo/"
+    )
+    assert mock_vex.upload_content.call_args.kwargs["relative_path"] == (
+        vex_path.name
+    )
+    assert mock_vex.upload_content.call_args.kwargs["repository_href"] == (
+        "/vex-repo/"
+    )
+
+
+@patch("slan_cuan.java.publish.PulpFileClient")
+@patch("slan_cuan.java.publish.PulpMavenClient")
 def test_publish_requires_vex_repository_when_vex_exists(
     mock_maven_cls: Mock,
     mock_file_cls: Mock,
