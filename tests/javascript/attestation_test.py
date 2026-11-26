@@ -541,8 +541,8 @@ class TestPublishAttestation:
             content_href,
             {
                 "lw.oci_registry_base": "quay.io/org/repo",
-                "tl.attestation_oci_digest": digest,
-                "tl.attestation_predicate_type": _PREDICATE_TYPE,
+                "lw.attestation_oci_digest": digest,
+                "lw.attestation_predicate_type": _PREDICATE_TYPE,
             },
         )
 

@@ -10,7 +10,7 @@ Schema v3 (assess writes initial doc; updater mutates gap lists + level only):
 
 Global index (separate OCI artifact): blocker name@version -> {parents: [...]}.
 
-Pulp labels (tl.compliance_level, tl.compliance_oci_digest) use the OCI digest
+Pulp labels (lw.compliance_level, lw.compliance_oci_digest) use the OCI digest
 as an optimistic lock: write digest first and re-read; only then write level
 (after another re-read for sticky max). If another digest is present, fail
 closed so the release can be retried. Levels are sticky (never downgraded).
@@ -51,8 +51,8 @@ import urllib.request
 SCHEMA_VERSION = 3
 INDEX_SCHEMA_VERSION = 1
 INDEX_FILENAME = "npm-closure-index.json"
-COMPLIANCE_LABEL = "tl.compliance_level"
-COMPLIANCE_DIGEST_LABEL = "tl.compliance_oci_digest"
+COMPLIANCE_LABEL = "lw.compliance_level"
+COMPLIANCE_DIGEST_LABEL = "lw.compliance_oci_digest"
 COMPLIANCE_ARTIFACT_TYPE = "application/vnd.npm.tl-compliance+json"
 DEFAULT_NPM_REPOSITORY = "npm-registry"
 PYTHON_WHEELS_REPOSITORY = "main"
@@ -495,7 +495,7 @@ def _labels_or_exit(content, key, context):
 
 
 def _assert_digest_or_race(labels, desired_digest, key):
-    """Require tl.compliance_oci_digest == desired; fail closed on foreign digest."""
+    """Require lw.compliance_oci_digest == desired; fail closed on foreign digest."""
     vdigest = normalize_digest(labels.get(COMPLIANCE_DIGEST_LABEL))
     if vdigest == desired_digest:
         return vdigest
@@ -538,7 +538,7 @@ def _labels_already_satisfied(cur_digest, cur_level, desired_digest, desired_lev
 
 
 def _claim_compliance_digest(content_href, repo_version_href, name, version, key, desired_digest):
-    """Write tl.compliance_oci_digest and verify it stuck (optimistic lock claim).
+    """Write lw.compliance_oci_digest and verify it stuck (optimistic lock claim).
 
     Raises:
         SystemExit: another writer holds a different digest, or the unit vanished.
@@ -557,7 +557,7 @@ def _reread_holding_digest(name, version, repo_version_href, key, desired_digest
     """Re-read labels; require our digest still present (lock still held).
 
     Returns:
-        Current ``tl.compliance_level`` string (may be empty).
+        Current ``lw.compliance_level`` string (may be empty).
 
     Raises:
         SystemExit: content gone, or digest lost to another writer.
@@ -569,7 +569,7 @@ def _reread_holding_digest(name, version, repo_version_href, key, desired_digest
 
 
 def _maybe_raise_compliance_level(content_href, key, cur_level, desired_level):
-    """Write tl.compliance_level only when sticky target is strictly higher.
+    """Write lw.compliance_level only when sticky target is strictly higher.
 
     Recomputes target as max(current, desired). Skips the write when a concurrent
     release already set a higher level (e.g. L3 while we desired L2).
@@ -602,7 +602,7 @@ def sync_content_pulp_labels(content_href, repo_version_href, name, version, lev
 
     Pulp ``set_label`` is not atomic CAS. High-level protocol:
 
-    1. Claim ``tl.compliance_oci_digest`` and verify it stuck.
+    1. Claim ``lw.compliance_oci_digest`` and verify it stuck.
     2. Re-read under that digest; raise level only if sticky max needs it.
     3. Final verify digest + level; retry or fail closed on races.
 

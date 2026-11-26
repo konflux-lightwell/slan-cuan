@@ -35,8 +35,8 @@ _OCI_TAG_INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
 _OCI_TAG_FIRST_CHAR_RE = re.compile(r"^[A-Za-z0-9_]")
 
 _LABEL_OCI_REGISTRY_BASE = "lw.oci_registry_base"
-_LABEL_ATTESTATION_OCI_DIGEST = "tl.attestation_oci_digest"
-_LABEL_ATTESTATION_PREDICATE_TYPE = "tl.attestation_predicate_type"
+_LABEL_ATTESTATION_OCI_DIGEST = "lw.attestation_oci_digest"
+_LABEL_ATTESTATION_PREDICATE_TYPE = "lw.attestation_predicate_type"
 
 _AWS_ENV_FILES = (
     "AWS_DEFAULT_REGION",

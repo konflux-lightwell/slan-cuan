@@ -18,9 +18,9 @@
 #   PULP_TASK_POLL_SECONDS     Poll interval for modify tasks (default 5)
 #   ATTESTATION_IMAGE_PREFIX / COMPLIANCE_IMAGE_PREFIX
 #                        When set, adjacent *.tgz.att are pushed to Quay and
-#                        Pulp labels tl.oci_registry_base /
-#                        tl.attestation_oci_digest /
-#                        tl.attestation_predicate_type are set (also on skip).
+#                        Pulp labels lw.oci_registry_base /
+#                        lw.attestation_oci_digest /
+#                        lw.attestation_predicate_type are set (also on skip).
 #   REQUIRE_ATTESTATIONS If true, fail when prefix is set but .att is missing
 #   ALLOW_CONTENT_REPLACE If true, same name@version with different sha256 is
 #                        replaced (remove from repo → destroy holding versions →
@@ -55,7 +55,7 @@ readonly CURL_RETRY=3
 readonly CURL_MAX_TIME_QUERY_SECONDS=30
 readonly CURL_MAX_TIME_UPLOAD_SECONDS=120
 readonly CURL_MAX_TIME_SIDECAR_SECONDS=60
-readonly COMPLIANCE_LABEL_KEY="tl.compliance_level"
+readonly COMPLIANCE_LABEL_KEY="lw.compliance_level"
 readonly MAX_PACKAGE_JSON_BYTES=1048576  # 1 MiB
 readonly MAX_COMPLIANCE_SIDECAR_BYTES=1048576  # 1 MiB
 readonly LIST_PAGE_SIZE=100

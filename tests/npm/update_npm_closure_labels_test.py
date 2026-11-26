@@ -56,8 +56,8 @@ def test_sync_labels_noop_when_already_matching(closure: Any) -> None:
     digest = "sha256:" + ("a" * 64)
     row = _content(
         {
-            "tl.compliance_oci_digest": digest,
-            "tl.compliance_level": "L2",
+            "lw.compliance_oci_digest": digest,
+            "lw.compliance_level": "L2",
         }
     )
     with (
@@ -81,11 +81,11 @@ def test_sync_labels_writes_digest_before_level(closure: Any) -> None:
     digest = "sha256:" + ("b" * 64)
     href = "/api/pulp/test/api/v3/content/npm/packages/abc/"
     empty = _content({})
-    digest_only = _content({"tl.compliance_oci_digest": digest})
+    digest_only = _content({"lw.compliance_oci_digest": digest})
     both = _content(
         {
-            "tl.compliance_oci_digest": digest,
-            "tl.compliance_level": "L1",
+            "lw.compliance_oci_digest": digest,
+            "lw.compliance_level": "L1",
         }
     )
     with (
@@ -102,7 +102,7 @@ def test_sync_labels_writes_digest_before_level(closure: Any) -> None:
         )
     assert set_label.call_count == 2
     keys = [c.args[1] for c in set_label.call_args_list]
-    assert keys == ["tl.compliance_oci_digest", "tl.compliance_level"]
+    assert keys == ["lw.compliance_oci_digest", "lw.compliance_level"]
 
 
 def test_sync_labels_fails_closed_on_digest_race_after_digest_write(
@@ -115,8 +115,8 @@ def test_sync_labels_fails_closed_on_digest_race_after_digest_write(
     before = _content({})
     raced = _content(
         {
-            "tl.compliance_oci_digest": other,
-            "tl.compliance_level": "L2",
+            "lw.compliance_oci_digest": other,
+            "lw.compliance_level": "L2",
         }
     )
     with (
@@ -133,7 +133,7 @@ def test_sync_labels_fails_closed_on_digest_race_after_digest_write(
     assert other in str(exc.value)
     # Digest write attempted once; level must not be written.
     assert set_label.call_count == 1
-    assert set_label.call_args.args[1] == "tl.compliance_oci_digest"
+    assert set_label.call_args.args[1] == "lw.compliance_oci_digest"
 
 
 def test_sync_labels_refuses_level_downgrade(closure: Any) -> None:
@@ -141,8 +141,8 @@ def test_sync_labels_refuses_level_downgrade(closure: Any) -> None:
     digest = "sha256:" + ("e" * 64)
     row = _content(
         {
-            "tl.compliance_oci_digest": digest,
-            "tl.compliance_level": "L3",
+            "lw.compliance_oci_digest": digest,
+            "lw.compliance_level": "L3",
         }
     )
     with (
@@ -167,12 +167,12 @@ def test_sync_labels_preserves_higher_level_seen_before_level_write(
     digest = "sha256:" + ("f" * 64)
     href = "/api/pulp/test/api/v3/content/npm/packages/abc/"
     empty = _content({})
-    digest_only = _content({"tl.compliance_oci_digest": digest})
+    digest_only = _content({"lw.compliance_oci_digest": digest})
     # Concurrent writer raised level to L3 while we held the digest.
     digest_and_l3 = _content(
         {
-            "tl.compliance_oci_digest": digest,
-            "tl.compliance_level": "L3",
+            "lw.compliance_oci_digest": digest,
+            "lw.compliance_level": "L3",
         }
     )
     with (
@@ -187,8 +187,8 @@ def test_sync_labels_preserves_higher_level_seen_before_level_write(
             href, "/repo/versions/1/", "express", "4.22.0", "L2", digest
         )
     keys = [c.args[1] for c in set_label.call_args_list]
-    assert keys == ["tl.compliance_oci_digest"]
-    assert "tl.compliance_level" not in keys
+    assert keys == ["lw.compliance_oci_digest"]
+    assert "lw.compliance_level" not in keys
 
 
 def test_sync_labels_aborts_level_if_digest_lost_before_level_write(
@@ -199,11 +199,11 @@ def test_sync_labels_aborts_level_if_digest_lost_before_level_write(
     other = "sha256:" + ("2" * 64)
     href = "/api/pulp/test/api/v3/content/npm/packages/abc/"
     empty = _content({})
-    ours = _content({"tl.compliance_oci_digest": wanted})
+    ours = _content({"lw.compliance_oci_digest": wanted})
     stolen = _content(
         {
-            "tl.compliance_oci_digest": other,
-            "tl.compliance_level": "L3",
+            "lw.compliance_oci_digest": other,
+            "lw.compliance_level": "L3",
         }
     )
     with (
@@ -219,4 +219,4 @@ def test_sync_labels_aborts_level_if_digest_lost_before_level_write(
             href, "/repo/versions/1/", "express", "4.22.0", "L2", wanted
         )
     keys = [c.args[1] for c in set_label.call_args_list]
-    assert keys == ["tl.compliance_oci_digest"]
+    assert keys == ["lw.compliance_oci_digest"]
