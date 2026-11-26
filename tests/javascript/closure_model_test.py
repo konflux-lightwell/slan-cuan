@@ -867,16 +867,18 @@ class TestLegacyComplianceOciTag:
     """legacy_compliance_oci_tag reproduces the pre-port bash tag format."""
 
     def test_scoped_name_matches_bash_format(self):
+        """A scoped name maps to the bash '@'-stripped, '/'->'-' tag."""
         assert (
             legacy_compliance_oci_tag("@babel/core", "7.0.0")
             == "babel-core-7.0.0"
         )
 
     def test_unscoped_name_has_no_fallback(self):
-        """Unscoped, tag-safe names kept the same tag, so nothing to fall back to."""
+        """Unscoped, tag-safe names kept the same tag: no fallback."""
         assert legacy_compliance_oci_tag("lodash", "4.17.21") is None
 
     def test_legacy_tag_differs_from_current_for_scoped(self):
+        """The fallback tag is a different ref than the current one."""
         assert legacy_compliance_oci_tag("@scope/pkg", "1.0.0") != (
             compliance_oci_tag("@scope/pkg", "1.0.0")
         )
@@ -886,4 +888,5 @@ class TestLegacyComplianceOciTag:
         assert legacy_compliance_oci_tag("@scope/pkg", "1.0.0+build.1") is None
 
     def test_overlong_legacy_tag_has_no_fallback(self):
+        """A legacy tag over the 128-char OCI limit was never pushed."""
         assert legacy_compliance_oci_tag("@s/" + "a" * 200, "1.0.0") is None
