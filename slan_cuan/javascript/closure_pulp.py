@@ -7,7 +7,7 @@ the original's raw ``pulp_post``/``find_content_in_repo`` HTTP calls, with
 every ``SystemExit`` converted to ``click.ClickException`` since this module
 backs CLI commands.
 
-Pulp labels (``tl.compliance_level``, ``tl.compliance_oci_digest``) use the
+Pulp labels (``lw.compliance_level``, ``lw.compliance_oci_digest``) use the
 OCI digest as an optimistic lock: write the digest first and re-read; only
 then write the level (after another re-read for sticky max). If another
 digest is present, fail closed so the release can be retried. Levels are
@@ -43,11 +43,11 @@ from slan_cuan.pulp.constants import NPM_CONTENT_API_PATH_TEMPLATE
 from slan_cuan.pulp.exceptions import PulpError
 
 #: Pulp label recording a package's sticky compliance level (L1/L2/L3).
-COMPLIANCE_LABEL = "tl.compliance_level"
+COMPLIANCE_LABEL = "lw.compliance_level"
 
 #: Pulp label recording the OCI digest a compliance-level claim is pinned
 #: to -- the optimistic-lock value for the CAS protocol below.
-COMPLIANCE_DIGEST_LABEL = "tl.compliance_oci_digest"
+COMPLIANCE_DIGEST_LABEL = "lw.compliance_oci_digest"
 
 _LEVEL_RANKS = {"L1": 1, "L2": 2, "L3": 3}
 
@@ -383,7 +383,7 @@ def sync_content_pulp_labels(
        unit no longer exists. On a retry round (after this writer has
        already claimed/held the digest), a foreign or empty digest here
        fails closed instead of being re-claimed.
-    2. Claim ``tl.compliance_oci_digest`` (if not already ours) and verify
+    2. Claim ``lw.compliance_oci_digest`` (if not already ours) and verify
        it stuck.
     3. Re-read under that digest; raise the level only if the sticky max
        needs it (never downgrades).

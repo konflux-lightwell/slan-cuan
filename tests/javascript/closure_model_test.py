@@ -774,7 +774,7 @@ class TestHydrateSeedDoc:
         row = {
             "name": "pkg",
             "version": "1.0.0",
-            "pulp_labels": {"tl.compliance_level": "L1"},
+            "pulp_labels": {"lw.compliance_level": "L1"},
         }
         doc = hydrate_seed_doc(row)
         assert doc["compliance_level"] == "L1"

@@ -44,7 +44,7 @@ SCHEMA_VERSION = 3
 INDEX_SCHEMA_VERSION = 1
 
 #: Pulp label recording a package's sticky compliance level (L1/L2/L3).
-COMPLIANCE_LABEL = "tl.compliance_level"
+COMPLIANCE_LABEL = "lw.compliance_level"
 
 #: OCI distribution-spec tag constraints used by ``compliance_oci_tag``.
 _OCI_TAG_MAX_LENGTH = 128
