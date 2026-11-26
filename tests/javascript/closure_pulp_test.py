@@ -19,12 +19,39 @@ from slan_cuan.javascript.closure_pulp import (
     normalize_digest,
     sync_content_pulp_labels,
 )
+from slan_cuan.pulp.clients.base import PulpClientBase
 from slan_cuan.pulp.exceptions import PulpError
 
 DIGEST = "sha256:" + "a" * 64
 OTHER_DIGEST = "sha256:" + "b" * 64
 CONTENT_HREF = "/api/pulp/test/api/v3/content/npm/packages/abc/"
 REPO_VERSION_HREF = "/api/pulp/test/api/v3/repositories/npm/npm/x/versions/1/"
+
+
+class _CasEnforcingClient:
+    """In-memory label store that runs the real ``PulpClientBase.set_label``.
+
+    Unlike a ``Mock`` ``set_label``, the CAS check here is the production
+    one (write only if the CAS label is empty or equals ``cas_digest``), so
+    tests exercise whether the claim passes the right expected value.
+    """
+
+    set_label = PulpClientBase.set_label
+
+    def __init__(self, labels: dict[str, str]) -> None:
+        self.labels = dict(labels)
+        self._config = Mock(custom_headers=None)
+        self.after_get_labels = None  # optional hook: simulate a racing writer
+
+    def get_labels(self, href: str) -> dict[str, str]:
+        snapshot = dict(self.labels)
+        if self.after_get_labels is not None:
+            hook, self.after_get_labels = self.after_get_labels, None
+            hook(self.labels)
+        return snapshot
+
+    def _request(self, method, url, description, *, json=None, headers=None):
+        self.labels[json["key"]] = json["value"]
 
 
 class TestNormalizeDigest:
@@ -351,9 +378,51 @@ class TestSyncContentPulpLabels:
             CONTENT_HREF,
             COMPLIANCE_DIGEST_LABEL,
             DIGEST,
-            cas_digest=DIGEST,
+            cas_digest="",
             cas_label_key=COMPLIANCE_DIGEST_LABEL,
         )
+
+    def test_sync_labels_replaces_prior_digest_under_real_cas(self):
+        """A prior, different digest is swapped for the new one (promotion).
+
+        Regression: the claim used ``cas_digest=<new digest>``, which the
+        real CAS rejects whenever the label already holds an older digest.
+        """
+        client = _CasEnforcingClient(
+            {COMPLIANCE_DIGEST_LABEL: OTHER_DIGEST, COMPLIANCE_LABEL: "L1"}
+        )
+        sync_content_pulp_labels(
+            client, CONTENT_HREF, REPO_VERSION_HREF, "pkg", "1.0.0", "L2", DIGEST
+        )
+        assert client.labels[COMPLIANCE_DIGEST_LABEL] == DIGEST
+        assert client.labels[COMPLIANCE_LABEL] == "L2"
+
+    def test_sync_labels_cas_passes_raw_unnormalized_observed_digest(self):
+        """The CAS expectation is the stored value, not its normalized form."""
+        bare = "c" * 64
+        client = _CasEnforcingClient({COMPLIANCE_DIGEST_LABEL: bare})
+        sync_content_pulp_labels(
+            client, CONTENT_HREF, REPO_VERSION_HREF, "pkg", "1.0.0", "", DIGEST
+        )
+        assert client.labels[COMPLIANCE_DIGEST_LABEL] == DIGEST
+
+    def test_sync_labels_cas_fails_when_digest_changes_after_round_read(self):
+        """A digest changed after our read makes the CAS fail closed."""
+        client = _CasEnforcingClient({COMPLIANCE_DIGEST_LABEL: OTHER_DIGEST})
+        client.after_get_labels = lambda labels: labels.update(
+            {COMPLIANCE_DIGEST_LABEL: "sha256:" + "d" * 64}
+        )
+        with pytest.raises(click.ClickException, match="CAS"):
+            sync_content_pulp_labels(
+                client,
+                CONTENT_HREF,
+                REPO_VERSION_HREF,
+                "pkg",
+                "1.0.0",
+                "L2",
+                DIGEST,
+            )
+        assert client.labels[COMPLIANCE_DIGEST_LABEL] == "sha256:" + "d" * 64
 
     def test_sync_labels_claim_cas_rejection_raises_clickexception(self):
         """A CAS rejection from set_label surfaces as a clean ClickException."""

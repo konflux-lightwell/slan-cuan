@@ -236,17 +236,27 @@ def _assert_digest_or_race(
 
 
 def _claim_compliance_digest(
-    client: PulpNpmClient, content_href: str, desired_digest: str, key: str
+    client: PulpNpmClient,
+    content_href: str,
+    desired_digest: str,
+    key: str,
+    observed_digest: str,
 ) -> None:
-    """Write the digest label via Pulp's CAS primitive and verify it stuck.
+    """Swap the digest label ``observed_digest`` -> ``desired_digest`` and verify.
 
-    Passes ``cas_digest``/``cas_label_key`` through to
-    ``client.set_label`` so Pulp rejects the write up front when a foreign
-    digest is already present, instead of writing unconditionally and only
-    detecting the race on a later re-read. The post-write re-read/assert
-    below still runs afterwards: ``set_label``'s own CAS check is a
-    client-side read-then-write, not a single atomic server operation, so
-    a writer can still slip in between its internal check and its POST.
+    ``observed_digest`` is the raw label value read at the start of this
+    round (``""`` if unset). It is passed as ``cas_digest`` so
+    ``client.set_label`` writes only if the label still holds that value (or
+    is empty) -- "swap old -> new, fail if old changed". Passing
+    ``desired_digest`` here instead would make the CAS reject every
+    replacement of a prior digest, which is exactly the normal case when a
+    release (or a parent promotion in ``npm closure update``) publishes a new
+    compliance document for a content unit that already carries one.
+
+    The post-write re-read/assert below still runs afterwards:
+    ``set_label``'s own CAS check is a client-side read-then-write, not a
+    single atomic server operation, so a writer can still slip in between
+    its internal check and its POST.
 
     Raises:
         _ContentGone: Content vanished before/at the CAS write (HTTP 404).
@@ -259,7 +269,7 @@ def _claim_compliance_digest(
             content_href,
             COMPLIANCE_DIGEST_LABEL,
             desired_digest,
-            cas_digest=desired_digest,
+            cas_digest=observed_digest,
             cas_label_key=COMPLIANCE_DIGEST_LABEL,
         )
     except PulpError as exc:
@@ -437,7 +447,11 @@ def sync_content_pulp_labels(
 
             if cur_digest != desired_digest:
                 _claim_compliance_digest(
-                    client, content_href, desired_digest, key
+                    client,
+                    content_href,
+                    desired_digest,
+                    key,
+                    labels.get(COMPLIANCE_DIGEST_LABEL, ""),
                 )
             holding = True
 
