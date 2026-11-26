@@ -540,7 +540,7 @@ class TestPublishAttestation:
         pulp_client.set_labels.assert_called_once_with(
             content_href,
             {
-                "tl.oci_registry_base": "quay.io/org/repo",
+                "lw.oci_registry_base": "quay.io/org/repo",
                 "tl.attestation_oci_digest": digest,
                 "tl.attestation_predicate_type": _PREDICATE_TYPE,
             },
