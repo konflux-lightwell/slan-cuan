@@ -94,6 +94,21 @@ def compliance_image_ref(
     return f"{base}:{closure_model.compliance_oci_tag(name, version)}"
 
 
+def legacy_compliance_image_ref(
+    name: str, version: str, compliance_image_prefix: str
+) -> str | None:
+    """Build the OCI reference the pre-port bash tool used, if it differs.
+
+    Returns None when there is no distinct legacy tag (see
+    ``closure_model.legacy_compliance_oci_tag``).
+    """
+    legacy_tag = closure_model.legacy_compliance_oci_tag(name, version)
+    if legacy_tag is None:
+        return None
+    base = _strip_oci_tag_and_digest(compliance_image_prefix)
+    return f"{base}:{legacy_tag}"
+
+
 def closure_index_image_ref(
     compliance_image_prefix: str, closure_index_image: str = ""
 ) -> str:
@@ -252,17 +267,51 @@ def pull_json_artifact(
         return data, digest
 
 
+def _pull_legacy_compliance_json(
+    name: str, version: str, compliance_image_prefix: str
+) -> tuple[dict | None, str | None]:
+    """Pull a compliance document from the legacy bash-tool tag, if valid.
+
+    The legacy tag scheme was lossy (``@scope/pkg`` and ``scope-pkg`` shared
+    one tag), so a document found there is only accepted when its own
+    ``name``/``version`` match; otherwise it belongs to another package and
+    is treated as absent.
+    """
+    legacy_ref = legacy_compliance_image_ref(
+        name, version, compliance_image_prefix
+    )
+    if legacy_ref is None:
+        return None, None
+    raw, digest = pull_json_artifact(legacy_ref, ".tl-compliance.json")
+    if raw is None:
+        return None, None
+    if raw.get("name") != name or raw.get("version") != version:
+        return None, None
+    return raw, digest
+
+
 def pull_compliance_doc(
     name: str,
     version: str,
     compliance_image_prefix: str,
     pulp_href_fallback: str = "",
 ) -> tuple[dict | None, str | None]:
-    """Pull and normalize a package's compliance document, if one exists."""
+    """Pull and normalize a package's compliance document, if one exists.
+
+    Reads the current (collision-free) tag first. If absent, falls back to
+    the tag the pre-port bash tool published under (they differ for scoped
+    names), so documents published before the cutover are not mistaken for
+    unseeded packages -- their ``compliance_revision`` and gap history carry
+    forward, and the next publish re-seeds them under the current tag.
+    """
     raw, digest = pull_json_artifact(
         compliance_image_ref(name, version, compliance_image_prefix),
         ".tl-compliance.json",
     )
+    if raw is None:
+        raw, digest = _pull_legacy_compliance_json(
+            name, version, compliance_image_prefix
+        )
     if raw is None:
         return None, None
     doc = closure_model.normalize_doc(raw)

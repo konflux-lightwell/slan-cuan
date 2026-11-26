@@ -16,6 +16,7 @@ from slan_cuan.javascript.closure_oci import (
     cas_push_index,
     closure_index_image_ref,
     compliance_image_ref,
+    legacy_compliance_image_ref,
     publish_compliance_doc,
     publish_index,
     pull_compliance_doc,
@@ -415,6 +416,68 @@ class TestPullComplianceDoc:
         ):
             result = pull_compliance_doc("lodash", "4.17.21", PREFIX)
         assert result == (None, None)
+
+
+class TestPullComplianceDocLegacyFallback:
+    """pull_compliance_doc falls back to the pre-port bash-tool tag."""
+
+    def _pull(self, by_ref, name="@babel/core", version="7.0.0"):
+        calls = []
+
+        def _fake(image_ref, filename_suffix):
+            calls.append(image_ref)
+            return by_ref.get(image_ref, (None, None))
+
+        with patch(
+            "slan_cuan.javascript.closure_oci.pull_json_artifact",
+            side_effect=_fake,
+        ):
+            return pull_compliance_doc(name, version, PREFIX), calls
+
+    def test_legacy_ref_uses_bash_tag_on_stripped_prefix(self):
+        """The legacy ref is the bash tag appended to the stripped prefix."""
+        assert (
+            legacy_compliance_image_ref("@babel/core", "7.0.0", PREFIX)
+            == "quay.io/org/tl-compliance:babel-core-7.0.0"
+        )
+        assert legacy_compliance_image_ref("lodash", "4.17.21", PREFIX) is None
+
+    def test_falls_back_to_legacy_tag_when_current_tag_absent(self):
+        """A pre-port scoped doc is found, so it isn't treated as unseeded."""
+        legacy_ref = "quay.io/org/tl-compliance:babel-core-7.0.0"
+        raw = {
+            "name": "@babel/core",
+            "version": "7.0.0",
+            "compliance_revision": 4,
+        }
+        (doc, digest), calls = self._pull({legacy_ref: (raw, DIGEST)})
+        assert digest == DIGEST
+        assert doc["compliance_revision"] == 4
+        assert calls == [
+            compliance_image_ref("@babel/core", "7.0.0", PREFIX),
+            legacy_ref,
+        ]
+
+    def test_current_tag_wins_without_probing_legacy(self):
+        """When the current tag exists the legacy tag is never pulled."""
+        current_ref = compliance_image_ref("@babel/core", "7.0.0", PREFIX)
+        raw = {"name": "@babel/core", "version": "7.0.0"}
+        (_, digest), calls = self._pull({current_ref: (raw, DIGEST)})
+        assert digest == DIGEST
+        assert calls == [current_ref]
+
+    def test_legacy_doc_for_a_different_package_is_ignored(self):
+        """Legacy tags collided (@a/b vs a-b); a mismatched doc is not ours."""
+        legacy_ref = "quay.io/org/tl-compliance:babel-core-7.0.0"
+        other = {"name": "babel-core", "version": "7.0.0"}
+        result, _ = self._pull({legacy_ref: (other, DIGEST)})
+        assert result == (None, None)
+
+    def test_unscoped_name_does_not_probe_a_second_tag(self):
+        """No distinct legacy tag -> a single pull, then (None, None)."""
+        result, calls = self._pull({}, name="lodash", version="4.17.21")
+        assert result == (None, None)
+        assert len(calls) == 1
 
 
 class TestPullIndex:
