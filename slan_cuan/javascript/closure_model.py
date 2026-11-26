@@ -190,6 +190,32 @@ def compliance_oci_tag(name: str, version: str) -> str:
     return base[: _OCI_TAG_MAX_LENGTH - len(suffix)] + suffix
 
 
+def legacy_compliance_oci_tag(name: str, version: str) -> str | None:
+    """Return the tag the pre-port bash tool used, or None if it can't differ.
+
+    The bash ``update-npm-closure`` published ``@scope/pkg@1.0.0`` as
+    ``scope-pkg-1.0.0`` (``@`` stripped, ``/`` -> ``-``, no hash). That
+    scheme is lossy -- ``@scope/pkg`` and the unscoped ``scope-pkg`` share a
+    tag -- which is why ``compliance_oci_tag`` no longer uses it, but
+    compliance documents already published under it must stay readable
+    across the cutover. Readers try ``compliance_oci_tag`` first and fall
+    back to this tag, validating the document's own ``name``/``version``
+    because a legacy tag can belong to a different package.
+
+    Returns None when the legacy tag equals the current tag (nothing to fall
+    back to) or is not a valid OCI tag (the bash tool could never have
+    pushed it).
+    """
+    legacy = f"{name.lstrip('@').replace('/', '-')}-{version}"
+    if (
+        legacy == compliance_oci_tag(name, version)
+        or len(legacy) > _OCI_TAG_MAX_LENGTH
+        or not _OCI_TAG_VALID_RE.fullmatch(legacy)
+    ):
+        return None
+    return legacy
+
+
 def compliance_filename(name: str, version: str) -> str:
     """Build the sidecar filename for a package's compliance document."""
     return f"{compliance_oci_tag(name, version)}.tl-compliance.json"

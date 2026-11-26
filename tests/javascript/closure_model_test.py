@@ -27,6 +27,7 @@ from slan_cuan.javascript.closure_model import (
     index_add_parent,
     index_remove_key,
     is_npm_alias_spec,
+    legacy_compliance_oci_tag,
     node_key,
     normalize_direct_dependencies,
     normalize_doc,
@@ -860,3 +861,29 @@ class TestAssertNotPythonWheelsRepository:
     def test_distinct_repository_does_not_raise(self):
         """A genuinely different repository name is allowed through."""
         assert_not_python_wheels_repository("npm-release")
+
+
+class TestLegacyComplianceOciTag:
+    """legacy_compliance_oci_tag reproduces the pre-port bash tag format."""
+
+    def test_scoped_name_matches_bash_format(self):
+        assert (
+            legacy_compliance_oci_tag("@babel/core", "7.0.0")
+            == "babel-core-7.0.0"
+        )
+
+    def test_unscoped_name_has_no_fallback(self):
+        """Unscoped, tag-safe names kept the same tag, so nothing to fall back to."""
+        assert legacy_compliance_oci_tag("lodash", "4.17.21") is None
+
+    def test_legacy_tag_differs_from_current_for_scoped(self):
+        assert legacy_compliance_oci_tag("@scope/pkg", "1.0.0") != (
+            compliance_oci_tag("@scope/pkg", "1.0.0")
+        )
+
+    def test_invalid_oci_tag_has_no_fallback(self):
+        """Bash could never have pushed a tag with '+', so don't probe for one."""
+        assert legacy_compliance_oci_tag("@scope/pkg", "1.0.0+build.1") is None
+
+    def test_overlong_legacy_tag_has_no_fallback(self):
+        assert legacy_compliance_oci_tag("@s/" + "a" * 200, "1.0.0") is None
