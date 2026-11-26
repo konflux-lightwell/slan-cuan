@@ -1,0 +1,328 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: slan-cuan-javascript-closure-update
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Deploy
+    tekton.dev/displayName: "slan-cuan: Update JavaScript Closure Compliance"
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/tags: "release,javascript,pulp,closure,compliance"
+spec:
+  description: >-
+    Publish TL npm closure metadata after Pulp upload: for each assess
+    *.tl-compliance.json sidecar under FILES_DIR, push per-package compliance
+    OCI and update the global closure index on Quay, using
+    `slan-cuan javascript closure update`.
+
+    Replaces the bash-script-based upload-npm-closure Task
+    (`npm-release-closure-update` in the old slan-cuan image). Unlike that
+    wrapper, `slan-cuan javascript closure update` itself only handles one sidecar
+    per invocation (matching `update-npm-closure update`'s own scope, which
+    it ported) -- the discovery-and-loop over every
+    `*.tl-compliance.json` under FILES_DIR that the old wrapper did is
+    reproduced here as a bash `script:` step on the same `slan-cuan` image
+    (which has `slan-cuan` on PATH and bash from its `task-runner` base),
+    invoking the CLI once per file. `find ... | sort -u` and "fail the whole
+    step on the first failed file" both match the old wrapper's behavior
+    exactly (no best-effort/partial-success tolerance the way
+    slan-cuan-javascript-upload has per-file). The single global PULP_CONTENT_HREF
+    param is carried over unchanged too: it is normally unset, letting
+    `cas_publish_compliance` resolve each package's Pulp href from the repo
+    itself.
+
+    Pulp credentials are injected from SERVICE_ACCOUNT_SECRET_NAME's
+    username/password keys via secretKeyRef, the same pattern
+    slan-cuan-javascript-upload.yaml uses (replacing the old Task's
+    /etc/service-account-secret volume mount). The rest of the shared Pulp
+    connection option block (cert auth via PULP_CERT_SECRET mounted at
+    /certs/client, task timeouts, custom headers, INSECURE) is wired with
+    the same params as slan-cuan-javascript-upload.yaml. OCI registry auth for the
+    compliance-document/index pushes is not plumbed through
+    ORAS_OPTIONS/select-oci-auth the way the old wrapper did it; like the
+    other slan-cuan Tasks, it relies on Tekton creds-init populating
+    $HOME/.docker/config.json (HOME=/var/workdir below), which bare `oras`
+    reads by default.
+
+    COMPLIANCE_IMAGE_PREFIX, CLOSURE_INDEX_IMAGE, and TL_NPM_REGISTRY_URL
+    were hardcoded directly in the old Task's stepTemplate env (unlike
+    slan-cuan-javascript-extract/slan-cuan-javascript-upload, which already exposed their
+    equivalents as params) -- an asymmetry called out in the npm-scripts-
+    refactor design doc. They are now params here too, defaulting to the
+    exact values the old Task hardcoded, so no caller needs to change
+    anything on day one.
+  params:
+    - name: SERVICE_ACCOUNT_SECRET_NAME
+      type: string
+      description: Secret with Pulp username/password keys (same as slan-cuan-javascript-upload)
+      default: rhtl-pulp-credentials-secret
+    - name: PULP_URL
+      type: string
+      description: Pulp instance base URL (e.g. https://pulp.example.com).
+    - name: PULP_DOMAIN
+      type: string
+      description: The domain to use for Pulp operations
+    - name: PULP_REPOSITORY
+      type: string
+      description: The Pulp npm repository (for content href resolution)
+    - name: INSECURE
+      type: string
+      description: Disable TLS verification (true/false).
+      default: "false"
+    - name: PULP_AUTH_TYPE
+      type: string
+      description: Pulp authentication method (tbr or cert).
+      default: "tbr"
+    - name: PULP_CERT_SECRET
+      type: string
+      description: >-
+        K8s Secret name containing client certificate for entitlement cert
+        auth (keys: tls.crt, tls.key). Only used when PULP_AUTH_TYPE=cert.
+      default: ""
+    - name: PULP_CLIENT_CERT_PATH
+      type: string
+      description: Path to the client certificate file inside the mounted secret.
+      default: ""
+    - name: PULP_CLIENT_KEY_PATH
+      type: string
+      description: Path to the client key file inside the mounted secret.
+      default: ""
+    - name: PULP_TASK_TIMEOUT
+      type: string
+      description: Maximum time in seconds to wait for asynchronous Pulp tasks.
+      default: "2700"
+    - name: PULP_MAX_TOTAL_TASK_TIMEOUT
+      type: string
+      description: >-
+        Absolute maximum time in seconds across all Pulp task state and
+        blocker timeout resets. Defaults to twice PULP_TASK_TIMEOUT.
+      default: ""
+    - name: PULP_CUSTOM_HEADERS
+      type: string
+      description: |
+        Custom HTTP headers to send on repository modify requests
+        (CRLF/newline-delimited 'Key: Value' lines or JSON object).
+      default: ""
+    - name: COMPLIANCE_IMAGE_PREFIX
+      type: string
+      description: OCI repo prefix for per-package compliance-document artifacts
+      default: quay.io/redhat-user-workloads/calunga-tenant/calunga-npm-registry-main
+    - name: CLOSURE_INDEX_IMAGE
+      type: string
+      description: >-
+        Explicit OCI ref for the global closure index. Defaults to
+        <COMPLIANCE_IMAGE_PREFIX>/npm-closure-index:latest when empty.
+      default: quay.io/redhat-user-workloads/calunga-tenant/calunga-npm-registry-main:npm-closure-index
+    - name: TL_NPM_REGISTRY_URL
+      type: string
+      description: Registry URL stamped into published compliance documents
+      default: https://packages.redhat.com/api/pulp-content/public-trusted-libraries/javascript
+    - name: PULP_CONTENT_HREF
+      type: string
+      description: >-
+        Optional Pulp content href applied to every sidecar this run
+        processes. Normally left empty: the updater resolves each
+        package's href from the repo itself when unset.
+      default: ""
+    - name: sourceDataArtifact
+      type: string
+      description: Trusted Artifact containing extracted npm packages and sidecars
+    - name: dataDir
+      type: string
+      description: The location where data will be stored
+      default: /var/workdir/content
+    - name: filesDir
+      type: string
+      description: The relative path within dataDir where package files are located
+      default: files
+    - name: ociArtifactExpiresAfter
+      type: string
+      description: Expiration date for the trusted artifacts created
+      default: "1d"
+    - name: orasOptions
+      description: oras options to pass to Trusted Artifacts calls
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: "trusted-ca"
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: "ca-bundle.crt"
+    - name: catalogGitUrl
+      type: string
+      description: >-
+        The url to the git repo where the release-service-catalog tasks and
+        stepactions to be used are stored
+      default: https://github.com/konflux-lightwell/release-service-catalog.git
+    - name: catalogGitRevision
+      type: string
+      description: The revision in the catalogGitUrl repo to be used
+      default: main
+    - name: ociStorage
+      type: string
+      description: The OCI repository where the Trusted Artifacts are stored
+  results:
+    - description: Produced trusted data artifact
+      name: sourceDataArtifact
+      type: string
+  volumes:
+    - name: client-cert
+      secret:
+        secretName: $(params.PULP_CERT_SECRET)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        optional: true
+  stepTemplate:
+    securityContext:
+      runAsUser: 1001
+    env:
+      # Writable HOME so Tekton creds-init can copy SA dockerconfig secrets
+      # to $HOME/.docker/config.json (read by bare `oras` for registry auth
+      # on the compliance-document/index pushes).
+      - name: HOME
+        value: /var/workdir
+    volumeMounts:
+      - name: workdir
+        mountPath: /var/workdir
+      - name: trusted-ca
+        mountPath: /mnt/trusted-ca
+        readOnly: true
+  steps:
+    - name: use-trusted-artifact
+      computeResources:
+        limits:
+          memory: 64Mi
+        requests:
+          memory: 64Mi
+          cpu: 10m
+      ref:
+        resolver: "git"
+        params:
+          - name: url
+            value: $(params.catalogGitUrl)
+          - name: revision
+            value: $(params.catalogGitRevision)
+          - name: pathInRepo
+            value: stepactions/use-trusted-artifact/use-trusted-artifact.yaml
+      params:
+        - name: workDir
+          value: $(params.dataDir)
+        - name: sourceDataArtifact
+          value: $(params.sourceDataArtifact)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)
+    - name: closure-update
+      image: quay.io/light-castle/slan-cuan:latest
+      imagePullPolicy: Always
+      env:
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_URL
+          value: $(params.PULP_URL)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_DOMAIN
+          value: $(params.PULP_DOMAIN)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_REPOSITORY
+          value: $(params.PULP_REPOSITORY)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_COMPLIANCE_IMAGE_PREFIX
+          value: $(params.COMPLIANCE_IMAGE_PREFIX)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_CLOSURE_INDEX_IMAGE
+          value: $(params.CLOSURE_INDEX_IMAGE)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_NPM_REGISTRY_URL
+          value: $(params.TL_NPM_REGISTRY_URL)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_INSECURE
+          value: $(params.INSECURE)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_AUTH_TYPE
+          value: $(params.PULP_AUTH_TYPE)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_CLIENT_CERT
+          value: $(params.PULP_CLIENT_CERT_PATH)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_CLIENT_KEY
+          value: $(params.PULP_CLIENT_KEY_PATH)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_TASK_TIMEOUT
+          value: $(params.PULP_TASK_TIMEOUT)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_MAX_TOTAL_TASK_TIMEOUT
+          value: $(params.PULP_MAX_TOTAL_TASK_TIMEOUT)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_CUSTOM_HEADERS
+          value: $(params.PULP_CUSTOM_HEADERS)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_ORAS_OPTIONS
+          value: $(params.orasOptions)
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: $(params.SERVICE_ACCOUNT_SECRET_NAME)
+              key: username
+              optional: true
+        - name: SLAN_CUAN_JAVASCRIPT_CLOSURE_UPDATE_PULP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: $(params.SERVICE_ACCOUNT_SECRET_NAME)
+              key: password
+              optional: true
+        - name: FILES_DIR
+          value: $(params.dataDir)/$(params.filesDir)
+        - name: PULP_CONTENT_HREF
+          value: $(params.PULP_CONTENT_HREF)
+      volumeMounts:
+        - name: client-cert
+          mountPath: "/certs/client"
+          readOnly: true
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          memory: 512Mi
+          cpu: 100m
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        mapfile -t sidecars < <(find "${FILES_DIR}" -type f -name '*.tl-compliance.json' | sort -u)
+        if [ "${#sidecars[@]}" -eq 0 ]; then
+          echo "no *.tl-compliance.json under ${FILES_DIR}" >&2
+          exit 1
+        fi
+
+        for sidecar in "${sidecars[@]}"; do
+          echo "Closure update for ${sidecar}"
+          slan-cuan javascript closure update \
+            --sidecar "${sidecar}" \
+            --pulp-href "${PULP_CONTENT_HREF:-}"
+        done
+
+        echo "slan-cuan javascript closure update completed for ${#sidecars[@]} sidecar(s)"
+    - name: create-trusted-artifact
+      computeResources:
+        limits:
+          memory: 128Mi
+        requests:
+          memory: 128Mi
+          cpu: 250m
+      ref:
+        resolver: "git"
+        params:
+          - name: url
+            value: "$(params.catalogGitUrl)"
+          - name: revision
+            value: "$(params.catalogGitRevision)"
+          - name: pathInRepo
+            value: stepactions/create-trusted-artifact/create-trusted-artifact.yaml
+      params:
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: workDir
+          value: $(params.dataDir)
+        - name: sourceDataArtifact
+          value: $(results.sourceDataArtifact.path)
+        - name: orasOptions
+          value: $(params.orasOptions)
+        - name: caCertPath
+          value: /mnt/trusted-ca/$(params.caTrustConfigMapKey)

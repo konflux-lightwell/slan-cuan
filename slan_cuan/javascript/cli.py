@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from slan_cuan.javascript.closure import closure_cli
 from slan_cuan.javascript.extract import extract
 from slan_cuan.javascript.upload import upload
 
@@ -15,3 +16,4 @@ def javascript_cli() -> None:
 
 javascript_cli.add_command(extract)
 javascript_cli.add_command(upload)
+javascript_cli.add_command(closure_cli)
