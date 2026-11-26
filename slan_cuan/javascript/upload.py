@@ -43,7 +43,7 @@ DEFAULT_BUILDER_ID = "https://konflux-ci.dev/calunga"
 DEFAULT_COSIGN_SECRET_DIR = Path("/etc/cosign-secret")
 
 #: Pulp label key npm-pulp-upload sets from a *.tl-compliance.json sidecar.
-COMPLIANCE_LABEL_KEY = "tl.compliance_level"
+COMPLIANCE_LABEL_KEY = "lw.compliance_level"
 _COMPLIANCE_LEVEL_RE = re.compile(r"^L[123]$")
 _MAX_COMPLIANCE_SIDECAR_BYTES = 1_048_576  # 1 MiB
 _UNSAFE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._@+-]+")

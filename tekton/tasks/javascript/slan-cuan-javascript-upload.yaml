@@ -14,12 +14,12 @@ metadata:
 spec:
   description: >-
     Upload npm package tarballs to a Pulp npm repository using
-    `slan-cuan javascript upload`. Sets tl.compliance_level from adjacent
+    `slan-cuan javascript upload`. Sets lw.compliance_level from adjacent
     *.tl-compliance.json sidecars when present. When
     ATTESTATION_IMAGE_PREFIX (or COMPLIANCE_IMAGE_PREFIX) is set, signs
     adjacent .tgz with cosign, pushes attestation OCI to the registry, and
-    sets tl.oci_registry_base / tl.attestation_oci_digest /
-    tl.attestation_predicate_type. Idempotent: skips packages already
+    sets lw.oci_registry_base / lw.attestation_oci_digest /
+    lw.attestation_predicate_type. Idempotent: skips packages already
     present with matching sha256. Same name/version with different content
     fails unless ALLOW_CONTENT_REPLACE=true (then remove -> destroy
     holding versions -> orphan-cleanup that content href -> re-upload).
@@ -84,7 +84,7 @@ spec:
       type: string
       description: >
         Registry repository prefix used for attestation OCI (and shared
-        tl.oci_registry_base). Empty skips sign + attestation publish.
+        lw.oci_registry_base). Empty skips sign + attestation publish.
       default: ""
     - name: ATTESTATION_IMAGE_PREFIX
       type: string
