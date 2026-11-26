@@ -2,14 +2,14 @@
 # Push a signed npm package attestation (.att) to Quay and set Pulp labels.
 #
 # Public Pulp label contract (client builds {base}@{digest}):
-#   tl.oci_registry_base
-#   tl.attestation_oci_digest
-#   tl.attestation_predicate_type
+#   lw.oci_registry_base
+#   lw.attestation_oci_digest
+#   lw.attestation_predicate_type
 #
 # Env:
 #   ATTESTATION_IMAGE_PREFIX   Quay repo for attestation OCI (required)
 #                              falls back to COMPLIANCE_IMAGE_PREFIX
-#   OCI_REGISTRY_BASE          Value for tl.oci_registry_base (default: strip
+#   OCI_REGISTRY_BASE          Value for lw.oci_registry_base (default: strip
 #                              tag/digest from ATTESTATION_IMAGE_PREFIX)
 #   ATTESTATION_PREDICATE_TYPE default DEFAULT_ATTESTATION_PREDICATE_TYPE
 #                              (must match cosign --type= at sign time)
@@ -51,9 +51,9 @@ ATTESTATION_ARTIFACT_TYPE="${ATTESTATION_ARTIFACT_TYPE:-application/vnd.in-toto.
 CURL_RETRY="${CURL_RETRY:-3}"
 CURL_MAX_TIME_QUERY_SECONDS="${CURL_MAX_TIME_QUERY_SECONDS:-30}"
 MAX_PACKAGE_JSON_BYTES="${MAX_PACKAGE_JSON_BYTES:-1048576}"
-OCI_REGISTRY_BASE_LABEL="tl.oci_registry_base"
-ATTESTATION_DIGEST_LABEL="tl.attestation_oci_digest"
-ATTESTATION_PREDICATE_LABEL="tl.attestation_predicate_type"
+OCI_REGISTRY_BASE_LABEL="lw.oci_registry_base"
+ATTESTATION_DIGEST_LABEL="lw.attestation_oci_digest"
+ATTESTATION_PREDICATE_LABEL="lw.attestation_predicate_type"
 # Per-line pattern (MULTILINE-equivalent). Do not match against the whole
 # multi-line push log with ^...$ — bash ERE anchors apply to the full string.
 ORAS_DIGEST_LINE_RE='^Digest:[[:space:]]*(sha256:[a-f0-9]{64})[[:space:]]*$'

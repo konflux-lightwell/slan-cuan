@@ -120,7 +120,7 @@ class TestUploadContent:
             pkg_file,
             "my-pkg",
             "1.0.0",
-            labels={"tl.compliance_level": "L2"},
+            labels={"lw.compliance_level": "L2"},
         )
 
         assert captured_body is not None
@@ -132,7 +132,7 @@ class TestUploadContent:
         match = re.search(pattern, captured_body, re.DOTALL)
         assert match is not None
         decoded_labels = json.loads(match.group(1))
-        assert decoded_labels == {"tl.compliance_level": "L2"}
+        assert decoded_labels == {"lw.compliance_level": "L2"}
 
     def test_upload_content_without_labels_omits_pulp_labels(
         self, tmp_path: Path
@@ -461,7 +461,7 @@ class TestGetContent:
             "name": "pkg",
             "version": "1.0.0",
             "artifact": "/api/v3/artifacts/abc/",
-            "pulp_labels": {"tl.compliance_level": "L2"},
+            "pulp_labels": {"lw.compliance_level": "L2"},
         }
         captured: list[httpx.Request] = []
 
